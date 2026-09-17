@@ -169,8 +169,8 @@ def generate_dry_airec_urdf(torobo_ros: Path, product_config: Path, output_dir: 
 
 def generate_sock_obj(
     path: Path,
-    length: float = 0.32,
-    radius: float = 0.055,
+    length: float = 0.30,
+    radius: float = 0.04,
     radial_segments: int = 32,
     length_segments: int = 24,
 ) -> Tuple[int, int]:
@@ -179,11 +179,9 @@ def generate_sock_obj(
     vertices = []
     for row in range(length_segments + 1):
         z = length * row / length_segments
-        # A small heel/toe-like bulge avoids a perfectly featureless cylinder.
-        profile = radius * (1.0 + 0.08 * math.sin(math.pi * row / length_segments))
         for column in range(radial_segments):
             angle = 2.0 * math.pi * column / radial_segments
-            vertices.append((profile * math.cos(angle), profile * math.sin(angle), z))
+            vertices.append((radius * math.cos(angle), radius * math.sin(angle), z))
     faces = []
     for row in range(length_segments):
         for column in range(radial_segments):

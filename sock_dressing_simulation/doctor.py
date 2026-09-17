@@ -73,9 +73,13 @@ def run_doctor(config: Mapping) -> Dict[str, Any]:
             else "UNAVAILABLE: configure collision/effort proxy IDs if needed"
         ),
     }
+    inference_checks, inference_diagnostics = _inference_checks(config)
+    diagnostics["inference"] = inference_diagnostics
     return {
         "ok": all(checks.values()),
         "checks": checks,
+        "inference_ready": all(inference_checks.values()),
+        "inference_checks": inference_checks,
         "diagnostics": diagnostics,
     }
 
@@ -86,6 +90,78 @@ def _mapping_valid(config: Mapping) -> bool:
         return True
     except (KeyError, TypeError, ValueError):
         return False
+
+
+def _inference_checks(config: Mapping) -> tuple:
+    settings = config.get("inference", {})
+
+    def resolved(key: str) -> Path:
+        value = settings.get(key)
+        return resolve_package_path(value) if value else Path()
+
+    sam = settings.get("sam2", {})
+    depth = settings.get("depth_anything", {})
+    data_root = resolved("training_data_root")
+    dataset_name = settings.get("training_dataset_name", "")
+    dataset = data_root / dataset_name
+    sample_rgb = next(dataset.glob("train/*/camera_right/*.png"), None) if dataset.is_dir() else None
+    sample_sock = next(dataset.glob("train/*/depth_mask/sock_depth/*.png"), None) if dataset.is_dir() else None
+    sample_foot = next(dataset.glob("train/*/depth_mask/foot_depth/*.png"), None) if dataset.is_dir() else None
+    paths = {
+        "shareset_model_source": resolved("shareset_src"),
+        "training_manifest": resolved("training_manifest"),
+        "training_dataset": dataset,
+        "training_rgb": sample_rgb,
+        "training_sock_depth": sample_sock,
+        "training_foot_depth": sample_foot,
+        "policy_checkpoint": resolved("checkpoint"),
+        "policy_stats": resolved("stats"),
+        "sam2_source": resolve_package_path(sam.get("source", "")),
+        "sam2_config": resolve_package_path(sam.get("config", "")),
+        "sam2_checkpoint": resolve_package_path(sam.get("checkpoint", "")),
+        "depth_anything_source": resolve_package_path(depth.get("source", "")),
+        "depth_anything_checkpoint": resolve_package_path(depth.get("checkpoint", "")),
+        "depth_calibration": resolve_package_path(depth.get("calibration", "")),
+    }
+    directory_keys = {
+        "shareset_model_source",
+        "training_dataset",
+        "sam2_source",
+        "depth_anything_source",
+    }
+    checks = {
+        name: bool(path and (path.is_dir() if name in directory_keys else path.is_file()))
+        for name, path in paths.items()
+    }
+    for module_name, check_name in (
+        ("torch", "torch_importable"),
+        ("scipy", "scipy_importable"),
+        ("cv2", "opencv_importable"),
+        ("hydra", "hydra_importable"),
+    ):
+        checks[check_name] = importlib.util.find_spec(module_name) is not None
+    configured_device = str(settings.get("device", "cuda"))
+    cuda_available = False
+    if checks["torch_importable"]:
+        try:
+            import torch
+
+            cuda_available = bool(torch.cuda.is_available())
+        except (ImportError, RuntimeError):
+            pass
+    checks["configured_device_available"] = (
+        cuda_available if configured_device.startswith("cuda") else True
+    )
+    diagnostics = {
+        "paths": {name: str(path) if path else "not found" for name, path in paths.items()},
+        "configured_device": configured_device,
+        "cuda_available": cuda_available,
+        "note": (
+            "Core RCareWorld readiness is reported separately. Missing inference "
+            "weights do not disable smoke/collection commands."
+        ),
+    }
+    return checks, diagnostics
 
 
 def _installed_commit(spec) -> str:

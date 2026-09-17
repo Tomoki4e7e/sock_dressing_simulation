@@ -5,6 +5,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
+import pytest
 import yaml
 from PIL import Image
 
@@ -57,6 +58,11 @@ def test_sock_obj_is_open_triangulated_tube(tmp_path):
     assert path.with_suffix(".mtl").is_file()
     assert len([line for line in lines if line.startswith("f ")]) == triangles
     assert all(len(line.split()) == 4 for line in lines if line.startswith("f "))
+    points = np.asarray(
+        [[float(value) for value in line.split()[1:]] for line in lines if line.startswith("v ")]
+    )
+    assert np.linalg.norm(points[:, :2], axis=1).max() == pytest.approx(0.04)
+    assert points[:, 2].ptp() == pytest.approx(0.30)
 
 
 def test_package_meshes_are_vendored_and_rewritten(tmp_path):

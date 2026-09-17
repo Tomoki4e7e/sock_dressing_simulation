@@ -19,7 +19,9 @@ def test_scenario_sampling_is_seeded_and_validates_mimic():
     first = scenario_from_config(config, seed=12)
     second = scenario_from_config(config, seed=12)
     assert first == second
-    assert first.sock_mesh.length_m != config["scenario"]["sock"]["length_m"]
+    assert first.sock_mesh.length_m == pytest.approx(0.30)
+    assert first.sock_mesh.radius_m == pytest.approx(0.04)
+    assert first.foot_ik_index == 3
 
     config["scenario"]["initial_joints"][8] = 0.01
     with pytest.raises(ValueError, match="mimic"):
@@ -51,9 +53,13 @@ class _Backend:
     def close(self):
         pass
 
+    def InstanceObject(self, name, id=None):
+        return _Anchor(id)
+
 
 class _Robot:
     def __init__(self):
+        self.id = 1100
         self.data = {
             "joint_positions": np.zeros(29),
             "joint_force": np.zeros(29),
@@ -64,6 +70,23 @@ class _Robot:
 
 
 class _Cloth:
+    def __init__(self):
+        self.attachments = []
+
+    def SetTransform(self, **kwargs):
+        self.transform = kwargs
+
+    def AddAttach(self, id, max_dis):
+        self.attachments.append((id, max_dis))
+
+
+class _Anchor:
+    def __init__(self, id):
+        self.id = id
+
+    def SetParent(self, parent_id, parent_name):
+        self.parent = (parent_id, parent_name)
+
     def SetTransform(self, **kwargs):
         self.transform = kwargs
 
@@ -94,8 +117,57 @@ def test_environment_applies_sock_foot_and_grasp_scenario():
         "move",
         "rotate",
         "complete",
+        "move",
+        "rotate",
+        "complete",
     ]
     assert report["foot_ik_applied"]
+    assert report["support_foot_ik_applied"]
+    assert [item["side"] for item in report["grasp_attachments"]] == [
+        "left",
+        "right",
+    ]
+
+
+def test_scene_contract_rejects_noncanonical_rest_mesh_and_left_target():
+    config = load_config()
+    config["scenario"]["sock"]["radius_m"] = 0.05
+    with pytest.raises(ValueError, match="rest mesh radius"):
+        scenario_from_config(config)
+
+    config = load_config()
+    config["scenario"]["foot"]["ik_index"] = 2
+    with pytest.raises(ValueError, match="right foot"):
+        scenario_from_config(config)
+
+
+def test_coverage_measurement_fails_closed_for_degenerate_masks():
+    degenerate = {
+        "sock_mask": np.ones((5, 6), dtype=bool),
+        "leg_mask": np.ones((5, 6), dtype=bool),
+    }
+    assert SockDressingEnv.measured_coverage(degenerate) is None
+
+    valid = {
+        "sock_mask": np.array([[1, 1, 0, 0]], dtype=bool),
+        "leg_mask": np.array([[0, 1, 1, 1]], dtype=bool),
+    }
+    assert SockDressingEnv.measured_coverage(valid) == pytest.approx(1 / 3)
+
+
+def test_cloth_radius_qa_uses_mesh_rings_not_global_tube_axis():
+    rows = []
+    for z in (0.0, 0.15, 0.30):
+        rows.extend(
+            (0.04 * np.cos(angle), 0.04 * np.sin(angle), z)
+            for angle in np.linspace(0, 2 * np.pi, 8, endpoint=False)
+        )
+    report = SockDressingEnv.cloth_radius_qa(
+        {"particles": rows}, radial_segments=8
+    )
+    assert report["passes"]
+    assert report["maximum_radius_m"] == pytest.approx(0.04)
+    assert report["method"] == "mesh-ring centroid radial distance"
 
 
 def test_synthetic_episode_passes_feature_visualization_and_audit(tmp_path):

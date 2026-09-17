@@ -19,6 +19,9 @@ class SockDressingEnv:
         self.human = None
         self.cloth = None
         self.camera = None
+        self.chair = []
+        self.grasp_anchors = []
+        self._grasp_attachment_report = []
 
     def connect(self) -> "SockDressingEnv":
         if self._env is None:
@@ -29,10 +32,15 @@ class SockDressingEnv:
                     "pyrcareworld is not installed; run scripts/setup_rcareworld.sh"
                 ) from error
             settings = self.config["rcareworld"]
+            scene = self.config["scene"]
+            runtime_assets = ["Camera", "Empty"]
+            chair = scene.get("chair", {})
+            if chair.get("enabled", False):
+                runtime_assets.append(str(chair.get("asset_name", "Collider_Box")))
             kwargs = {
                 "port": int(settings.get("port", 5005)),
                 "graphics": bool(settings.get("graphics", False)),
-                "assets": ["Camera"],
+                "assets": list(dict.fromkeys(runtime_assets)),
                 "log_level": int(settings.get("log_level", 1)),
             }
             if settings.get("executable"):
@@ -61,7 +69,12 @@ class SockDressingEnv:
                     os.environ["LD_LIBRARY_PATH"] = previous_library_path
         return self
 
-    def load(self, urdf: Path, sock_obj: Path) -> None:
+    def load(
+        self,
+        urdf: Path,
+        sock_obj: Path,
+        initial_joints: Optional[Any] = None,
+    ) -> None:
         self.connect()
         assets = self.config["assets"]
         self.robot = self._env.LoadURDF(
@@ -69,18 +82,38 @@ class SockDressingEnv:
         )
         self._env.step()
         self._validate_simulator_joint_mapping()
+        if initial_joints is not None:
+            target = np.asarray(initial_joints, dtype=float)
+            current = self.robot_signals()["angle"]
+            command_steps = 0
+            while not np.allclose(current, target, atol=1e-6, rtol=0):
+                current = self.command(target, current)
+                command_steps += 1
+                if command_steps > 1000:
+                    raise RuntimeError(
+                        "initial robot pose did not converge before cloth loading"
+                    )
         self.cloth = self._env.LoadCloth(str(Path(sock_obj).resolve()), id=int(assets["sock_id"]))
         self._env.EnabledGroundObiCollider(True)
         self.robot.SetImmovable(bool(self.config["scene"].get("robot_immovable", True)))
-        self.robot.SetTransform(position=list(self.config["scene"]["robot_position"]))
+        self.robot.SetTransform(
+            position=list(self.config["scene"]["robot_position"]),
+            rotation=list(self.config["scene"].get("robot_rotation", [0, 0, 0])),
+        )
         self.cloth.SetTransform(position=list(self.config["scene"]["sock_position"]))
         self.robot.AddObiCollider()
         self._env.step()
         scene = self.config["scene"]
         if scene.get("human_id") is not None:
             self.human = self._env.GetAttr(int(scene["human_id"]))
+            if scene.get("human_position") is not None:
+                self.human.SetTransform(
+                    position=list(scene["human_position"]),
+                    rotation=list(scene.get("human_rotation", [0, 0, 0])),
+                )
             if scene.get("enable_human_obi_collider", False):
                 self.human.AddObiCollider()
+        self._create_chair()
         if scene.get("camera_id") is not None:
             try:
                 import pyrcareworld.attributes as attr
@@ -95,6 +128,83 @@ class SockDressingEnv:
             )
         self._env.step()
 
+    def _create_chair(self) -> None:
+        chair = self.config["scene"].get("chair", {})
+        if not chair.get("enabled", False):
+            return
+        try:
+            import pyrcareworld.attributes as attr
+        except ImportError as error:
+            raise RuntimeError("pyrcareworld attributes are unavailable") from error
+        asset_name = str(chair.get("asset_name", "Collider_Box"))
+        for part in chair.get("parts", []):
+            collider = self._env.InstanceObject(
+                name=asset_name,
+                id=int(part["id"]),
+                attr_type=attr.ColliderAttr,
+            )
+            collider.SetTransform(
+                position=list(part["position"]),
+                rotation=list(part.get("rotation", [0, 0, 0])),
+                scale=list(part["scale"]),
+            )
+            collider.AddObiCollider()
+            self.chair.append(collider)
+        self._env.step()
+
+    def _create_grasp_anchors(self) -> None:
+        settings = self.config["scene"].get("grasp_anchors", {})
+        if not settings.get("enabled", False) or self.grasp_anchors:
+            return
+        max_distance = float(settings.get("max_distance_m", 0.03))
+        for item in settings.get("anchors", []):
+            anchor = self._env.InstanceObject("Empty", id=int(item["id"]))
+            parent_link = item.get("parent_link")
+            if parent_link:
+                anchor.SetParent(self.robot.id, str(parent_link))
+            anchor.SetTransform(position=list(item["position"]), is_world=True)
+            attached = bool(settings.get("attach", False))
+            if attached:
+                self.cloth.AddAttach(anchor.id, max_dis=max_distance)
+            self.grasp_anchors.append(anchor)
+            self._grasp_attachment_report.append(
+                {
+                    "id": int(item["id"]),
+                    "side": str(item["side"]),
+                    "parent_link": parent_link,
+                    "attach_requested": attached,
+                    "verified": False,
+                }
+            )
+        self._env.step()
+
+    def _apply_foot_target(
+        self,
+        index: Optional[int],
+        position: Any,
+        rotation: Any,
+    ) -> None:
+        if index is None:
+            return
+        if self.human is None:
+            raise RuntimeError("foot IK was requested but no human is configured")
+        self.human.HumanIKTargetDoMove(
+            index=index,
+            position=list(position),
+            duration=1,
+            speed_based=False,
+            relative=True,
+        )
+        self.human.HumanIKTargetDoRotate(
+            index=index,
+            rotation=list(rotation),
+            duration=1,
+            speed_based=False,
+            relative=True,
+        )
+        self.human.HumanIKTargetDoComplete(index)
+        self._env.step()
+
     def apply_scenario(self, scenario: Any) -> Dict[str, Any]:
         """Apply one validated scenario before the first recorded observation."""
         if self.robot is None or self.cloth is None:
@@ -103,25 +213,18 @@ class SockDressingEnv:
             position=list(scenario.sock_position),
             rotation=list(scenario.sock_rotation),
         )
-        if scenario.foot_ik_index is not None:
-            if self.human is None:
-                raise RuntimeError("foot IK was requested but no human is configured")
-            self.human.HumanIKTargetDoMove(
-                index=scenario.foot_ik_index,
-                position=list(scenario.foot_position),
-                duration=1,
-                speed_based=False,
-                relative=True,
-            )
-            self.human.HumanIKTargetDoRotate(
-                index=scenario.foot_ik_index,
-                rotation=list(scenario.foot_rotation),
-                duration=1,
-                speed_based=False,
-                relative=True,
-            )
-            self.human.HumanIKTargetDoComplete(scenario.foot_ik_index)
-            self._env.step()
+        self._env.step()
+        self._create_grasp_anchors()
+        self._apply_foot_target(
+            scenario.support_foot_ik_index,
+            scenario.support_foot_position,
+            scenario.support_foot_rotation,
+        )
+        self._apply_foot_target(
+            scenario.foot_ik_index,
+            scenario.foot_position,
+            scenario.foot_rotation,
+        )
 
         target = np.asarray(scenario.initial_joints, dtype=float)
         current = self.robot_signals()["angle"]
@@ -138,6 +241,9 @@ class SockDressingEnv:
             "initial_command_steps": command_steps,
             "settle_steps": scenario.settle_steps,
             "foot_ik_applied": scenario.foot_ik_index is not None,
+            "support_foot_ik_applied": scenario.support_foot_ik_index is not None,
+            "chair_part_ids": [int(part.id) for part in self.chair],
+            "grasp_attachments": list(self._grasp_attachment_report),
         }
 
     def _validate_simulator_joint_mapping(self) -> None:
@@ -195,11 +301,15 @@ class SockDressingEnv:
             "contact_force_available": False,
             "robot_obi_collider_verified": False,
             "contact_proxy_ids": list(scene.get("contact_proxy_ids", [])),
+            "chair_obi_collider_ids": [int(part.id) for part in self.chair],
+            "grasp_attachments": list(self._grasp_attachment_report),
             "external_torque_source": "joint_force residual proxy",
+            "obi_contract": dict(self.config.get("obi", {})),
             "limitations": [
                 "HumanBodyIK exposes target indices (feet are 2 and 3), not exact foot collider IDs.",
                 "The pinned Python API exposes collision pairs/robot efforts but no direct contact-force vectors.",
                 "Robot AddObiCollider is requested but cannot be verified without the Unity project/player registration.",
+                "Requested stretch/bend compliance cannot be applied or verified through this Player's Python API.",
             ],
         }
 
@@ -228,6 +338,59 @@ class SockDressingEnv:
         )
         observation.update(self.robot_signals())
         return observation
+
+    @staticmethod
+    def measured_coverage(camera: Mapping[str, np.ndarray]) -> Optional[float]:
+        sock = np.asarray(camera["sock_mask"], dtype=bool)
+        leg = np.asarray(camera["leg_mask"], dtype=bool)
+        if (
+            sock.shape != leg.shape
+            or sock.size == 0
+            or np.count_nonzero(sock) in (0, sock.size)
+            or np.count_nonzero(leg) in (0, leg.size)
+            or np.array_equal(sock, leg)
+        ):
+            return None
+        leg_pixels = np.count_nonzero(leg)
+        return float(np.count_nonzero(sock & leg) / leg_pixels) if leg_pixels else None
+
+    @staticmethod
+    def cloth_radius_qa(
+        cloth: Mapping[str, Any],
+        radial_segments: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        particles = np.asarray(cloth.get("particles", []), dtype=float)
+        if particles.ndim != 2 or particles.shape[0] < 3 or particles.shape[1] != 3:
+            return {"available": False, "passes": False}
+        if (
+            radial_segments is not None
+            and radial_segments >= 3
+            and particles.shape[0] % radial_segments == 0
+        ):
+            rings = particles.reshape((-1, radial_segments, 3))
+            radius = np.linalg.norm(rings - rings.mean(axis=1, keepdims=True), axis=2)
+            method = "mesh-ring centroid radial distance"
+        else:
+            centered = particles - particles.mean(axis=0)
+            _, _, axes = np.linalg.svd(centered, full_matrices=False)
+            axis = axes[0]
+            axial = np.outer(centered @ axis, axis)
+            radius = np.linalg.norm(centered - axial, axis=1)
+            method = "PCA axis radial-distance proxy"
+        maximum = float(radius.max())
+        stretch = maximum / 0.04
+        return {
+            "available": True,
+            "centroid_world": particles.mean(axis=0).tolist(),
+            "bounds_world": {
+                "minimum": particles.min(axis=0).tolist(),
+                "maximum": particles.max(axis=0).tolist(),
+            },
+            "maximum_radius_m": maximum,
+            "circumferential_stretch_proxy": stretch,
+            "passes": maximum <= 0.06 and stretch <= 1.5,
+            "method": method,
+        }
 
     def _capture_camera(self) -> Dict[str, np.ndarray]:
         camera = self.config["camera"]

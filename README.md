@@ -41,7 +41,12 @@ python3 -m sock_dressing_simulation.cli prepare-assets
 python3 -m sock_dressing_simulation.cli smoke --offline
 python3 -m sock_dressing_simulation.cli smoke --headless --frames 3
 python3 -m sock_dressing_simulation.cli calibrate
+python3 -m sock_dressing_simulation.cli scene-preview --angles 0 15 30
 python3 -m sock_dressing_simulation.cli collect --graphics --frames 30 --seed 0
+python3 -m sock_dressing_simulation.cli train --audit-only
+python3 -m sock_dressing_simulation.cli train --epochs 10000 --device cuda
+python3 -m sock_dressing_simulation.cli doctor --inference
+python3 -m sock_dressing_simulation.cli demo --graphics --max-steps 250
 ```
 
 `doctor` checks Python, xacro, the sibling `torobo_ros` packages, the product
@@ -80,6 +85,28 @@ bounded initial 18-D grasp pose, settles, and records command→observe-aligned
 frames. The Phase 1 camera contract is 1280×960. A live collection fails closed
 unless RGB, depth, masks, temporal variation, and exact configured foot
 collider IDs pass; the episode is retained for diagnosis.
+
+### Nominal Phase 1 scene
+
+The default scenario reproduces the visual task arrangement with the canonical
+player: a four-collider seat, the human facing Dry-AIREC, the right leg
+extended with HumanBodyIK target `3`, and a 300 mm × 40 mm open tubular sock at
+the toe. The selected right-ankle plantarflexion probe is 30 degrees about the
+configured x axis. Dry-AIREC's two arms use a position-only IK seed aimed at
+opposing sides of the opening.
+
+`scene-preview` launches each requested angle in a fresh Unity process and
+writes RGB images plus `preview.json` under `artifacts/phase1/preview`. Probe
+angles are not physical measurements and are never selected automatically.
+
+The distributed player does not expose verifiable Dry-AIREC child-link IDs for
+cloth attachment. The nominal scene therefore requests two static
+opening-edge attachments and records them as unverified; it does not claim
+that the grippers physically grasp the cloth. Likewise, requested Obi stretch
+and bend compliance are recorded in metadata but cannot be applied through
+the pinned Python API. Exact foot collider IDs and non-degenerate masks remain
+unavailable, so visual reproduction does not make an episode
+`learning_ready`.
 
 Build the full feature package, visualization QA, and residual audit with:
 
@@ -144,6 +171,70 @@ python3 -m residual_flow.audit \
 
 Phase 0 smoke does not create `features/`, so the audit may mark the episode
 unusable for residual training even when all raw modalities are aligned.
+
+## Phase 4 — AIREC inference demo
+
+The `train` command retrains the ShareSet `SAMDAMSARNN` without modifying
+ShareSet. It reads the episode-level split from `dataset_sock.yaml`, validates
+headerless 18-column `angle.csv` and `torque.csv`, and consumes:
+
+```text
+camera_right/*.png
+depth_mask/sock_depth/*.png
+depth_mask/foot_depth/*.png
+```
+
+Real episodes call the second object `foot`; simulation episodes call it
+`leg`. The training adapter explicitly maps `foot_depth` to the model's leg
+input. Both names are accepted, but missing frames, non-18-column signals, and
+frame misalignment fail closed. Training writes `SARNN_latest.pth`,
+`data.json`, `parameter.json`, and `loss.json` under
+`artifacts/phase4/model`.
+
+The original online AIREC controller uses SAM2 and Depth Anything V2 rather
+than renderer object masks. The simulation demo now uses the same path:
+RCareWorld RGB → two independent SAM2 trackers → Depth Anything V2 →
+sock/leg masked depth → recurrent SAMDAMSARNN → bounded 18-D command.
+Configure the official checkpoints under `inference.sam2.checkpoint` and
+`inference.depth_anything.checkpoint`, then run:
+
+```bash
+python3 -m pip install -e '.[inference,test]'
+python3 -m sock_dressing_simulation.cli doctor --inference
+python3 -m sock_dressing_simulation.cli train --audit-only
+python3 -m sock_dressing_simulation.cli train --epochs 10000 --device cuda
+python3 -m sock_dressing_simulation.cli demo --graphics --max-steps 250
+```
+
+Graphics mode opens one prompt window for the sock and one for the leg.
+Left-click positive points, right-click negative points, and press Enter to
+finish each object. For reproducible headless runs, supply positive pixel
+coordinates explicitly:
+
+```bash
+python3 -m sock_dressing_simulation.cli demo --headless \
+  --sock-point 640 520 --leg-point 640 220 --max-steps 250
+```
+
+The pinned Player selects Unity's Null graphics device in its default
+headless mode and may return a constant gray RGB frame. In that deployment the
+command intentionally stops at mask QA; use `--graphics` (or an off-screen
+graphics backend that produces real RGB) for SAM2 inference. Pixel coordinates
+above are examples only. Confirm the generated `prompt_frame.png` and masks
+for the exact camera/scene; SAM2 can segment the wrong synthetic object even
+when a mask is numerically nontrivial.
+
+Every demo writes a ShareSet-compatible episode plus
+`predicted_action.csv`, `applied_action.csv`, checkpoint SHA-256, prompt
+points, per-frame perception QA, and a stop reason. Empty, full-frame,
+identical, or discontinuously changing SAM masks stop the controller before
+another command is sent.
+
+This closes the perception/policy software loop; it does not establish
+physical dressing success. The distributed Player still exposes only
+unverified static cloth anchors, has no verified robot-following cloth grasp,
+and provides no direct contact force. A custom Unity Player with verified
+gripper attachment remains necessary for a physically successful pull-up.
 
 ## Environment API and limitations
 

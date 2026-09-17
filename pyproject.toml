@@ -12,6 +12,15 @@ dependencies = ["numpy>=1.21,<3", "Pillow>=8,<12", "PyYAML>=5.4,<7"]
 
 [project.optional-dependencies]
 test = ["pytest>=7,<9"]
+inference = [
+  "torch",
+  "torchvision",
+  "scipy",
+  "opencv-python",
+  "hydra-core",
+  "iopath",
+  "tqdm",
+]
 
 [project.scripts]
 sock-sim = "sock_dressing_simulation.cli:main"

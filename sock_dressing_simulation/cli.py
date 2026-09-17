@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import yaml
+from PIL import Image
 
 from .assets import (
     generate_dry_airec_urdf,
@@ -23,6 +24,7 @@ from .joints import JointMap
 from .quality import assess_observation_quality
 from .scenario import scenario_from_config
 from .pipeline import run_phase1_pipeline
+from .training import audit_training_data, train_policy
 
 
 def _prepare(config, scenario=None):
@@ -183,6 +185,11 @@ def _unity_collect(config, output_root: Path, frames: int, seed: int):
         failed = [name for name, ok in report["checks"].items() if not ok]
         raise RuntimeError("live collect prerequisites failed: " + ", ".join(failed))
     scenario = scenario_from_config(config, seed=seed)
+    if scenario.plantarflexion_degrees is None:
+        raise ValueError(
+            "foot.plantarflexion_degrees is unset; run `scene-preview` and "
+            "record the selected angle before collection"
+        )
     prepared = _prepare(config, scenario)
     joints = JointMap.from_config(config)
     dataset_name, episode_name, episode = _new_episode_path(
@@ -192,9 +199,17 @@ def _unity_collect(config, output_root: Path, frames: int, seed: int):
     cameras = []
     collisions = []
     with SockDressingEnv(config) as environment:
-        environment.load(Path(prepared["runtime_urdf"]), output / "sock.obj")
+        environment.load(
+            Path(prepared["runtime_urdf"]),
+            output / "sock.obj",
+            initial_joints=scenario.initial_joints,
+        )
         application = environment.apply_scenario(scenario)
         observation = environment.observe()
+        measured_coverage = environment.measured_coverage(observation["camera"])
+        cloth_radius_qa = environment.cloth_radius_qa(
+            observation["cloth"], scenario.sock_mesh.radial_segments
+        )
         metadata = {
             "phase": 1,
             "mode": "unity-graphics"
@@ -219,6 +234,13 @@ def _unity_collect(config, output_root: Path, frames: int, seed: int):
             "mesh_compatibility": prepared["mesh_compatibility"],
             "timing_contract": "command, simulator step, observe, append same state frame",
             "camera": dict(config["camera"]),
+            "initial_coverage_measurement": {
+                "value": measured_coverage,
+                "target": scenario.initial_coverage_target,
+                "source": "non-degenerate sock/leg amodal masks",
+                "available": measured_coverage is not None,
+            },
+            "cloth_radius_qa": cloth_radius_qa,
         }
         with EpisodeWriter(episode, joints.names, metadata) as writer:
             for frame in range(frames):
@@ -274,11 +296,78 @@ def _unity_collect(config, output_root: Path, frames: int, seed: int):
     }
 
 
+def _scene_preview(config, output_dir: Path, angles) -> dict:
+    report = run_doctor(config)
+    if not report["ok"]:
+        failed = [name for name, ok in report["checks"].items() if not ok]
+        raise RuntimeError("scene preview prerequisites failed: " + ", ".join(failed))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    records = []
+    for angle in angles:
+        scenario = scenario_from_config(
+            config,
+            seed=int(config.get("scenario", {}).get("seed", 0)),
+            plantarflexion_degrees=float(angle),
+        )
+        prepared = _prepare(config, scenario)
+        output = resolve_package_path(config["assets"]["output_dir"])
+        with SockDressingEnv(config) as environment:
+            environment.load(
+                Path(prepared["runtime_urdf"]),
+                output / "sock.obj",
+                initial_joints=scenario.initial_joints,
+            )
+            application = environment.apply_scenario(scenario)
+            observation = environment.observe()
+            camera = observation["camera"]
+            if camera is None:
+                raise RuntimeError("camera observation is unavailable")
+            image_path = output_dir / f"plantarflexion_{float(angle):+06.1f}.png"
+            Image.fromarray(camera["rgb"]).save(image_path)
+            coverage = environment.measured_coverage(camera)
+            records.append(
+                {
+                    "angle_degrees": float(angle),
+                    "image": str(image_path),
+                    "scenario": scenario.to_metadata(),
+                    "application": application,
+                    "coverage": coverage,
+                    "coverage_available": coverage is not None,
+                    "cloth_radius_qa": environment.cloth_radius_qa(
+                        observation["cloth"], scenario.sock_mesh.radial_segments
+                    ),
+                    "collision_pairs": observation["collision_pairs"],
+                    "diagnostics": observation["diagnostics"],
+                }
+            )
+    payload = {
+        "ok": True,
+        "selection_required": True,
+        "angle_axis": config["scenario"]["foot"].get(
+            "plantarflexion_axis", "x"
+        ),
+        "warning": (
+            "Preview angles are labelled probes, not measured physical angles. "
+            "Set foot.plantarflexion_degrees only after visual selection."
+        ),
+        "records": records,
+    }
+    report_path = output_dir / "preview.json"
+    report_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    payload["report"] = str(report_path)
+    return payload
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="sock-sim")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("doctor")
+    doctor = commands.add_parser("doctor")
+    doctor.add_argument(
+        "--inference",
+        action="store_true",
+        help="also require training data and inference model assets",
+    )
     commands.add_parser("prepare-assets")
     smoke = commands.add_parser("smoke")
     smoke.add_argument(
@@ -310,6 +399,19 @@ def main(argv=None) -> int:
         type=Path,
         default=resolve_package_path("artifacts/phase1/data"),
     )
+    preview = commands.add_parser("scene-preview")
+    preview.add_argument(
+        "--angles",
+        type=float,
+        nargs="+",
+        required=True,
+        help="labelled plantarflexion probes in degrees; no value is selected automatically",
+    )
+    preview.add_argument(
+        "--output-dir",
+        type=Path,
+        default=resolve_package_path("artifacts/phase1/preview"),
+    )
     calibrate = commands.add_parser("calibrate")
     calibrate.add_argument(
         "--data-root",
@@ -333,13 +435,33 @@ def main(argv=None) -> int:
         type=Path,
         default=resolve_package_path("artifacts/phase1/audit.json"),
     )
+    train = commands.add_parser("train")
+    train.add_argument("--epochs", type=int)
+    train.add_argument("--device")
+    train.add_argument("--resume", type=Path)
+    train.add_argument(
+        "--audit-only", action="store_true", help="validate teacher data without training"
+    )
+    demo = commands.add_parser("demo")
+    demo.add_argument("--checkpoint", type=Path)
+    demo.add_argument("--device")
+    demo.add_argument("--max-steps", type=int)
+    demo.add_argument("--graphics", action="store_true")
+    demo.add_argument("--headless", action="store_true")
+    demo.add_argument("--sock-point", type=float, nargs=2, action="append")
+    demo.add_argument("--leg-point", type=float, nargs=2, action="append")
+    demo.add_argument(
+        "--output-root",
+        type=Path,
+        default=resolve_package_path("artifacts/phase4/data"),
+    )
     args = parser.parse_args(argv)
     config = load_config(args.config)
 
     if args.command == "doctor":
         report = run_doctor(config)
         print(format_report(report))
-        return 0 if report["ok"] else 1
+        return 0 if report["ok"] and (not args.inference or report["inference_ready"]) else 1
     if args.command == "prepare-assets":
         print(json.dumps(_prepare(config), indent=2))
         return 0
@@ -373,6 +495,52 @@ def main(argv=None) -> int:
             return 2
         print(json.dumps(result, indent=2))
         return 0 if result["ok"] else 3
+    if args.command == "train":
+        try:
+            result = (
+                audit_training_data(config)
+                if args.audit_only
+                else train_policy(
+                    config,
+                    epochs=args.epochs,
+                    device=args.device,
+                    resume=args.resume.resolve() if args.resume else None,
+                )
+            )
+        except (ImportError, OSError, RuntimeError, ValueError, KeyError) as error:
+            print(json.dumps({"ok": False, "error": str(error)}, indent=2))
+            return 2
+        print(json.dumps(result, indent=2))
+        return 0 if result["ok"] else 3
+    if args.command == "demo":
+        if args.graphics and args.headless:
+            parser.error("demo accepts only one of --graphics and --headless")
+        config["rcareworld"]["graphics"] = bool(args.graphics)
+        if not args.graphics and (not args.sock_point or not args.leg_point):
+            parser.error("headless demo requires --sock-point X Y and --leg-point X Y")
+        report = run_doctor(config)
+        if not report["ok"]:
+            failed = [name for name, ok in report["checks"].items() if not ok]
+            print(json.dumps({"ok": False, "error": "core doctor failed", "failed": failed}, indent=2))
+            return 2
+        try:
+            from .demo import run_demo
+
+            result = run_demo(
+                config,
+                prepared=_prepare(config),
+                output_root=args.output_root.resolve(),
+                sock_points=args.sock_point,
+                leg_points=args.leg_point,
+                max_steps=args.max_steps,
+                checkpoint=args.checkpoint.resolve() if args.checkpoint else None,
+                device=args.device,
+            )
+        except (ImportError, OSError, RuntimeError, ValueError, KeyError) as error:
+            print(json.dumps({"ok": False, "error": str(error)}, indent=2))
+            return 2
+        print(json.dumps(result, indent=2))
+        return 0 if result["ok"] else 3
     if args.command == "collect":
         if args.frames < 2:
             parser.error("collect --frames must be at least 2 for temporal QA")
@@ -390,6 +558,15 @@ def main(argv=None) -> int:
             return 2
         print(json.dumps(result, indent=2))
         return 0 if result["ok"] else 3
+    if args.command == "scene-preview":
+        config["rcareworld"]["graphics"] = True
+        try:
+            result = _scene_preview(config, args.output_dir.resolve(), args.angles)
+        except (OSError, RuntimeError, ValueError) as error:
+            print(json.dumps({"ok": False, "error": str(error)}, indent=2))
+            return 2
+        print(json.dumps(result, indent=2))
+        return 0
     if args.frames < 1:
         parser.error("--frames must be positive")
     if args.headless:
