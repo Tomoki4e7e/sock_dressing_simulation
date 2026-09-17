@@ -1,0 +1,103 @@
+rcareworld:
+  repository: https://github.com/empriselab/RCareWorld.git
+  commit: ae0900be3e450ae08d6137468970d0ac473a001b
+  executable: .deps/RCareWorld/Build/Player.x86_64
+  # AssimpNet bundled with RCareWorld targets the Assimp 4.1 native ABI.
+  assimp_library_dir: .deps/assimp-4.1.0/build/code
+  graphics: false
+  # Keep Unity errors visible so native importer failures are not discarded.
+  log_level: 1
+  port: 5005
+assets:
+  torobo_ros: /home/cm-pc/catkin_ws/src/torobo_ros
+  product_config: torobo_robot/torobo_description/config/products/Dry-AIREC3/GripperV2.yaml
+  output_dir: assets/generated
+  robot_id: 1100
+  sock_id: 1200
+scene:
+  scene_file: HumanBodyIK.json
+  human_id: 168242
+  camera_id: 1300
+  robot_position: [-1.0, 0.0, 0.0]
+  sock_position: [0.0, 0.7, 0.0]
+  camera_position: [0.0, 1.2, -1.5]
+  camera_rotation: [15.0, 0.0, 0.0]
+  enable_human_obi_collider: false
+  # HumanBodyIK's Python API addresses IK targets, not individual colliders.
+  # Set these only after inspecting IDs in the exact Unity scene.
+  human_foot_collider_ids: []
+  # No direct contact-force API exists at the pinned commit. Optional object
+  # IDs can be used as a collision/effort proxy; this is not a force sensor.
+  contact_proxy_ids: []
+camera:
+  # ShareSet feature extraction crops to this 1280x960 contract.
+  width: 1280
+  height: 960
+  fov: 60.0
+  depth_near_m: 0.1
+  depth_far_m: 3.0
+dataset:
+  name: data_sock_sim_smoke
+scenario:
+  seed: 0
+  settle_steps: 5
+  initial_coverage_target: null
+  initial_coverage_tolerance: 0.15
+  sock:
+    length_m: 0.32
+    radius_m: 0.055
+    radial_segments: 32
+    length_segments: 24
+    position: [0.0, 0.7, 0.0]
+    rotation: [0.0, 0.0, 0.0]
+  foot:
+    # HumanBodyIK targets: 2=left foot, 3=right foot.
+    ik_index: 2
+    position: [0.0, 0.0, 0.0]
+    rotation: [0.0, 0.0, 0.0]
+  # Same 18-D rad/m order as joints.names. Mimic values are 0.5x source.
+  initial_joints: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  randomization:
+    enabled: false
+    calibration_file: artifacts/phase1/randomization_calibration.json
+    use_calibrated_joint_ranges: true
+    # Bounds are explicit until calibration writes measured proxy ranges.
+    ranges:
+      sock_length_m: [0.30, 0.34]
+      sock_radius_m: [0.05, 0.06]
+      sock_position: [[-0.02, 0.02], [0.68, 0.72], [-0.02, 0.02]]
+      sock_rotation: [[-5.0, 5.0], [-5.0, 5.0], [-10.0, 10.0]]
+      foot_position: [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
+      foot_rotation: [[-10.0, 10.0], [-10.0, 10.0], [-20.0, 20.0]]
+joints:
+  names:
+    - left_arm/joint_1
+    - left_arm/joint_2
+    - left_arm/joint_3
+    - left_arm/joint_4
+    - left_arm/joint_5
+    - left_arm/joint_6
+    - left_arm/joint_7
+    - left_gripper/finger_joint
+    - left_gripper/mimic_joint
+    - right_arm/joint_1
+    - right_arm/joint_2
+    - right_arm/joint_3
+    - right_arm/joint_4
+    - right_arm/joint_5
+    - right_arm/joint_6
+    - right_arm/joint_7
+    - right_gripper/finger_joint
+    - right_gripper/mimic_joint
+  # RCareWorld reports 29 independently driven joints in hierarchy order.
+  # URDF mimic targets share their source index and are reconstructed as 0.5x.
+  simulator_indices: [21, 22, 23, 24, 25, 26, 27, 28, 28, 13, 14, 15, 16, 17, 18, 19, 20, 20]
+  # Unity ArticulationBody uses degrees for revolute drive targets and metres
+  # for prismatic targets. The public dataset/action contract remains rad/m.
+  revolute_action_indices: [0, 1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14, 15]
+  lower: [-1.22173, -2.26893, -2.09440, -0.17453, -2.96706, -1.57080, -2.96706, 0.0, 0.0, -1.22173, -2.26893, -2.09440, -0.17453, -2.96706, -1.57080, -2.96706, 0.0, 0.0]
+  upper: [4.18879, 0.34907, 2.09440, 2.35619, 2.96706, 1.57080, 2.96706, 0.09, 0.045, 4.18879, 0.34907, 2.09440, 2.35619, 2.96706, 1.57080, 2.96706, 0.09, 0.045]
+  max_delta: [0.08, 0.08, 0.08, 0.08, 0.08, 0.08, 0.08, 0.005, 0.0025, 0.08, 0.08, 0.08, 0.08, 0.08, 0.08, 0.08, 0.005, 0.0025]
+  mimic:
+    left_gripper/mimic_joint: {source: left_gripper/finger_joint, multiplier: 0.5, offset: 0.0}
+    right_gripper/mimic_joint: {source: right_gripper/finger_joint, multiplier: 0.5, offset: 0.0}

@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sock-dressing-simulation"
+version = "0.1.0"
+description = "Phase 1 RCareWorld sock-dressing scene and data contracts"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = ["numpy>=1.21,<3", "Pillow>=8,<12", "PyYAML>=5.4,<7"]
+
+[project.optional-dependencies]
+test = ["pytest>=7,<9"]
+
+[project.scripts]
+sock-sim = "sock_dressing_simulation.cli:main"
+
+[tool.setuptools]
+packages = ["sock_dressing_simulation"]
+
+[tool.setuptools.package-data]
+sock_dressing_simulation = ["../config/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

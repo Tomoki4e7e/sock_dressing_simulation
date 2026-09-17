@@ -1,0 +1,14 @@
+.deps/
+.pytest_cache/
+__pycache__/
+*.egg-info/
+build/
+dist/
+assets/generated/
+artifacts/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+build/
+dist/
+*.egg-info/
