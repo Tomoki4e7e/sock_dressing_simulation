@@ -17,7 +17,8 @@ from sock_dressing_simulation.assets import (
     vendor_package_meshes,
 )
 from sock_dressing_simulation.cli import _offline_smoke
-from sock_dressing_simulation.config import load_config
+from sock_dressing_simulation.config import DRESSING_PLAYER_COMMIT, load_config
+from sock_dressing_simulation.dressing_player import _centroid_displacement
 from sock_dressing_simulation.environment import SockDressingEnv
 from sock_dressing_simulation.episode import EpisodeWriter
 from sock_dressing_simulation.joints import JointMap
@@ -43,6 +44,15 @@ def test_joint_mapping_bounds_and_preserves_mimic():
     np.testing.assert_allclose(round_trip, bounded)
     np.testing.assert_allclose(
         simulator[mapping.simulator_indices[:7]], np.rad2deg(bounded[:7])
+    )
+    assert mapping.fixed_names == (
+        "torso/joint_1",
+        "torso/joint_2",
+        "torso/joint_3",
+    )
+    np.testing.assert_allclose(
+        simulator[mapping.fixed_simulator_indices],
+        [-45.0, 100.0, 0.0],
     )
 
 
@@ -210,3 +220,55 @@ def test_environment_maps_full_simulator_state_and_command():
     applied = environment.command(command, np.zeros(18))
     assert applied[0] == 0.01
     assert environment.robot.target[21] == np.rad2deg(0.01)
+    np.testing.assert_allclose(environment.robot.target[7:10], [-45.0, 100.0, 0.0])
+
+    command[9] = 0.02
+    environment.command(command, applied)
+    np.testing.assert_allclose(environment.robot.target[7:10], [-45.0, 100.0, 0.0])
+
+
+def test_fixed_joint_mapping_rejects_wrong_simulator_name():
+    config = load_config()
+    config["joints"]["fixed"]["names"][0] = "torso/not_joint_1"
+    environment = SockDressingEnv(config, backend=_Backend())
+    environment.robot = _Robot()
+    simulator_names = [f"unused/joint_{index}" for index in range(29)]
+    simulator_names[7:10] = [
+        "torso/joint_1",
+        "torso/joint_2",
+        "torso/joint_3",
+    ]
+    simulator_names[10:13] = [
+        "head/joint_1",
+        "head/joint_2",
+        "head/joint_3",
+    ]
+    simulator_names[13:21] = [
+        *(f"right_arm/joint_{index}" for index in range(1, 8)),
+        "right_gripper/finger_joint",
+    ]
+    simulator_names[21:29] = [
+        *(f"left_arm/joint_{index}" for index in range(1, 8)),
+        "left_gripper/finger_joint",
+    ]
+    environment.robot.data["names"] = simulator_names
+    environment.robot.data["types"] = ["RevoluteJoint"] * len(simulator_names)
+
+    with pytest.raises(RuntimeError, match="fixed joint mapping mismatch"):
+        environment._validate_simulator_joint_mapping()
+
+
+def test_dressing_player_profile_is_isolated():
+    profile = Path(__file__).parents[1] / "config" / "dressing_player.yaml"
+    config = load_config(profile)
+    assert config["rcareworld"]["profile"] == "dressing_player"
+    assert config["rcareworld"]["commit"] == DRESSING_PLAYER_COMMIT
+    assert "RCareWorld-phy-robo-care" in config["rcareworld"]["executable"]
+    assert config["dressing_player"]["required_grippers"] == 2
+
+
+def test_cloth_centroid_displacement_is_measured_not_fabricated():
+    first = np.asarray([[0.0, 0.0, 0.0], [0.0, 2.0, 0.0]])
+    second = first + np.asarray([0.0, 0.25, 0.0])
+    assert _centroid_displacement(first, second) == pytest.approx(0.25)
+    assert _centroid_displacement(np.empty((0, 3)), second) is None

@@ -10,11 +10,14 @@ from pathlib import Path
 from typing import Any, Dict, Mapping
 
 from .assets import discover_ros_packages
-from .config import RCAREWORLD_COMMIT, resolve_package_path
+from .config import SUPPORTED_RCAREWORLD_PROFILES, resolve_package_path
 from .joints import JointMap
 
 
 def run_doctor(config: Mapping) -> Dict[str, Any]:
+    profile = str(config["rcareworld"].get("profile", "canonical"))
+    expected_commit = SUPPORTED_RCAREWORLD_PROFILES[profile]
+    dressing_profile = profile == "dressing_player"
     torobo = Path(config["assets"]["torobo_ros"]).expanduser()
     packages = discover_ros_packages(torobo) if torobo.is_dir() else {}
     product = torobo / config["assets"]["product_config"]
@@ -23,12 +26,16 @@ def run_doctor(config: Mapping) -> Dict[str, Any]:
     executable = resolve_package_path(executable_value) if executable_value else None
     checks = {
         "python_at_least_3_8": sys.version_info >= (3, 8),
-        "python_package_importable": pyrcare_spec is not None,
-        "xacro_executable": shutil.which("xacro") is not None,
-        "torobo_ros_exists": torobo.is_dir(),
-        "torobo_description_found": "torobo_description" in packages,
-        "torobo_resources_found": "torobo_resources" in packages,
-        "product_config_exists": product.is_file(),
+        "python_package_importable": (
+            resolve_package_path(config["rcareworld"].get("python_source", "")).is_dir()
+            if dressing_profile
+            else pyrcare_spec is not None
+        ),
+        "xacro_executable": dressing_profile or shutil.which("xacro") is not None,
+        "torobo_ros_exists": dressing_profile or torobo.is_dir(),
+        "torobo_description_found": dressing_profile or "torobo_description" in packages,
+        "torobo_resources_found": dressing_profile or "torobo_resources" in packages,
+        "product_config_exists": dressing_profile or product.is_file(),
         "joint_mapping_valid": _mapping_valid(config),
         "unity_executable_exists": bool(
             executable
@@ -41,14 +48,22 @@ def run_doctor(config: Mapping) -> Dict[str, Any]:
     assimp_dir_value = config["rcareworld"].get("assimp_library_dir")
     assimp_dir = resolve_package_path(assimp_dir_value) if assimp_dir_value else None
     assimp_version = _assimp_version(assimp_dir)
-    checks["assimp_4_1_runtime_available"] = assimp_version[:2] == (4, 1)
+    checks["assimp_4_1_runtime_available"] = (
+        True if dressing_profile else assimp_version[:2] == (4, 1)
+    )
     scene_file = config["scene"].get("scene_file")
     checks["scene_file_available"] = _scene_available(executable, scene_file)
-    installed_commit = _installed_commit(pyrcare_spec)
-    checks["rcareworld_commit_verified"] = installed_commit == RCAREWORLD_COMMIT
+    checkout_value = config["rcareworld"].get("checkout")
+    installed_commit = (
+        _checkout_commit(resolve_package_path(checkout_value))
+        if checkout_value
+        else _installed_commit(pyrcare_spec)
+    )
+    checks["rcareworld_commit_verified"] = installed_commit == expected_commit
     scene = config["scene"]
     diagnostics = {
-        "expected_rcareworld_commit": RCAREWORLD_COMMIT,
+        "profile": profile,
+        "expected_rcareworld_commit": expected_commit,
         "installed_rcareworld_commit": installed_commit,
         "python_version": ".".join(map(str, sys.version_info[:3])),
         "python_recommendation": "RCareWorld README recommends Python 3.10",
@@ -84,6 +99,17 @@ def run_doctor(config: Mapping) -> Dict[str, Any]:
     }
 
 
+def _checkout_commit(path: Path) -> str:
+    process = subprocess.run(
+        ["git", "-C", str(path), "rev-parse", "HEAD"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+    return process.stdout.strip() if process.returncode == 0 else "not available"
+
+
 def _mapping_valid(config: Mapping) -> bool:
     try:
         JointMap.from_config(config)
@@ -107,6 +133,8 @@ def _inference_checks(config: Mapping) -> tuple:
     sample_rgb = next(dataset.glob("train/*/camera_right/*.png"), None) if dataset.is_dir() else None
     sample_sock = next(dataset.glob("train/*/depth_mask/sock_depth/*.png"), None) if dataset.is_dir() else None
     sample_foot = next(dataset.glob("train/*/depth_mask/foot_depth/*.png"), None) if dataset.is_dir() else None
+    if sample_foot is None and dataset.is_dir():
+        sample_foot = next(dataset.glob("train/*/depth_mask/leg_depth/*.png"), None)
     paths = {
         "shareset_model_source": resolved("shareset_src"),
         "training_manifest": resolved("training_manifest"),

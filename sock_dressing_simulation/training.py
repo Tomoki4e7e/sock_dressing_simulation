@@ -48,6 +48,11 @@ def load_training_specs(config: Mapping) -> list:
         raise ValueError("training manifest contains no train episodes")
     if not any(spec.split == "test" for spec in specs):
         raise ValueError("training manifest contains no test episodes")
+    train_names = {spec.name for spec in specs if spec.split == "train"}
+    test_names = {spec.name for spec in specs if spec.split == "test"}
+    overlap = train_names & test_names
+    if overlap:
+        raise ValueError(f"episodes must not cross train/test splits: {sorted(overlap)}")
     return specs
 
 
@@ -280,6 +285,13 @@ def train_policy(
     if selected_device.startswith("cuda") and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but is unavailable; pass --device cpu explicitly")
     selected_epochs = int(epochs if epochs is not None else hyper["num_epochs"])
+    if selected_epochs < 1:
+        raise ValueError("epochs must be positive")
+    if config["rcareworld"].get("profile") == "dressing_player":
+        if selected_epochs != 10000 or selected_device != "cuda":
+            raise ValueError(
+                "DressingPlayer production training requires --epochs 10000 --device cuda"
+            )
     output = resolve_package_path(settings["output_dir"])
     output.mkdir(parents=True, exist_ok=True)
     optimizer = torch.optim.Adam(

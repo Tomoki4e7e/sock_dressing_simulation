@@ -446,14 +446,23 @@ def main(argv=None) -> int:
     demo.add_argument("--checkpoint", type=Path)
     demo.add_argument("--device")
     demo.add_argument("--max-steps", type=int)
+    demo.add_argument("--seed", type=int)
     demo.add_argument("--graphics", action="store_true")
     demo.add_argument("--headless", action="store_true")
     demo.add_argument("--sock-point", type=float, nargs=2, action="append")
     demo.add_argument("--leg-point", type=float, nargs=2, action="append")
+    demo.add_argument("--sock-negative-point", type=float, nargs=2, action="append")
+    demo.add_argument("--leg-negative-point", type=float, nargs=2, action="append")
     demo.add_argument(
         "--output-root",
         type=Path,
         default=resolve_package_path("artifacts/phase4/data"),
+    )
+    dressing_probe = commands.add_parser("dressing-probe")
+    dressing_probe.add_argument(
+        "--output",
+        type=Path,
+        default=resolve_package_path("artifacts/dressing_player/probe"),
     )
     args = parser.parse_args(argv)
     config = load_config(args.config)
@@ -462,6 +471,20 @@ def main(argv=None) -> int:
         report = run_doctor(config)
         print(format_report(report))
         return 0 if report["ok"] and (not args.inference or report["inference_ready"]) else 1
+    if args.command == "dressing-probe":
+        if config["rcareworld"].get("profile") != "dressing_player":
+            parser.error("dressing-probe requires config/dressing_player.yaml")
+        if not config["rcareworld"].get("graphics", False):
+            parser.error("dressing-probe requires graphics")
+        try:
+            from .dressing_player import run_dressing_probe
+
+            result = run_dressing_probe(config, output=args.output.resolve())
+        except (ImportError, OSError, RuntimeError, ValueError, KeyError) as error:
+            print(json.dumps({"ok": False, "error": str(error)}, indent=2))
+            return 2
+        print(json.dumps(result, indent=2))
+        return 0 if result["physical_sock_dressing_success"] else 3
     if args.command == "prepare-assets":
         print(json.dumps(_prepare(config), indent=2))
         return 0
@@ -513,8 +536,15 @@ def main(argv=None) -> int:
         print(json.dumps(result, indent=2))
         return 0 if result["ok"] else 3
     if args.command == "demo":
+        if config["rcareworld"].get("profile") == "dressing_player":
+            parser.error(
+                "DressingPlayer has no verified 18-D Dry-AIREC action contract; "
+                "use dressing-probe"
+            )
         if args.graphics and args.headless:
             parser.error("demo accepts only one of --graphics and --headless")
+        if config["inference"].get("require_graphics", False) and not args.graphics:
+            parser.error("this inference profile requires --graphics")
         config["rcareworld"]["graphics"] = bool(args.graphics)
         if not args.graphics and (not args.sock_point or not args.leg_point):
             parser.error("headless demo requires --sock-point X Y and --leg-point X Y")
@@ -532,9 +562,12 @@ def main(argv=None) -> int:
                 output_root=args.output_root.resolve(),
                 sock_points=args.sock_point,
                 leg_points=args.leg_point,
+                sock_negative_points=args.sock_negative_point,
+                leg_negative_points=args.leg_negative_point,
                 max_steps=args.max_steps,
                 checkpoint=args.checkpoint.resolve() if args.checkpoint else None,
                 device=args.device,
+                seed=args.seed,
             )
         except (ImportError, OSError, RuntimeError, ValueError, KeyError) as error:
             print(json.dumps({"ok": False, "error": str(error)}, indent=2))

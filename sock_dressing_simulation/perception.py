@@ -31,6 +31,9 @@ def assess_masks(
     max_fraction: float = 0.95,
     previous_areas: Optional[tuple] = None,
     max_area_change: float = 4.0,
+    prompt_points: Optional[Mapping[str, Sequence[Sequence[float]]]] = None,
+    renderer_masks: Optional[Mapping[str, np.ndarray]] = None,
+    semantic: Optional[Mapping] = None,
 ) -> dict:
     sock = np.asarray(sock_mask, dtype=bool)
     leg = np.asarray(leg_mask, dtype=bool)
@@ -51,12 +54,104 @@ def assess_masks(
             ratio = max(current, previous) / max(1, min(current, previous))
             if ratio > max_area_change:
                 checks["area_continuity"] = False
+    semantic = semantic or {}
+    checks["sock_semantic_area"] = (
+        float(semantic.get("sock_min_fraction", min_fraction))
+        <= fractions["sock"]
+        <= float(semantic.get("sock_max_fraction", max_fraction))
+    )
+    checks["leg_semantic_area"] = (
+        float(semantic.get("leg_min_fraction", min_fraction))
+        <= fractions["leg"]
+        <= float(semantic.get("leg_max_fraction", max_fraction))
+    )
+    overlap = np.count_nonzero(sock & leg) / max(1, min(areas))
+    checks["limited_overlap"] = overlap <= float(
+        semantic.get("maximum_overlap_fraction", 1.0)
+    )
+    prompt_containment = {}
+    if prompt_points:
+        for name, mask in (("sock", sock), ("leg", leg)):
+            points = prompt_points.get(name, [])
+            valid = [
+                bool(mask[int(y), int(x)])
+                for x, y in points
+                if 0 <= int(y) < mask.shape[0] and 0 <= int(x) < mask.shape[1]
+            ]
+            prompt_containment[name] = bool(valid and all(valid))
+        if semantic.get("require_prompt_containment", False):
+            checks["prompt_containment"] = all(prompt_containment.values())
+    renderer_agreement = {}
+    if renderer_masks:
+        for name, mask in (("sock", sock), ("leg", leg)):
+            reference = renderer_masks.get(name)
+            if reference is None:
+                continue
+            reference = np.asarray(reference, dtype=bool)
+            if reference.shape != mask.shape or not reference.any():
+                renderer_agreement[name] = {"available": False}
+                continue
+            union = np.count_nonzero(mask | reference)
+            iou = np.count_nonzero(mask & reference) / max(1, union)
+            centroid_distance = _centroid_distance(mask, reference)
+            diagonal = float(np.hypot(*mask.shape))
+            renderer_agreement[name] = {
+                "available": True,
+                "iou": float(iou),
+                "centroid_distance_fraction": float(centroid_distance / diagonal),
+            }
+        available = [value for value in renderer_agreement.values() if value["available"]]
+        if available:
+            checks["renderer_iou"] = all(
+                value["iou"] >= float(semantic.get("minimum_iou_with_renderer", 0.0))
+                for value in available
+            )
+            checks["renderer_centroid"] = all(
+                value["centroid_distance_fraction"]
+                <= float(semantic.get("maximum_centroid_distance_fraction", 1.0))
+                for value in available
+            )
     return {
         "ok": all(checks.values()),
         "checks": checks,
         "fractions": fractions,
         "areas": list(areas),
+        "overlap_fraction": float(overlap),
+        "prompt_containment": prompt_containment,
+        "renderer_agreement": renderer_agreement,
     }
+
+
+def _centroid_distance(first: np.ndarray, second: np.ndarray) -> float:
+    first_points = np.argwhere(first)
+    second_points = np.argwhere(second)
+    if not len(first_points) or not len(second_points):
+        return float("inf")
+    return float(np.linalg.norm(first_points.mean(axis=0) - second_points.mean(axis=0)))
+
+
+def prompt_components(
+    mask: np.ndarray, points: Sequence[Sequence[float]]
+) -> np.ndarray:
+    """Keep only connected foreground components selected by positive prompts."""
+    value = np.asarray(mask, dtype=bool)
+    if not points or not value.any():
+        return value
+    try:
+        import cv2
+    except ImportError:
+        return value
+    _, labels = cv2.connectedComponents(value.astype(np.uint8), connectivity=8)
+    selected = set()
+    for x, y in points:
+        row, column = int(y), int(x)
+        if 0 <= row < value.shape[0] and 0 <= column < value.shape[1]:
+            label = int(labels[row, column])
+            if label:
+                selected.add(label)
+    if not selected:
+        return value
+    return np.isin(labels, list(selected))
 
 
 def masked_depth(depth: np.ndarray, mask: np.ndarray) -> np.ndarray:
@@ -124,6 +219,7 @@ class SAMDepthPerception:
         self.depth_model = depth_model
         self._initialized = False
         self._previous_areas = None
+        self._prompt_points = None
         calibration_path = resolve_package_path(
             self.settings["depth_anything"]["calibration"]
         )
@@ -196,6 +292,7 @@ class SAMDepthPerception:
         leg_points: Sequence[Sequence[float]],
         sock_labels: Optional[Sequence[int]] = None,
         leg_labels: Optional[Sequence[int]] = None,
+        renderer_masks: Optional[Mapping[str, np.ndarray]] = None,
     ) -> PerceptionResult:
         self.load()
         sock_points, sock_labels = self._points(sock_points, sock_labels)
@@ -211,16 +308,24 @@ class SAMDepthPerception:
                 0, 1, leg_points, leg_labels
             )
         self._initialized = True
-        return self._result(frame, sock_logits, leg_logits)
+        self._prompt_points = {
+            "sock": sock_points[sock_labels == 1].tolist(),
+            "leg": leg_points[leg_labels == 1].tolist(),
+        }
+        return self._result(frame, sock_logits, leg_logits, renderer_masks)
 
-    def track(self, frame: np.ndarray) -> PerceptionResult:
+    def track(
+        self,
+        frame: np.ndarray,
+        renderer_masks: Optional[Mapping[str, np.ndarray]] = None,
+    ) -> PerceptionResult:
         if not self._initialized:
             raise RuntimeError("initialize prompts before tracking")
         model_frame = np.asarray(frame)[..., ::-1].copy()
         with self._sam_context():
             _, sock_logits = self.sock_predictor.track(model_frame)
             _, leg_logits = self.leg_predictor.track(model_frame)
-        return self._result(frame, sock_logits, leg_logits)
+        return self._result(frame, sock_logits, leg_logits, renderer_masks)
 
     def _sam_context(self):
         try:
@@ -257,9 +362,20 @@ class SAMDepthPerception:
         )
         return np.clip(normalized * 255.0, 0, 255).astype(np.uint8)
 
-    def _result(self, frame: np.ndarray, sock_logits, leg_logits) -> PerceptionResult:
+    def _result(
+        self,
+        frame: np.ndarray,
+        sock_logits,
+        leg_logits,
+        renderer_masks: Optional[Mapping[str, np.ndarray]] = None,
+    ) -> PerceptionResult:
         sock = self._mask(sock_logits)
         leg = self._mask(leg_logits)
+        if self.settings.get("semantic_mask", {}).get(
+            "keep_prompt_components", False
+        ):
+            sock = prompt_components(sock, self._prompt_points["sock"])
+            leg = prompt_components(leg, self._prompt_points["leg"])
         if sock.shape != frame.shape[:2] or leg.shape != frame.shape[:2]:
             raise ValueError("SAM2 masks do not match the RGB frame")
         quality = assess_masks(
@@ -269,6 +385,9 @@ class SAMDepthPerception:
             max_fraction=float(self.settings.get("mask_max_fraction", 0.95)),
             previous_areas=self._previous_areas,
             max_area_change=float(self.settings.get("mask_max_area_change", 4.0)),
+            prompt_points=self._prompt_points,
+            renderer_masks=renderer_masks,
+            semantic=self.settings.get("semantic_mask", {}),
         )
         if not quality["ok"]:
             raise RuntimeError("perception mask quality failed: " + json.dumps(quality))

@@ -19,6 +19,7 @@ class SockDressingEnv:
         self.human = None
         self.cloth = None
         self.camera = None
+        self.recording_camera = None
         self.chair = []
         self.grasp_anchors = []
         self._grasp_attachment_report = []
@@ -82,6 +83,8 @@ class SockDressingEnv:
         )
         self._env.step()
         self._validate_simulator_joint_mapping()
+        if initial_joints is None:
+            initial_joints = self.config.get("scenario", {}).get("initial_joints")
         if initial_joints is not None:
             target = np.asarray(initial_joints, dtype=float)
             current = self.robot_signals()["angle"]
@@ -125,6 +128,20 @@ class SockDressingEnv:
             self.camera.SetTransform(
                 position=list(scene["camera_position"]),
                 rotation=list(scene["camera_rotation"]),
+            )
+        if scene.get("recording_camera_id") is not None:
+            try:
+                import pyrcareworld.attributes as attr
+            except ImportError as error:
+                raise RuntimeError("pyrcareworld attributes are unavailable") from error
+            self.recording_camera = self._env.InstanceObject(
+                name="Camera",
+                id=int(scene["recording_camera_id"]),
+                attr_type=attr.CameraAttr,
+            )
+            self.recording_camera.SetTransform(
+                position=list(scene["recording_camera_position"]),
+                rotation=list(scene["recording_camera_rotation"]),
             )
         self._env.step()
 
@@ -264,12 +281,13 @@ class SockDressingEnv:
                 "cannot align RCareWorld joint names with its movable joint vector: "
                 f"names={len(simulator_names)}, positions={len(joint_positions)}"
             )
-        if not simulator_names or int(mapping.simulator_indices.max()) >= len(
-            simulator_names
-        ):
+        configured_indices = mapping.simulator_indices.tolist()
+        configured_indices.extend(mapping.fixed_simulator_indices.tolist())
+        max_index = max(configured_indices)
+        if not simulator_names or max_index >= len(simulator_names):
             raise RuntimeError(
                 "configured simulator joint index exceeds RCareWorld movable joints: "
-                f"max_index={int(mapping.simulator_indices.max())}, "
+                f"max_index={max_index}, "
                 f"joint_count={len(simulator_names)}"
             )
         expected_names = []
@@ -291,6 +309,22 @@ class SockDressingEnv:
                 if selected_names[index] != expected_names[index]
             ]
             raise RuntimeError(f"RCareWorld joint mapping mismatch: {mismatches}")
+        selected_fixed_names = [
+            simulator_names[int(index)] for index in mapping.fixed_simulator_indices
+        ]
+        if selected_fixed_names != list(mapping.fixed_names):
+            mismatches = [
+                {
+                    "fixed": mapping.fixed_names[index],
+                    "actual": selected_fixed_names[index],
+                    "simulator_index": int(mapping.fixed_simulator_indices[index]),
+                }
+                for index in range(len(mapping.fixed_names))
+                if selected_fixed_names[index] != mapping.fixed_names[index]
+            ]
+            raise RuntimeError(
+                f"RCareWorld fixed joint mapping mismatch: {mismatches}"
+            )
 
     def diagnostics(self) -> Dict[str, Any]:
         scene = self.config["scene"]
@@ -331,6 +365,10 @@ class SockDressingEnv:
             observation["camera"] = self._capture_camera()
         else:
             observation["camera"] = None
+        if self.recording_camera is not None:
+            observation["recording_camera"] = self._capture_recording_camera()
+        else:
+            observation["recording_camera"] = None
         self._env.GetCurrentCollisionPairs()
         self._env.step()
         observation["collision_pairs"] = list(
@@ -418,6 +456,17 @@ class SockDressingEnv:
             "leg_mask": leg_mask,
             "leg_mask_is_whole_human_proxy": not bool(scene.get("human_foot_collider_ids")),
             "raw": dict(self.camera.data),
+        }
+
+    def _capture_recording_camera(self) -> Dict[str, np.ndarray]:
+        camera = self.config["camera"]
+        width, height = int(camera["width"]), int(camera["height"])
+        fov = float(camera["fov"])
+        self.recording_camera.GetRGB(width, height, fov)
+        self._env.step()
+        return {
+            "rgb": self._decode(self.recording_camera.data["rgb"], "RGB"),
+            "raw": dict(self.recording_camera.data),
         }
 
     def robot_signals(self) -> Dict[str, np.ndarray]:

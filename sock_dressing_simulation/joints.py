@@ -15,10 +15,15 @@ class JointMap:
     mimic: Mapping[str, Mapping[str, float]]
     simulator_indices: np.ndarray
     revolute_action_indices: tuple
+    fixed_names: tuple
+    fixed_positions: np.ndarray
+    fixed_simulator_indices: np.ndarray
+    fixed_revolute_indices: tuple
 
     @classmethod
     def from_config(cls, config: Mapping) -> "JointMap":
         joint = config["joints"]
+        fixed = joint.get("fixed", {})
         result = cls(
             tuple(joint["names"]),
             np.asarray(joint["lower"], dtype=float),
@@ -27,6 +32,10 @@ class JointMap:
             joint.get("mimic", {}),
             np.asarray(joint["simulator_indices"], dtype=int),
             tuple(int(index) for index in joint["revolute_action_indices"]),
+            tuple(fixed.get("names", ())),
+            np.asarray(fixed.get("positions", ()), dtype=float),
+            np.asarray(fixed.get("simulator_indices", ()), dtype=int),
+            tuple(int(index) for index in fixed.get("revolute_indices", ())),
         )
         result.validate()
         return result
@@ -41,6 +50,25 @@ class JointMap:
             raise ValueError("simulator_indices must have shape (18,)")
         if any(index < 0 or index >= 18 for index in self.revolute_action_indices):
             raise ValueError("revolute_action_indices must refer to action indices")
+        fixed_count = len(self.fixed_names)
+        if len(set(self.fixed_names)) != fixed_count:
+            raise ValueError("fixed joint names must be unique")
+        if set(self.fixed_names) & set(self.names):
+            raise ValueError("fixed joints must be outside the 18-D action")
+        if self.fixed_positions.shape != (fixed_count,):
+            raise ValueError("fixed joint positions must match fixed joint names")
+        if self.fixed_simulator_indices.shape != (fixed_count,):
+            raise ValueError("fixed simulator indices must match fixed joint names")
+        if not np.all(np.isfinite(self.fixed_positions)):
+            raise ValueError("fixed joint positions must be finite")
+        if np.any(self.fixed_simulator_indices < 0):
+            raise ValueError("fixed simulator indices must be non-negative")
+        if len(set(self.fixed_simulator_indices.tolist())) != fixed_count:
+            raise ValueError("fixed simulator indices must be unique")
+        if set(self.fixed_simulator_indices.tolist()) & set(self.simulator_indices.tolist()):
+            raise ValueError("fixed joints must not share simulator indices with actions")
+        if any(index < 0 or index >= fixed_count for index in self.fixed_revolute_indices):
+            raise ValueError("fixed revolute indices must refer to fixed joints")
         if np.any(self.lower > self.upper) or np.any(self.max_delta <= 0):
             raise ValueError("invalid joint bounds")
         for target, rule in self.mimic.items():
@@ -110,9 +138,12 @@ class JointMap:
     def merge_for_simulator(
         self, action: Sequence[float], full_previous: Sequence[float]
     ) -> np.ndarray:
-        """Merge an 18-D rad/metre action into Unity's degree/metre vector."""
+        """Merge the 18-D action and fixed posture into Unity's full vector."""
         result = np.asarray(full_previous, dtype=float).copy()
-        if result.ndim != 1 or result.size <= int(self.simulator_indices.max()):
+        required_index = int(self.simulator_indices.max())
+        if self.fixed_simulator_indices.size:
+            required_index = max(required_index, int(self.fixed_simulator_indices.max()))
+        if result.ndim != 1 or result.size <= required_index:
             raise ValueError("simulator joint vector is shorter than configured indices")
         converted = self._array(action)
         converted[list(self.revolute_action_indices)] = np.rad2deg(
@@ -124,6 +155,11 @@ class JointMap:
         result[self.simulator_indices[independent_actions]] = converted[
             independent_actions
         ]
+        fixed = self.fixed_positions.copy()
+        fixed[list(self.fixed_revolute_indices)] = np.rad2deg(
+            fixed[list(self.fixed_revolute_indices)]
+        )
+        result[self.fixed_simulator_indices] = fixed
         return result
 
     @staticmethod

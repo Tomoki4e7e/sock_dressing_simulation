@@ -1,0 +1,35 @@
+{
+  "configurations": [
+    {
+      "browse": {
+        "databaseFilename": "${default}",
+        "limitSymbolsToIncludedHeaders": false
+      },
+      "includePath": [
+        "/home/cm-pc/catkin_ws/devel/include/**",
+        "/opt/ros/noetic/include/**",
+        "/home/cm-pc/catkin_ws/src/tsukakoshi/airec_joy_controller/include/**",
+        "/home/cm-pc/catkin_ws/src/tsukakoshi/apriltag_ros/apriltag_ros/include/**",
+        "/home/cm-pc/catkin_ws/src/cm_airec_ros/cm_arm_controller/include/**",
+        "/home/cm-pc/catkin_ws/src/cm_airec_ros/cm_common/include/**",
+        "/home/cm-pc/catkin_ws/src/cm_airec_ros/cm_human_detector/include/**",
+        "/home/cm-pc/catkin_ws/src/cm_airec_ros/cm_laser_tools/include/**",
+        "/home/cm-pc/catkin_ws/src/cm_airec_ros/cm_mb_controller/include/**",
+        "/home/cm-pc/catkin_ws/src/cm_airec_ros/cm_rviz_plugins/include/**",
+        "/home/cm-pc/catkin_ws/src/cm_airec_ros/cm_sounds/include/**",
+        "/home/cm-pc/catkin_ws/src/cm_airec_ros/cm_task_executor/include/**",
+        "/home/cm-pc/catkin_ws/src/cm_airec_ros/cm_task_planner/include/**",
+        "/home/cm-pc/catkin_ws/src/tsukakoshi/registration_repo/include/**",
+        "/home/cm-pc/catkin_ws/src/torobo_ros/utilities/torobo_collision_detector/include/**",
+        "/home/cm-pc/catkin_ws/src/zed-ros-interfaces/include/**",
+        "/usr/include/**"
+      ],
+      "name": "ROS",
+      "intelliSenseMode": "gcc-x64",
+      "compilerPath": "/usr/bin/gcc",
+      "cStandard": "gnu11",
+      "cppStandard": "c++14"
+    }
+  ],
+  "version": 4
+}

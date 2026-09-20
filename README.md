@@ -74,6 +74,12 @@ and sends a bounded 0.005-rad test motion. Compatibility details are stored in
 episode metadata. Unity error logging remains enabled so native failures are
 not discarded. Every run gets a new UTC-named episode.
 
+Whenever Dry-AIREC is loaded, both arms are first moved to the ShareSet
+`change_pose.py` `ka` posture and the three torso joints are set to its `kb`
+posture (`[-45, 100, 0]` degrees). The torso targets are outside the learned
+18-D action and are held fixed while inference continues to command only both
+arms and both grippers.
+
 `calibrate` reads the existing ShareSet sample without modifying it and writes
 `artifacts/phase1/randomization_calibration.json`. It records robust state,
 coverage, image foot-axis, and normalized-keypoint proxy ranges. Quantities not
@@ -92,8 +98,9 @@ The default scenario reproduces the visual task arrangement with the canonical
 player: a four-collider seat, the human facing Dry-AIREC, the right leg
 extended with HumanBodyIK target `3`, and a 300 mm × 40 mm open tubular sock at
 the toe. The selected right-ankle plantarflexion probe is 30 degrees about the
-configured x axis. Dry-AIREC's two arms use a position-only IK seed aimed at
-opposing sides of the opening.
+configured x axis. Dry-AIREC starts from the real-robot `ka` arm posture and
+keeps the real-robot `kb` torso posture fixed; this replaces the earlier
+position-only IK arm seed.
 
 `scene-preview` launches each requested angle in a fresh Unity process and
 writes RGB images plus `preview.json` under `artifacts/phase1/preview`. Probe
@@ -206,14 +213,16 @@ python3 -m sock_dressing_simulation.cli train --epochs 10000 --device cuda
 python3 -m sock_dressing_simulation.cli demo --graphics --max-steps 250
 ```
 
-Graphics mode opens one prompt window for the sock and one for the leg.
+The checked-in synthetic-scene prompt profile is used when points are omitted.
+Graphics mode opens one prompt window for the sock and one for the leg when a
+profile has no points.
 Left-click positive points, right-click negative points, and press Enter to
-finish each object. For reproducible headless runs, supply positive pixel
-coordinates explicitly:
+finish each object. Explicit positive and negative points override the profile:
 
 ```bash
-python3 -m sock_dressing_simulation.cli demo --headless \
-  --sock-point 640 520 --leg-point 640 220 --max-steps 250
+python3 -m sock_dressing_simulation.cli demo --graphics \
+  --sock-point 568 494 --sock-negative-point 630 520 \
+  --leg-point 630 520 --leg-negative-point 568 494 --max-steps 250
 ```
 
 The pinned Player selects Unity's Null graphics device in its default
@@ -224,9 +233,16 @@ above are examples only. Confirm the generated `prompt_frame.png` and masks
 for the exact camera/scene; SAM2 can segment the wrong synthetic object even
 when a mask is numerically nontrivial.
 
-Every demo writes a ShareSet-compatible episode plus
+SAM logits use a synthetic-scene threshold and are reduced to connected
+components containing positive prompts. Per-object area, overlap, prompt
+containment, temporal continuity, and usable renderer-mask agreement are
+fail-closed checks. Degenerate renderer masks are not accepted as ground
+truth. Inference uses the camera at the initial right See3CAM pose, while
+`demo.mp4` is recorded independently from the configured fixed overview
+camera. Every demo writes a ShareSet-compatible episode plus
 `predicted_action.csv`, `applied_action.csv`, checkpoint SHA-256, prompt
-points, per-frame perception QA, and a stop reason. Empty, full-frame,
+points, `mask_overlays/`, per-frame perception QA, coverage observations,
+task-success criteria, and a stop reason. Empty, full-frame,
 identical, or discontinuously changing SAM masks stop the controller before
 another command is sent.
 
@@ -235,6 +251,24 @@ physical dressing success. The distributed Player still exposes only
 unverified static cloth anchors, has no verified robot-following cloth grasp,
 and provides no direct contact force. A custom Unity Player with verified
 gripper attachment remains necessary for a physically successful pull-up.
+
+### Alternate DressingPlayer capability probe
+
+The binary-only `phy-robo-care` runtime is kept in a separate worktree and
+config; its DLLs and Python package are never mixed with the canonical player.
+
+```bash
+python3 -m sock_dressing_simulation.cli \
+  --config config/dressing_player.yaml doctor
+python3 -m sock_dressing_simulation.cli \
+  --config config/dressing_player.yaml dressing-probe
+```
+
+The probe exercises `ClothGrasperAttr`, records cloth-particle displacement,
+and requires the garment-held signal before and after pull-up. The distributed
+scene exposes one Kinova arm and one gripper, not the required Dry-AIREC
+bimanual 18-D contract; therefore it reports this capability gap and never
+labels a one-gripper run as sock-dressing success.
 
 ## Environment API and limitations
 

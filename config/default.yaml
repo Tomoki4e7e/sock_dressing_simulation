@@ -23,8 +23,16 @@ scene:
   human_position: [0.0, 1.04, 0.0]
   human_rotation: [0.0, 0.0, 0.0]
   sock_position: [-0.14, 0.53, 0.68]
-  camera_position: [-1.8, 1.05, -1.5]
-  camera_rotation: [10.0, 42.0, 0.0]
+  # Measured RCareWorld world transform of the right See3CAM camera frame
+  # after applying the default ka arms and fixed kb torso posture. RCareWorld's
+  # CameraAttr uses the camera-frame Euler rotation rather than the ROS optical
+  # frame rotation.
+  camera_position: [-0.04204, 0.98332, 1.05015]
+  camera_rotation: [55.18068, 180.01147, 0.01028]
+  # A separate overview camera records demo.mp4 without changing inference.
+  recording_camera_id: 1301
+  recording_camera_position: [-1.8, 1.05, -1.5]
+  recording_camera_rotation: [10.0, 42.0, 0.0]
   chair:
     enabled: true
     asset_name: Collider_Box
@@ -83,7 +91,9 @@ inference:
     source: ../ShareSet/sam2_realtime
     config: ../ShareSet/sam2_realtime/sam2_configs/sam2_hiera_s.yaml
     checkpoint: ../ShareSet/sam2_realtime/checkpoints/sam2_hiera_small.pt
-    threshold: 0.2
+    # Prompt-connected filtering removes broad floor logits; 0.4 preserves
+    # the prompted sock/leg pixels under small renderer variations.
+    threshold: 0.4
   depth_anything:
     source: ../ShareSet/Depth-Anything-V2
     checkpoint: ../ShareSet/Depth-Anything-V2/checkpoints/depth_anything_v2_vits.pth
@@ -95,7 +105,22 @@ inference:
   max_steps: 250
   mask_min_fraction: 0.0001
   mask_max_fraction: 0.95
-  mask_max_area_change: 4.0
+  mask_max_area_change: 5.0
+  semantic_mask:
+    require_prompt_containment: true
+    keep_prompt_components: true
+    sock_min_fraction: 0.0001
+    sock_max_fraction: 0.05
+    leg_min_fraction: 0.0001
+    leg_max_fraction: 0.15
+    maximum_overlap_fraction: 0.35
+  prompts:
+    sock:
+      positive: [[760, 420]]
+      negative: [[650, 250], [400, 500]]
+    leg:
+      positive: [[650, 250]]
+      negative: [[760, 420], [400, 500]]
 scenario:
   seed: 0
   settle_steps: 30
@@ -120,10 +145,10 @@ scenario:
     ik_index: 2
     position: [0.0, 0.49, 0.24]
     rotation: [0.0, 0.0, 0.0]
-  # Position-only Pinocchio IK, targeting opposing points around the sock
-  # opening. Runtime joint-name/index mapping remains independently checked.
-  initial_joints_source: pinocchio-position-ik/sock-opening
-  initial_joints: [0.64530, 0.27702, 1.57066, 0.19000, 0.00266, -0.09243, 0.09232, 0.0, 0.0, 0.64530, 0.27702, 1.57066, 0.19000, 0.00266, -0.09243, 0.09232, 0.0, 0.0]
+  # ShareSet/airec_joy_controller/scripts/change_pose.py command `ka`.
+  # Arms are radians; grippers remain metres under the 18-D action contract.
+  initial_joints_source: shareset-change_pose/ka
+  initial_joints: [0.6108652382, -1.4835298642, -1.0471975512, 2.35619, 2.6179938780, 0.4363323130, 0.4014257280, 0.0, 0.0, 0.6108652382, -1.4835298642, -1.0471975512, 2.35619, 2.6179938780, 0.4363323130, 0.4014257280, 0.0, 0.0]
   randomization:
     enabled: false
     calibration_file: artifacts/phase1/randomization_calibration.json
@@ -168,3 +193,10 @@ joints:
   mimic:
     left_gripper/mimic_joint: {source: left_gripper/finger_joint, multiplier: 0.5, offset: 0.0}
     right_gripper/mimic_joint: {source: right_gripper/finger_joint, multiplier: 0.5, offset: 0.0}
+  # ShareSet change_pose.py command `kb`. These joints are outside the learned
+  # 18-D action and are held at these radian targets throughout inference.
+  fixed:
+    names: [torso/joint_1, torso/joint_2, torso/joint_3]
+    simulator_indices: [7, 8, 9]
+    positions: [-0.7853981634, 1.7453292520, 0.0]
+    revolute_indices: [0, 1, 2]

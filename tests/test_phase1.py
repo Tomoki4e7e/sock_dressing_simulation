@@ -22,6 +22,13 @@ def test_scenario_sampling_is_seeded_and_validates_mimic():
     assert first.sock_mesh.length_m == pytest.approx(0.30)
     assert first.sock_mesh.radius_m == pytest.approx(0.04)
     assert first.foot_ik_index == 3
+    expected_arm = np.deg2rad([35.0, -85.0, -60.0, 135.0, 150.0, 25.0, 23.0])
+    np.testing.assert_allclose(first.initial_joints[:7], expected_arm, atol=5e-6)
+    np.testing.assert_allclose(first.initial_joints[9:16], expected_arm, atol=5e-6)
+    np.testing.assert_allclose(
+        np.asarray(first.initial_joints)[[7, 8, 16, 17]], np.zeros(4)
+    )
+    assert first.initial_joints_source == "shareset-change_pose/ka"
 
     config["scenario"]["initial_joints"][8] = 0.01
     with pytest.raises(ValueError, match="mimic"):

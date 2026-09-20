@@ -1,5 +1,6 @@
 import csv
 import json
+from pathlib import Path
 
 import numpy as np
 
@@ -28,7 +29,8 @@ class _Environment:
 
     def observe(self):
         return {
-            "camera": {"rgb": np.full((4, 5, 3), 10, np.uint8)},
+            "camera": {"rgb": np.full((8, 8, 3), 10, np.uint8)},
+            "recording_camera": {"rgb": np.full((8, 8, 3), 20, np.uint8)},
             "angle": self.angle.copy(),
             "torque": np.zeros(18),
             "external_torque": np.zeros(18),
@@ -46,11 +48,11 @@ class _Environment:
 
 class _Perception:
     def __init__(self, config):
-        mask = np.zeros((4, 5), bool)
+        mask = np.zeros((8, 8), bool)
         mask[1, 1] = True
-        leg = np.zeros((4, 5), bool)
+        leg = np.zeros((8, 8), bool)
         leg[2, 3] = True
-        depth = np.full((4, 5), 20, np.uint8)
+        depth = np.full((8, 8), 20, np.uint8)
         self.result = PerceptionResult(
             depth, mask, leg, np.where(mask, depth, 0).astype(np.uint8),
             np.where(leg, depth, 0).astype(np.uint8), {"ok": True}
@@ -95,3 +97,6 @@ def test_demo_records_bounded_closed_loop_actions(tmp_path):
     metadata = json.loads(open(f"{episode}/metadata.json").read())
     assert metadata["stop_reason"] == "max_steps"
     assert metadata["frames"] == 2
+    assert metadata["video_camera"]["source"] == "recording_camera"
+    assert metadata["video_camera"]["position"] == [-1.8, 1.05, -1.5]
+    assert Path(result["video"]).is_file()

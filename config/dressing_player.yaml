@@ -1,0 +1,54 @@
+extends: default.yaml
+
+rcareworld:
+  profile: dressing_player
+  repository: https://github.com/empriselab/RCareWorld.git
+  commit: 3ee988f5d3535a6e87eadf71480db1d7a0b760fc
+  checkout: .deps/RCareWorld-phy-robo-care
+  executable: .deps/RCareWorld-phy-robo-care/template/Dressing/DressingPlayer.x86_64
+  python_source: .deps/RCareWorld-phy-robo-care/pyrcareworld
+  assimp_library_dir: null
+  graphics: true
+  port: 5005
+
+dressing_player:
+  robot_id: 315893
+  gripper_id: 3158930
+  camera_id: 654321
+  cloth_id: 782563
+  # The distributed scene has one robot and one gripper. Physical success
+  # remains fail-closed until a second verified gripper is available.
+  required_grippers: 2
+  cloth_name: Obi Cloth
+  gripper_name: robotiq_arg2f_85_model
+  grasper_id: 3158930
+  grasp_radius_m: 0.10
+  settle_steps: 60
+  hold_steps: 30
+  maximum_tracking_error_m: 0.06
+  minimum_coverage_gain: 0.10
+  trajectory:
+    approach_position: [1.5, 2.3, 0.6]
+    approach_rotation: [0.0, 0.0, -69.858]
+    pull_offset: [0.0, 0.25, 0.0]
+    duration_s: 2.0
+
+scene:
+  scene_file: null
+
+dataset:
+  name: data_sock_dressing_player
+
+inference:
+  training_data_root: artifacts/dressing_player/data
+  training_manifest: artifacts/dressing_player/data/dataset_dressing_player.yaml
+  training_dataset_name: data_sock_dressing_player
+  output_dir: artifacts/dressing_player/model
+  checkpoint: artifacts/dressing_player/model/SARNN_latest.pth
+  stats: artifacts/dressing_player/model/data.json
+  require_graphics: true
+  semantic_mask:
+    require_prompt_containment: true
+    maximum_overlap_fraction: 0.35
+    minimum_iou_with_renderer: 0.50
+    maximum_centroid_distance_fraction: 0.20
