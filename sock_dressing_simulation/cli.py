@@ -270,6 +270,11 @@ def _unity_collect(config, output_root: Path, frames: int, seed: int):
                 exact_foot_colliders=bool(
                     config["scene"].get("human_foot_collider_ids")
                 ),
+                player_diagnostics=(
+                    observation["diagnostics"]
+                    if config["rcareworld"].get("profile") == "custom_player"
+                    else None
+                ),
             )
             writer.update_metadata(
                 {

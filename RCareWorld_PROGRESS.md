@@ -1,6 +1,6 @@
 # RCareWorld 靴下着衣シミュレーション実装進捗
 
-最終更新: 2026-09-18
+最終更新: 2026-09-21
 
 ## 現在の到達点
 
@@ -133,3 +133,38 @@ episode metadataの`task_success.success`はfalseであり、未検証の把持�
 
 これらが提供されるまでは、現在の成果を「閉ループ推論成功」とし、
 「物理的靴下着衣成功」とは区別する。
+
+## Greenfield SockDressingPlayer（2026-09-20）
+
+配布Playerとは分離した編集可能project scaffoldを
+`unity/SockDressingPlayer/`へ追加した。実装済みsourceは以下を含む。
+
+- Python互換TCP framingと`StepStart`/`StepEnd`同期bridge
+- versioned `sock-cloth-v1` APIとPython adapter
+- 固定object ID、右脚5領域、左右gripper、椅子、床のscene bootstrap
+- Obi 6.x/7.x adapter、粒子・速度・contact・左右pin grasp・reset
+- RGB、linear depth、instance ID、sock/leg amodal maskの同一step capture
+- Player報告設定、collider、grasp、maskを用いるfail-closed品質gate
+- Linux Development/Release build scriptとUnity/Python test
+
+Python testは31件passした。
+
+## RCareUnity native統合（2026-09-21）
+
+- RCareUnity `765efda236a7e51f8955bf16b13f3bf13a2ff11e`を基盤に変更
+- RCareCommon submoduleをpin `482150e42d7da410b8467c9c0deed5bee24b3445`で復元
+- RCareUnity/RCareCommon双方のGit LFSを復元し、pointer残存0件を確認
+- 同梱Obi 7.0 source上へRCareWorld-native `SockClothAttr`を実装
+- 実solver値を返す設定診断、粒子・速度、contact、左右pin grasp/release/resetを実装
+- HumanbodyAttr右脚へcalf/ankle/heel/forefoot/toes固定ID colliderを生成
+- RGBから除外しamodal passだけで描画する右脚region mask proxyを追加
+- RCareCommon `LoadSockCloth` API、Addressablesを含むLinux build entry pointを追加
+- custom profileをRCareWorld native通信、CameraAttr、HumanbodyAttrへ切り替え
+- Unity 2022.3.34f1 Editorを`.deps/unity/2022.3.34f1`へ導入
+
+Unity compileを実行したが、Licensing Clientが
+`No ULF license found` / `Token not found in cache`で終了した。このためUnity
+compile/test、Linux Player build、live particle/contact/grasp/mask動画は未実測であり、
+build完了または物理成功とは扱わない。offline activation requestは
+`Unity_v2022.3.34f1.alf`へ保存した。Unity Personal/Proを有効化した後、
+`scripts/build_custom_player.sh development`から再開する。

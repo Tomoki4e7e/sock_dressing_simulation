@@ -1,0 +1,66 @@
+extends: default.yaml
+
+rcareworld:
+  profile: custom_player
+  commit: greenfield-sock-cloth-v1
+  native_rcareworld: true
+  executable: Build/SockDressingPlayer/Player.x86_64
+  checkout: RCareUnity
+  graphics: false
+  log_level: 3
+  port: 5005
+
+scene:
+  scene_file: HumanBodyIK.json
+  preloaded: false
+  human_id: 168242
+  camera_id: 1300
+  recording_camera_id: null
+  human_foot_collider_ids: [2101, 2102, 2103, 2104, 2105]
+  contact_proxy_ids: [2101, 2102, 2103, 2104, 2105, 2201, 2202, 2301]
+  enable_human_obi_collider: true
+  chair:
+    enabled: true
+    asset_name: Collider_Box
+    parts:
+      - {id: 2301, name: chair, position: [0.0, 0.48, -0.18], scale: [0.62, 0.10, 0.58]}
+  grasp_anchors:
+    enabled: true
+    attach: false
+    max_distance_m: 0.03
+    anchors:
+      - {id: 2201, side: left, parent_link: "left_gripper/grasping_frame", position: [-0.18, 0.53, 0.68]}
+      - {id: 2202, side: right, parent_link: "right_gripper/grasping_frame", position: [-0.10, 0.53, 0.68]}
+  stable_ids:
+    sock: 1200
+    robot: 1100
+    human: 168242
+    calf: 2101
+    ankle: 2102
+    heel: 2103
+    forefoot: 2104
+    toes: 2105
+    left_gripper: 2201
+    right_gripper: 2202
+    chair: 2301
+    floor: 2302
+
+obi:
+  expected:
+    protocol_version: sock-cloth-v1
+    obi_available: true
+    stretch_compliance: 0.0005
+    bend_compliance: 0.005
+    maximum_circumferential_stretch: 1.5
+    self_collision: true
+    substeps: 4
+    solver_iterations: 8
+    particle_radius_m: 0.008
+    particle_mass_kg: 0.005
+    collision_margin_m: 0.002
+    friction: 0.5
+  settings_applied: true
+  version: player-reported
+  timestep_s: 0.02
+  substeps: 4
+  solver_iterations: 8

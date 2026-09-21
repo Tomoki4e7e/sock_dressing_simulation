@@ -11,6 +11,7 @@ def assess_observation_quality(
     expected_width: int,
     expected_height: int,
     exact_foot_colliders: bool,
+    player_diagnostics: Mapping[str, Any] = None,
 ) -> Dict[str, Any]:
     if not cameras:
         raise ValueError("at least one camera observation is required")
@@ -43,6 +44,18 @@ def assess_observation_quality(
         ),
         "exact_foot_colliders": bool(exact_foot_colliders),
     }
+    diagnostics = dict(player_diagnostics or {})
+    if diagnostics:
+        obi = diagnostics.get("obi_contract", {})
+        checks.update(
+            {
+                "player_contract_verified": bool(obi.get("ok", False)),
+                "robot_obi_collider_verified": bool(
+                    diagnostics.get("robot_obi_collider_verified", False)
+                ),
+                "registered_foot_colliders": _foot_colliders_verified(diagnostics),
+            }
+        )
     required = (
         "resolution_contract",
         "rgb_nonconstant",
@@ -53,6 +66,12 @@ def assess_observation_quality(
         "temporal_variation",
         "exact_foot_colliders",
     )
+    if diagnostics:
+        required += (
+            "player_contract_verified",
+            "robot_obi_collider_verified",
+            "registered_foot_colliders",
+        )
     failed = [name for name in required if not checks[name]]
     return {
         "checks": checks,
@@ -60,3 +79,13 @@ def assess_observation_quality(
         "learning_ready": not failed,
         "policy": "fail-closed; failed observations must not be used as Phase 1 live data",
     }
+
+
+def _foot_colliders_verified(diagnostics: Mapping[str, Any]) -> bool:
+    required = {"calf", "ankle", "heel", "forefoot", "toes"}
+    enabled = {
+        str(item.get("region"))
+        for item in diagnostics.get("registered_obi_colliders", ())
+        if item.get("enabled", False)
+    }
+    return required.issubset(enabled)

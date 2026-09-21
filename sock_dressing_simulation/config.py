@@ -9,9 +9,11 @@ PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG = PACKAGE_ROOT / "config" / "default.yaml"
 RCAREWORLD_COMMIT = "ae0900be3e450ae08d6137468970d0ac473a001b"
 DRESSING_PLAYER_COMMIT = "3ee988f5d3535a6e87eadf71480db1d7a0b760fc"
+CUSTOM_PLAYER_VERSION = "greenfield-sock-cloth-v1"
 SUPPORTED_RCAREWORLD_PROFILES = {
     "canonical": RCAREWORLD_COMMIT,
     "dressing_player": DRESSING_PLAYER_COMMIT,
+    "custom_player": CUSTOM_PLAYER_VERSION,
 }
 
 
@@ -36,7 +38,7 @@ def load_config(path: Path = DEFAULT_CONFIG) -> Dict[str, Any]:
         raise ValueError(
             f"RCareWorld profile {profile} requires commit {expected_commit}, got {commit}"
         )
-    if "scenario" in config and profile == "canonical":
+    if "scenario" in config and profile in {"canonical", "custom_player"}:
         from .scenario import scenario_from_config
 
         scenario_from_config(config)

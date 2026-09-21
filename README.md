@@ -33,6 +33,29 @@ beside the player, and `doctor` verifies them. A fresh checkout must restore the
 same matching runtime before live smoke; Python-only checks remain usable
 without it.
 
+## Greenfield SockDressingPlayer
+
+The editable replacement project is isolated at
+`unity/SockDressingPlayer/`. It implements the `sock-cloth-v1` TCP contract,
+stable right-leg/gripper IDs, synchronized RGB/depth/instance/amodal outputs,
+Obi contact reporting, and verified bimanual grasp state. It never loads DLLs
+from either distributed Player.
+
+```bash
+python3 -m sock_dressing_simulation.cli \
+  --config config/custom_player.yaml doctor
+./scripts/build_custom_player.sh development
+python3 -m sock_dressing_simulation.cli \
+  --config config/custom_player.yaml smoke --headless
+```
+
+Unity `2022.3.34f1` with Linux Build Support and a licensed Obi package are
+required. Until both are installed, `doctor` and the build fail closed; a
+communication-only stub build may be produced with `SOCK_ALLOW_STUB_BUILD=1`
+but is not valid physics or learning data. Import Obi, enable the
+`SOCKDRESSING_OBI` scripting define, generate the `sock.obj` cloth blueprint,
+and assign `ObiSockBackend` before physical validation.
+
 ## Commands
 
 ```bash

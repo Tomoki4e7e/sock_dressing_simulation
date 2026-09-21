@@ -18,6 +18,7 @@ def run_doctor(config: Mapping) -> Dict[str, Any]:
     profile = str(config["rcareworld"].get("profile", "canonical"))
     expected_commit = SUPPORTED_RCAREWORLD_PROFILES[profile]
     dressing_profile = profile == "dressing_player"
+    custom_profile = profile == "custom_player"
     torobo = Path(config["assets"]["torobo_ros"]).expanduser()
     packages = discover_ros_packages(torobo) if torobo.is_dir() else {}
     product = torobo / config["assets"]["product_config"]
@@ -49,16 +50,28 @@ def run_doctor(config: Mapping) -> Dict[str, Any]:
     assimp_dir = resolve_package_path(assimp_dir_value) if assimp_dir_value else None
     assimp_version = _assimp_version(assimp_dir)
     checks["assimp_4_1_runtime_available"] = (
-        True if dressing_profile else assimp_version[:2] == (4, 1)
+        True if dressing_profile or custom_profile else assimp_version[:2] == (4, 1)
     )
     scene_file = config["scene"].get("scene_file")
     checks["scene_file_available"] = _scene_available(executable, scene_file)
     checkout_value = config["rcareworld"].get("checkout")
-    installed_commit = (
-        _checkout_commit(resolve_package_path(checkout_value))
-        if checkout_value
-        else _installed_commit(pyrcare_spec)
+    custom_project = (
+        _custom_project_checks(
+            resolve_package_path(checkout_value),
+            bool(config["rcareworld"].get("native_rcareworld", False)),
+        )
+        if custom_profile and checkout_value
+        else {}
     )
+    if custom_profile:
+        installed_commit = expected_commit if all(custom_project.values()) else "incomplete"
+        checks.update(custom_project)
+    else:
+        installed_commit = (
+            _checkout_commit(resolve_package_path(checkout_value))
+            if checkout_value
+            else _installed_commit(pyrcare_spec)
+        )
     checks["rcareworld_commit_verified"] = installed_commit == expected_commit
     scene = config["scene"]
     diagnostics = {
@@ -88,6 +101,15 @@ def run_doctor(config: Mapping) -> Dict[str, Any]:
             else "UNAVAILABLE: configure collision/effort proxy IDs if needed"
         ),
     }
+    if custom_profile:
+        diagnostics["custom_player"] = {
+            "project": str(resolve_package_path(checkout_value)),
+            "obi_requirement": (
+                "available" if custom_project.get("licensed_obi_package_present") else
+                "BLOCKED: import the licensed Obi package"
+            ),
+            "protocol": "sock-cloth-v1",
+        }
     inference_checks, inference_diagnostics = _inference_checks(config)
     diagnostics["inference"] = inference_diagnostics
     return {
@@ -97,6 +119,61 @@ def run_doctor(config: Mapping) -> Dict[str, Any]:
         "inference_checks": inference_checks,
         "diagnostics": diagnostics,
     }
+
+
+def _custom_project_checks(path: Path, native_rcareworld: bool) -> Dict[str, bool]:
+    assets = path / "Assets"
+    obi_markers = (
+        assets / "Obi",
+        assets / "Plugins" / "Obi",
+        assets / "Paid Dependencies" / "Obi",
+        path / "Packages" / "com.virtualmethodstudio.obi",
+    )
+    checks = {
+        "custom_unity_project_scaffold": (
+            (path / "ProjectSettings" / "ProjectVersion.txt").is_file()
+            and (path / "Packages" / "manifest.json").is_file()
+        ),
+        "licensed_obi_package_present": any(marker.exists() for marker in obi_markers),
+    }
+    if native_rcareworld:
+        common = assets / "RCareCommon"
+        checks.update(
+            {
+                "rcarecommon_submodule_populated": (
+                    common / "Scripts" / "Main" / "PlayerMain.cs"
+                ).is_file(),
+                "custom_native_sock_attr_source": (
+                    common
+                    / "Scripts"
+                    / "Attributes"
+                    / "Obi"
+                    / "SockClothAttr.cs"
+                ).is_file(),
+                "critical_lfs_assets_materialized": _critical_lfs_assets_materialized(
+                    path, common
+                ),
+            }
+        )
+    else:
+        checks["custom_protocol_bridge_source"] = (
+            assets / "SockDressing" / "Runtime" / "SockTcpBridge.cs"
+        ).is_file()
+    return checks
+
+
+def _critical_lfs_assets_materialized(project: Path, common: Path) -> bool:
+    candidates = (
+        next(project.glob("Assets/PhyRC/**/*.fbx"), None),
+        next(common.glob("Core Assets/CareAvatars/**/*.fbx"), None),
+    )
+    for path in candidates:
+        if path is None or not path.is_file():
+            return False
+        with path.open("rb") as stream:
+            if stream.read(64).startswith(b"version https://git-lfs.github.com/spec/v1"):
+                return False
+    return True
 
 
 def _checkout_commit(path: Path) -> str:

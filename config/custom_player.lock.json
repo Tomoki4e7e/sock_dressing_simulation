@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "player_protocol": "sock-cloth-v1",
+  "unity": {
+    "version": "2022.3.34f1",
+    "revision": "4886f5360533"
+  },
+  "repositories": {
+    "RCareUnity": "765efda236a7e51f8955bf16b13f3bf13a2ff11e",
+    "RCareCommon": "482150e42d7da410b8467c9c0deed5bee24b3445"
+  },
+  "dependencies": {
+    "Obi": {
+      "version": "7.0",
+      "location": "RCareUnity/Assets/Paid Dependencies/Obi",
+      "license": "commercial license required; source is not redistributed"
+    },
+    "BioIK": {
+      "location": "RCareUnity/Assets/Paid Dependencies/BioIK",
+      "license": "use is subject to the acquired RCareUnity dependency license"
+    }
+  },
+  "lfs": {
+    "required": true,
+    "verified_pointer_count": 0
+  }
+}

@@ -23,6 +23,7 @@ class SockDressingEnv:
         self.chair = []
         self.grasp_anchors = []
         self._grasp_attachment_report = []
+        self.sock_cloth = None
 
     def connect(self) -> "SockDressingEnv":
         if self._env is None:
@@ -32,6 +33,12 @@ class SockDressingEnv:
                 raise RuntimeError(
                     "pyrcareworld is not installed; run scripts/setup_rcareworld.sh"
                 ) from error
+            if self.config["rcareworld"].get("profile") == "custom_player":
+                import pyrcareworld.attributes as attributes
+
+                from .sock_cloth import SockClothAttr
+
+                attributes.attrs["SockClothAttr"] = SockClothAttr
             settings = self.config["rcareworld"]
             scene = self.config["scene"]
             runtime_assets = ["Camera", "Empty"]
@@ -77,6 +84,12 @@ class SockDressingEnv:
         initial_joints: Optional[Any] = None,
     ) -> None:
         self.connect()
+        if self.config["rcareworld"].get("profile") == "custom_player":
+            if self.config["rcareworld"].get("native_rcareworld", False):
+                self._load_native_custom_player(urdf, sock_obj, initial_joints)
+                return
+            self._load_custom_player()
+            return
         assets = self.config["assets"]
         self.robot = self._env.LoadURDF(
             str(Path(urdf).resolve()), id=int(assets["robot_id"]), native_ik=False, axis="z"
@@ -96,7 +109,9 @@ class SockDressingEnv:
                     raise RuntimeError(
                         "initial robot pose did not converge before cloth loading"
                     )
-        self.cloth = self._env.LoadCloth(str(Path(sock_obj).resolve()), id=int(assets["sock_id"]))
+        self.cloth = self._env.LoadCloth(
+            str(Path(sock_obj).resolve()), id=int(assets["sock_id"])
+        )
         self._env.EnabledGroundObiCollider(True)
         self.robot.SetImmovable(bool(self.config["scene"].get("robot_immovable", True)))
         self.robot.SetTransform(
@@ -117,23 +132,131 @@ class SockDressingEnv:
             if scene.get("enable_human_obi_collider", False):
                 self.human.AddObiCollider()
         self._create_chair()
+        self._create_native_cameras()
+
+    def _load_native_custom_player(
+        self,
+        urdf: Path,
+        sock_obj: Path,
+        initial_joints: Optional[Any],
+    ) -> None:
+        """Load the sock task through RCareCommon's native PlayerMain APIs."""
+        from .sock_cloth import SockClothAttr, validate_configuration
+
+        assets = self.config["assets"]
+        scene = self.config["scene"]
+        self.robot = self._env.LoadURDF(
+            str(Path(urdf).resolve()),
+            id=int(assets["robot_id"]),
+            native_ik=False,
+            axis="z",
+        )
+        self._env.step()
+        self._validate_simulator_joint_mapping()
+        target = (
+            np.asarray(initial_joints, dtype=float)
+            if initial_joints is not None
+            else np.asarray(self.config["scenario"]["initial_joints"], dtype=float)
+        )
+        current = self.robot_signals()["angle"]
+        for _ in range(1001):
+            if np.allclose(current, target, atol=1e-6, rtol=0):
+                break
+            current = self.command(target, current)
+        else:
+            raise RuntimeError("initial robot pose did not converge before sock loading")
+
+        self._env._send_env_data(
+            "LoadSockCloth",
+            str(Path(sock_obj).resolve()),
+            int(assets["sock_id"]),
+        )
+        self._env.step()
+        loaded = self._env.GetAttr(int(assets["sock_id"]))
+        self.sock_cloth = (
+            loaded
+            if isinstance(loaded, SockClothAttr)
+            else SockClothAttr(
+                self._env,
+                int(assets["sock_id"]),
+                getattr(loaded, "data", {}),
+            )
+        )
+        self._env.attrs[int(assets["sock_id"])] = self.sock_cloth
+        self.cloth = self.sock_cloth
+
+        self._env.EnabledGroundObiCollider(True)
+        self.robot.SetImmovable(bool(scene.get("robot_immovable", True)))
+        self.robot.SetTransform(
+            position=list(scene["robot_position"]),
+            rotation=list(scene.get("robot_rotation", [0, 0, 0])),
+        )
+        self.robot.AddObiCollider()
+        self.cloth.SetTransform(position=list(scene["sock_position"]))
+        self.human = self._env.GetAttr(int(scene["human_id"]))
+        if scene.get("human_position") is not None:
+            self.human.SetTransform(
+                position=list(scene["human_position"]),
+                rotation=list(scene.get("human_rotation", [0, 0, 0])),
+            )
+        self.sock_cloth.configure_right_leg_colliders(int(scene["human_id"]))
+        self._create_chair()
+        self._create_native_cameras()
+        self.sock_cloth.configure_mask_proxy_cameras()
+        self._create_grasp_anchors()
+        anchors = {
+            str(item["side"]): int(item["id"])
+            for item in scene.get("grasp_anchors", {}).get("anchors", ())
+        }
+        if set(anchors) != {"left", "right"}:
+            raise RuntimeError("native custom Player requires left/right grasp anchors")
+        self.sock_cloth.set_grasp_targets(anchors["left"], anchors["right"])
+
+        expected = self.config.get("obi", {}).get("expected", {})
+        self.sock_cloth.configure(
+            stretch_compliance=float(expected["stretch_compliance"]),
+            bend_compliance=float(expected["bend_compliance"]),
+            particle_radius_m=float(expected["particle_radius_m"]),
+            particle_mass_kg=float(expected["particle_mass_kg"]),
+            collision_margin_m=float(expected["collision_margin_m"]),
+            friction=float(expected["friction"]),
+            self_collision=bool(expected["self_collision"]),
+            substeps=int(expected["substeps"]),
+            solver_iterations=int(expected["solver_iterations"]),
+        )
+        self.sock_cloth.request_configuration()
+        self.sock_cloth.request_registered_colliders()
+        self._env.step()
+        report = validate_configuration(self.sock_cloth.configuration(), expected)
+        if not report["ok"]:
+            raise RuntimeError(f"native custom Player cloth contract mismatch: {report}")
+        enabled_ids = {
+            int(item["object_id"])
+            for item in self.sock_cloth.registered_colliders()
+            if item.get("enabled", False)
+        }
+        required = set(int(value) for value in scene.get("contact_proxy_ids", ()))
+        if not required.issubset(enabled_ids):
+            raise RuntimeError(
+                "native custom Player is missing enabled Obi colliders: "
+                f"{sorted(required - enabled_ids)}"
+            )
+
+    def _create_native_cameras(self) -> None:
+        import pyrcareworld.attributes as attr
+
+        scene = self.config["scene"]
         if scene.get("camera_id") is not None:
-            try:
-                import pyrcareworld.attributes as attr
-            except ImportError as error:
-                raise RuntimeError("pyrcareworld attributes are unavailable") from error
             self.camera = self._env.InstanceObject(
-                name="Camera", id=int(scene["camera_id"]), attr_type=attr.CameraAttr
+                name="Camera",
+                id=int(scene["camera_id"]),
+                attr_type=attr.CameraAttr,
             )
             self.camera.SetTransform(
                 position=list(scene["camera_position"]),
                 rotation=list(scene["camera_rotation"]),
             )
         if scene.get("recording_camera_id") is not None:
-            try:
-                import pyrcareworld.attributes as attr
-            except ImportError as error:
-                raise RuntimeError("pyrcareworld attributes are unavailable") from error
             self.recording_camera = self._env.InstanceObject(
                 name="Camera",
                 id=int(scene["recording_camera_id"]),
@@ -144,6 +267,48 @@ class SockDressingEnv:
                 rotation=list(scene["recording_camera_rotation"]),
             )
         self._env.step()
+
+    def _load_custom_player(self) -> None:
+        """Bind to objects authored into the greenfield Player scene."""
+        from .sock_cloth import SockClothAttr, validate_configuration
+
+        self._env.step()
+        assets = self.config["assets"]
+        scene = self.config["scene"]
+        self.robot = self._env.GetAttr(int(assets["robot_id"]))
+        self.human = self._env.GetAttr(int(scene["human_id"]))
+        distributed_cloth = self._env.GetAttr(int(assets["sock_id"]))
+        self.sock_cloth = (
+            distributed_cloth
+            if isinstance(distributed_cloth, SockClothAttr)
+            else SockClothAttr(
+                self._env,
+                int(assets["sock_id"]),
+                getattr(distributed_cloth, "data", {}),
+            )
+        )
+        self._env.attrs[int(assets["sock_id"])] = self.sock_cloth
+        self.cloth = self.sock_cloth
+        self.sock_cloth.request_configuration()
+        self.sock_cloth.request_registered_colliders()
+        self._env.step()
+        report = validate_configuration(
+            self.sock_cloth.configuration(),
+            self.config.get("obi", {}).get("expected", {}),
+        )
+        if not report["ok"]:
+            raise RuntimeError(f"custom Player cloth contract mismatch: {report}")
+        colliders = self.sock_cloth.registered_colliders()
+        enabled_ids = {
+            int(item["object_id"]) for item in colliders if item.get("enabled", False)
+        }
+        required = set(int(value) for value in scene.get("contact_proxy_ids", ()))
+        if not required.issubset(enabled_ids):
+            raise RuntimeError(
+                "custom Player is missing enabled Obi colliders: "
+                f"{sorted(required - enabled_ids)}"
+            )
+        self._validate_simulator_joint_mapping()
 
     def _create_chair(self) -> None:
         chair = self.config["scene"].get("chair", {})
@@ -226,6 +391,46 @@ class SockDressingEnv:
         """Apply one validated scenario before the first recorded observation."""
         if self.robot is None or self.cloth is None:
             raise RuntimeError("robot and cloth must be loaded before applying a scenario")
+        if self.config["rcareworld"].get("profile") == "custom_player":
+            self.cloth.reset()
+            self.cloth.SetTransform(
+                position=list(scenario.sock_position),
+                rotation=list(scenario.sock_rotation),
+            )
+            self._env.step()
+            native = bool(
+                self.config["rcareworld"].get("native_rcareworld", False)
+            )
+            if native:
+                self._apply_foot_target(
+                    scenario.support_foot_ik_index,
+                    scenario.support_foot_position,
+                    scenario.support_foot_rotation,
+                )
+                self._apply_foot_target(
+                    scenario.foot_ik_index,
+                    scenario.foot_position,
+                    scenario.foot_rotation,
+                )
+            current = self.robot_signals()["angle"]
+            applied = self.command(np.asarray(scenario.initial_joints, dtype=float), current)
+            for _ in range(scenario.settle_steps):
+                self._env.step()
+            return {
+                "initial_command_steps": int(not np.allclose(current, applied)),
+                "settle_steps": scenario.settle_steps,
+                "foot_ik_applied": native and scenario.foot_ik_index is not None,
+                "support_foot_ik_applied": (
+                    native and scenario.support_foot_ik_index is not None
+                ),
+                "foot_pose_source": (
+                    "RCareCommon HumanbodyAttr"
+                    if native
+                    else "authored greenfield scene"
+                ),
+                "chair_part_ids": [int(part.id) for part in self.chair],
+                "grasp_attachments": list(self._grasp_attachment_report),
+            }
         self.cloth.SetTransform(
             position=list(scenario.sock_position),
             rotation=list(scenario.sock_rotation),
@@ -328,6 +533,44 @@ class SockDressingEnv:
 
     def diagnostics(self) -> Dict[str, Any]:
         scene = self.config["scene"]
+        if self.config["rcareworld"].get("profile") == "custom_player":
+            from .sock_cloth import validate_configuration
+
+            configuration = self.sock_cloth.configuration() if self.sock_cloth else {}
+            colliders = (
+                list(self.sock_cloth.registered_colliders()) if self.sock_cloth else []
+            )
+            return {
+                "human_configured": self.human is not None,
+                "camera_configured": (
+                    self.camera is not None
+                    or bool(getattr(self.cloth, "data", {}).get("rgb_png"))
+                ),
+                "exact_foot_colliders_configured": bool(
+                    scene.get("human_foot_collider_ids")
+                ),
+                "contact_force_available": (
+                    "cloth_contacts" in getattr(self.cloth, "data", {})
+                ),
+                "robot_obi_collider_verified": any(
+                    int(item.get("object_id", -1))
+                    == int(self.config["assets"]["robot_id"])
+                    and item.get("enabled")
+                    for item in colliders
+                ),
+                "contact_proxy_ids": list(scene.get("contact_proxy_ids", [])),
+                "registered_obi_colliders": colliders,
+                "grasp_state": list(
+                    getattr(self.cloth, "data", {}).get("grasp_state", [])
+                ),
+                "external_torque_source": "joint_force residual proxy",
+                "obi_contract": validate_configuration(
+                    configuration, self.config.get("obi", {}).get("expected", {})
+                ),
+                "limitations": [] if configuration.get("obi_available") else [
+                    "Licensed Obi runtime is unavailable; physical results are invalid."
+                ],
+            }
         return {
             "human_configured": scene.get("human_id") is not None,
             "camera_configured": scene.get("camera_id") is not None,
@@ -350,6 +593,10 @@ class SockDressingEnv:
     def observe(self) -> Dict[str, Any]:
         if self._env is None:
             raise RuntimeError("environment is not connected")
+        if self.config["rcareworld"].get("profile") == "custom_player":
+            if self.config["rcareworld"].get("native_rcareworld", False):
+                return self._observe_native_custom_player()
+            return self._observe_custom_player()
         observation = {
             "robot": dict(getattr(self.robot, "data", {}) or {}),
             "human": dict(getattr(self.human, "data", {}) or {}),
@@ -376,6 +623,94 @@ class SockDressingEnv:
         )
         observation.update(self.robot_signals())
         return observation
+
+    def _observe_native_custom_player(self) -> Dict[str, Any]:
+        self.sock_cloth.request_particles()
+        self.sock_cloth.request_particle_velocities()
+        self.sock_cloth.request_configuration()
+        self.sock_cloth.request_registered_colliders()
+        self.sock_cloth.request_grasp_state()
+        self.sock_cloth.request_contacts()
+        self._env.step()
+        cloth = dict(self.sock_cloth.data)
+        contacts = list(cloth.get("cloth_contacts", []))
+        camera = self._capture_camera() if self.camera is not None else None
+        recording = (
+            self._capture_recording_camera()
+            if self.recording_camera is not None
+            else None
+        )
+        collision_pairs = sorted(
+            {
+                (int(self.sock_cloth.id), int(item["collider_id"]))
+                for item in contacts
+                if int(item.get("collider_id", -1)) >= 0
+            }
+        )
+        observation = {
+            "robot": dict(getattr(self.robot, "data", {}) or {}),
+            "human": dict(getattr(self.human, "data", {}) or {}),
+            "cloth": cloth,
+            "camera": camera,
+            "recording_camera": recording,
+            "contact_force": contacts,
+            "collision_pairs": collision_pairs,
+            "diagnostics": self.diagnostics(),
+        }
+        observation.update(self.robot_signals())
+        return observation
+
+    def _observe_custom_player(self) -> Dict[str, Any]:
+        self.sock_cloth.request_particles()
+        self.sock_cloth.request_particle_velocities()
+        self.sock_cloth.request_configuration()
+        self.sock_cloth.request_registered_colliders()
+        self.sock_cloth.request_grasp_state()
+        self.sock_cloth.request_contacts()
+        self.sock_cloth.request_coverage()
+        self._env.step()
+        cloth = dict(self.sock_cloth.data)
+        contacts = list(cloth.get("cloth_contacts", []))
+        collision_pairs = sorted(
+            {
+                (int(self.sock_cloth.id), int(item["collider_id"]))
+                for item in contacts
+            }
+        )
+        observation = {
+            "robot": dict(getattr(self.robot, "data", {}) or {}),
+            "human": dict(getattr(self.human, "data", {}) or {}),
+            "cloth": cloth,
+            "camera": self._capture_custom_camera(cloth),
+            "recording_camera": None,
+            "contact_force": contacts,
+            "collision_pairs": collision_pairs,
+            "diagnostics": self.diagnostics(),
+        }
+        observation.update(self.robot_signals())
+        return observation
+
+    def _capture_custom_camera(
+        self, cloth: Mapping[str, Any]
+    ) -> Optional[Dict[str, np.ndarray]]:
+        required = ("rgb_png", "depth_png", "sock_mask_png", "leg_mask_png")
+        if any(not cloth.get(name) for name in required):
+            return None
+        instance = cloth.get("instance_mask_png")
+        return {
+            "rgb": self._decode(cloth["rgb_png"], "RGB"),
+            "camera_depth": self._decode(cloth["depth_png"], "L").astype(np.uint8),
+            "sock_mask": self._decode(cloth["sock_mask_png"], "L") > 0,
+            "leg_mask": self._decode(cloth["leg_mask_png"], "L") > 0,
+            "instance_mask": (
+                self._decode(instance, "RGB") if instance else None
+            ),
+            "simulation_frame": cloth.get("camera_frame"),
+            "raw": {
+                "coverage": cloth.get("coverage_observations", {}),
+                "protocol_version": cloth.get("protocol_version"),
+            },
+        }
 
     @staticmethod
     def measured_coverage(camera: Mapping[str, np.ndarray]) -> Optional[float]:
@@ -436,24 +771,39 @@ class SockDressingEnv:
         width, height = int(camera["width"]), int(camera["height"])
         fov = float(camera["fov"])
         near, far = float(camera["depth_near_m"]), float(camera["depth_far_m"])
-        self.camera.GetRGB(width, height, fov)
+        self._env.SetTimeScale(0)
         self._env.step()
-        rgb = self._decode(self.camera.data["rgb"], "RGB")
-        self.camera.GetDepth(near, far, width, height, fov)
-        self._env.step()
-        depth = self._decode(self.camera.data["depth"], "L").astype(np.uint8)
-        sock_mask = self._amodal_mask(int(self.config["assets"]["sock_id"]), width, height, fov)
-        foot_ids = [int(value) for value in scene.get("human_foot_collider_ids", [])]
-        if not foot_ids and scene.get("human_id") is not None:
-            foot_ids = [int(scene["human_id"])]
-        leg_mask = np.zeros((height, width), dtype=bool)
-        for target_id in foot_ids:
-            leg_mask |= self._amodal_mask(target_id, width, height, fov)
+        try:
+            self.camera.GetRGB(width, height, fov)
+            self._env.step()
+            rgb = self._decode(self.camera.data["rgb"], "RGB")
+            self.camera.GetDepth(near, far, width, height, fov)
+            self._env.step()
+            depth = self._decode(self.camera.data["depth"], "L").astype(np.uint8)
+            self.camera.GetID(width, height, fov)
+            self._env.step()
+            instance_mask = self._decode(self.camera.data["id_map"], "RGB")
+            sock_mask = self._amodal_mask(
+                int(self.config["assets"]["sock_id"]), width, height, fov
+            )
+            foot_ids = [
+                int(value) for value in scene.get("human_foot_collider_ids", [])
+            ]
+            if not foot_ids and scene.get("human_id") is not None:
+                foot_ids = [int(scene["human_id"])]
+            leg_mask = np.zeros((height, width), dtype=bool)
+            for target_id in foot_ids:
+                leg_mask |= self._amodal_mask(target_id, width, height, fov)
+        finally:
+            self._env.SetTimeScale(1)
+            self._env.step()
         return {
             "rgb": rgb,
             "camera_depth": depth,
             "sock_mask": sock_mask,
             "leg_mask": leg_mask,
+            "instance_mask": instance_mask,
+            "simulation_frame": dict(self._env.data).get("frame"),
             "leg_mask_is_whole_human_proxy": not bool(scene.get("human_foot_collider_ids")),
             "raw": dict(self.camera.data),
         }
@@ -527,6 +877,36 @@ class SockDressingEnv:
         self.robot.SetJointPosition(target.tolist())
         self._env.step()
         return bounded
+
+    def grasp(self, side: str, max_distance_m: float = 0.03) -> Dict[str, Any]:
+        if self.sock_cloth is None:
+            raise RuntimeError("verified grasp API requires the custom Player profile")
+        self.sock_cloth.grasp(side, max_distance_m)
+        self.sock_cloth.request_grasp_state()
+        self._env.step()
+        states = {state.side: state for state in self.sock_cloth.grasp_states()}
+        state = states[str(side).lower()]
+        return {
+            "side": state.side,
+            "attached": state.attached,
+            "particle_indices": list(state.particle_indices),
+            "constraint_error": state.constraint_error,
+        }
+
+    def release(self, side: str) -> Dict[str, Any]:
+        if self.sock_cloth is None:
+            raise RuntimeError("verified release API requires the custom Player profile")
+        self.sock_cloth.release(side)
+        self.sock_cloth.request_grasp_state()
+        self._env.step()
+        states = {state.side: state for state in self.sock_cloth.grasp_states()}
+        state = states[str(side).lower()]
+        return {
+            "side": state.side,
+            "attached": state.attached,
+            "particle_indices": list(state.particle_indices),
+            "constraint_error": state.constraint_error,
+        }
 
     def _amodal_mask(self, target_id: int, width: int, height: int, fov: float) -> np.ndarray:
         self.camera.GetAmodalMask(target_id, width, height, fov)
