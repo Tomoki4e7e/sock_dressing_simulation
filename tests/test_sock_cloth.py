@@ -8,6 +8,7 @@ from sock_dressing_simulation.sock_cloth import (
     PROTOCOL_VERSION,
     ClothContact,
     GraspState,
+    SceneGeometry,
     SockClothAttr,
     validate_configuration,
 )
@@ -21,6 +22,144 @@ class FakeEnvironment:
         self.messages.append(args)
 
 
+def test_custom_sock_visual_is_two_sided_and_high_contrast():
+    source = Path(
+        "RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs"
+    ).read_text()
+    stencil = Path(
+        "RCareUnity/Assets/RCareCommon/Library/Bulitin/ObiClothStencil.prefab"
+    ).read_text()
+
+    assert "sockVisualMesh.subMeshCount = 2;" in source
+    assert "sockVisualMesh.SetTriangles(frontTriangles, 0);" in source
+    assert "sockVisualMesh.SetTriangles(backTriangles, 1);" in source
+    assert 'new[] { frontMaterial, backMaterial }' in source
+    assert '"SockVisualFront"' in source
+    assert '"SockVisualBack"' in source
+    assert 'material.SetTexture("_MainTex", null)' in source
+    assert "ObiClothStencil canonical materials are unresolved" in source
+    assert "new Color(0.1f, 0.35f, 0.9f, 1)" not in source
+    assert "guid: 3862df0f523254bcda0733ce0d63c68a" in stencil
+    assert "guid: a5d1f0e373f1848d98dcc85a2607d980" in stencil
+
+
+def test_sock_opening_alignment_writes_solver_local_particle_positions():
+    source = Path(
+        "RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs"
+    ).read_text()
+
+    assert "solver.transform.InverseTransformPoint(aligned)" in source
+    assert "Vector3.ProjectOnPlane(" in source
+    assert "Physics.gravity" in source
+    assert "Quaternion.AngleAxis(" in source
+    assert "CaptureResetStateIfReady(true)" in source
+
+
+def test_sock_geometry_reports_particle_derived_hanging_direction():
+    source = Path(
+        "RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs"
+    ).read_text()
+
+    assert "Vector3 sockBodyDirection = ClothCenter() - openingCenter;" in source
+    assert '"sock_body_direction", sockBodyDirection' in source
+    assert '"sock_body_gravity_alignment", sockBodyGravityAlignment' in source
+    assert "solver.positions[solverIndex] = aligned;" not in source
+    assert "Vector3.Dot(point, axis)" in source
+    assert "Physics.IgnoreCollision(robotCollider, humanCollider, true)" in source
+
+
+def test_grasp_only_pins_small_opening_patches_and_leaves_body_dynamic():
+    source = Path(
+        "RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs"
+    ).read_text()
+
+    assert ".Take(maximumGraspParticlesPerSide)" in source
+    assert "graspRotationalCompliance" in source
+    assert '"non_opening_grasp_particle_count"' in source
+    assert "cloth.tetherConstraintsEnabled = false;" in source
+    assert "cloth.volumeConstraintsEnabled = false;" in source
+    assert "solver.invMasses[solverIndex] = 1.0f / particleMass;" in source
+
+
+def test_right_leg_colliders_follow_actual_bones():
+    source = Path(
+        "RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs"
+    ).read_text()
+
+    assert "SyncRightLegCollidersToBones();" in source
+    assert "Transform foot = bones.RightFoot;" in source
+    assert "Transform toes = bones.RightToes ?? foot;" in source
+    assert "item.SetParent(bone, false);" in source
+    assert "toe + new Vector3(0, 0, -0.15f)" not in source
+
+
+def test_human_task_pose_preserves_rig_bone_lengths():
+    pose_source = Path(
+        "RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs"
+    ).read_text()
+    player_source = Path(
+        "RCareUnity/Assets/RCareCommon/Scripts/Main/PlayerMain.cs"
+    ).read_text()
+
+    assert "SolveTwoBoneKnee(" in pose_source
+    assert "RotateBoneToward(" in pose_source
+    assert "maximumTaskBoneLengthError <= 1e-4f" in pose_source
+    assert 'Resources.Load<CanonicalHumanPose>("CanonicalHumanPose")' in pose_source
+    assert "PoseTwoBoneChain(" not in pose_source
+    assert "chair_intersection_vertex_fraction" in pose_source
+    assert "SetBonePosition(" not in pose_source
+    assert 'LeftShoulder = exact("left_collar")' in player_source
+    assert 'LeftUpperArm = exact("left_shoulder")' in player_source
+    assert 'RightShoulder = exact("right_collar")' in player_source
+    assert 'RightUpperArm = exact("right_shoulder")' in player_source
+    assert 'LeftMiddle1 = exact("left_middle1")' in player_source
+    assert 'RightMiddle1 = exact("right_middle1")' in player_source
+
+
+def test_canonical_human_pose_contains_terminal_bones():
+    pose = Path(
+        "RCareUnity/Assets/SockDressing/Resources/CanonicalHumanPose.asset"
+    ).read_text()
+    build_source = Path(
+        "RCareUnity/Assets/SockDressing/Editor/SockDressingBuild.cs"
+    ).read_text()
+
+    for name in (
+        "left_wrist",
+        "left_middle1",
+        "right_wrist",
+        "right_middle1",
+        "left_ankle",
+        "left_foot",
+        "right_ankle",
+        "right_foot",
+    ):
+        assert f"name: {name}" in pose
+    assert "clip.SampleAnimation(instance, 0);" in build_source
+    assert "AssetDatabase.CreateAsset(pose, CanonicalHumanPosePath);" in build_source
+
+
+def test_human_task_pose_rejects_nonfinite_plantarflexion():
+    cloth = SockClothAttr(FakeEnvironment(), 1200)
+    with pytest.raises(ValueError, match="plantarflexion"):
+        cloth.configure_human_task_pose(
+            [0.0, 0.5, 0.0],
+            [0.0, 0.6, 0.7],
+            [0.6, 0.1, 0.5],
+            float("nan"),
+        )
+
+
+def test_human_task_pose_rejects_nonpositive_seat_scale():
+    cloth = SockClothAttr(FakeEnvironment(), 1200)
+    with pytest.raises(ValueError, match="seat scale"):
+        cloth.configure_human_task_pose(
+            [0.0, 0.5, 0.0],
+            [0.0, 0.6, 0.7],
+            [0.6, 0.0, 0.5],
+        )
+
+
 def test_sock_cloth_commands_match_unity_contract():
     env = FakeEnvironment()
     cloth = SockClothAttr(env, 1200)
@@ -29,6 +168,7 @@ def test_sock_cloth_commands_match_unity_contract():
     cloth.configure(
         stretch_compliance=0.0005,
         bend_compliance=0.005,
+        stretching_scale=0.85,
         particle_radius_m=0.008,
         particle_mass_kg=0.005,
         collision_margin_m=0.002,
@@ -37,14 +177,38 @@ def test_sock_cloth_commands_match_unity_contract():
         substeps=4,
         solver_iterations=8,
     )
+    cloth.configure_grasp(
+        linear_compliance=0.00005,
+        rotational_compliance=0.01,
+        break_threshold=10.0,
+        slip_constraint_error_m=0.015,
+        slip_opening_span_m=0.085,
+        slip_consecutive_steps=3,
+        maximum_particles_per_side=2,
+    )
     cloth.set_grasp_targets(2201, 2202)
+    cloth.align_grasp_targets_to_opening()
+    cloth.clamp_grasp_target_span(0.115)
+    cloth.align_sock_opening_to_grasp_targets()
+    cloth.ignore_robot_human_rigid_collisions(1100)
     cloth.configure_right_leg_colliders(2000)
+    cloth.translate_human_and_ik([0.1, 0.0, -0.2])
+    cloth.freeze_human_right_toe_at([0.0, 0.5, 0.6])
+    cloth.configure_human_task_pose(
+        [0.0, 0.5, 0.0],
+        [0.0, 0.6, 0.7],
+        [0.6, 0.1, 0.5],
+    )
+    cloth.set_task_right_toe_position([0.0, 0.6, 0.8])
+    cloth.set_foot_clearance_target(0.1, 2301)
+    cloth.arm_slip_detection()
     cloth.configure_mask_proxy_cameras()
     cloth.request_configuration()
     cloth.request_registered_colliders()
     cloth.grasp("left", 0.03)
     cloth.release("right")
     cloth.request_grasp_state()
+    cloth.request_scene_geometry()
     cloth.request_attached_particle_indices("left")
     cloth.request_grasp_constraint_error("right")
     cloth.request_contacts()
@@ -53,15 +217,40 @@ def test_sock_cloth_commands_match_unity_contract():
     assert env.messages == [
         (1200, "GetParticles"),
         (1200, "GetParticleVelocities"),
-        (1200, "ConfigureSock", 0.0005, 0.005, 0.008, 0.005, 0.002, 0.5, True, 4, 8),
+        (1200, "ConfigureSock", 0.0005, 0.005, 0.85, 0.008, 0.005, 0.002, 0.5, True, 4, 8),
+        (1200, "ConfigureGrasp", 0.00005, 0.01, 10.0, 0.015, 0.085, 3, 2),
         (1200, "SetGraspTargets", 2201, 2202),
+        (1200, "AlignGraspTargetsToOpening"),
+        (1200, "ClampGraspTargetSpan", 0.115),
+        (1200, "AlignSockOpeningToGraspTargets"),
+        (1200, "IgnoreRobotHumanRigidCollisions", 1100),
         (1200, "ConfigureRightLegColliders", 2000),
+        (1200, "TranslateHumanAndIK", 0.1, 0.0, -0.2),
+        (1200, "FreezeHumanRightToeAt", 0.0, 0.5, 0.6),
+        (
+            1200,
+            "ConfigureHumanTaskPose",
+            0.0,
+            0.5,
+            0.0,
+            0.0,
+            0.6,
+            0.7,
+            0.0,
+            0.6,
+            0.1,
+            0.5,
+        ),
+        (1200, "SetTaskRightToePosition", 0.0, 0.6, 0.8),
+        (1200, "SetFootClearanceTarget", 0.1, 2301),
+        (1200, "ArmSlipDetection", True),
         (1200, "ConfigureMaskProxyCameras", 31),
         (1200, "GetClothConfiguration"),
         (1200, "GetRegisteredObiColliders"),
         (1200, "GraspLeft", 0.03),
         (1200, "ReleaseRight"),
         (1200, "GetGraspState"),
+        (1200, "GetSceneGeometry"),
         (1200, "GetAttachedParticleIndices", "left"),
         (1200, "GetGraspForceOrConstraintError", "right"),
         (1200, "GetClothContacts"),
@@ -99,9 +288,12 @@ def test_typed_observations_reject_invalid_values():
             "attached": True,
             "particle_indices": [1, 3],
             "constraint_error": 0.002,
+            "peak_constraint_error": 0.003,
+            "over_threshold_steps": 1,
         }
     )
     assert state.particle_indices == (1, 3)
+    assert state.peak_constraint_error == pytest.approx(0.003)
     contact = ClothContact.from_mapping(
         {
             "particle_index": 1,
@@ -121,6 +313,43 @@ def test_typed_observations_reject_invalid_values():
                 "particle_indices": [],
                 "constraint_error": 0,
             }
+        )
+
+
+def test_scene_geometry_is_typed_and_fail_closed():
+    geometry = SceneGeometry.from_mapping(
+        {
+            "valid": True,
+            "opening_center": [0, 0, 0],
+            "opening_normal": [1, 0, 0],
+            "sock_body_direction": [0, -1, 0],
+            "sock_body_gravity_alignment": 0.95,
+            "right_toe_position": [-0.1, 0, 0],
+            "foot_to_opening_plane_m": 0.1,
+            "foot_to_opening_lateral_m": 0.0,
+            "right_leg_raise_degrees": 90,
+            "left_grasp_position": [0, -0.04, 0],
+            "right_grasp_position": [0, 0.04, 0],
+        }
+    )
+    assert geometry.foot_to_opening_plane_m == pytest.approx(0.1)
+    assert geometry.sock_body_direction == (0.0, -1.0, 0.0)
+    assert geometry.sock_body_gravity_alignment == pytest.approx(0.95)
+    with pytest.raises(ValueError, match="valid"):
+        SceneGeometry.from_mapping({"valid": False})
+
+
+def test_grasp_configuration_rejects_invalid_thresholds():
+    cloth = SockClothAttr(FakeEnvironment(), 1200)
+    with pytest.raises(ValueError, match="grasp/slip"):
+        cloth.configure_grasp(
+            linear_compliance=0,
+            rotational_compliance=0.01,
+            break_threshold=10,
+            slip_constraint_error_m=0,
+            slip_opening_span_m=0.085,
+            slip_consecutive_steps=3,
+            maximum_particles_per_side=2,
         )
 
 

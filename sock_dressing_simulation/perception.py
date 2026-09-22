@@ -371,9 +371,14 @@ class SAMDepthPerception:
     ) -> PerceptionResult:
         sock = self._mask(sock_logits)
         leg = self._mask(leg_logits)
+        if self.settings.get("use_renderer_masks", False):
+            if not renderer_masks:
+                raise RuntimeError("authoritative renderer masks are unavailable")
+            sock = np.asarray(renderer_masks.get("sock"), dtype=bool)
+            leg = np.asarray(renderer_masks.get("leg"), dtype=bool)
         if self.settings.get("semantic_mask", {}).get(
             "keep_prompt_components", False
-        ):
+        ) and not self.settings.get("use_renderer_masks", False):
             sock = prompt_components(sock, self._prompt_points["sock"])
             leg = prompt_components(leg, self._prompt_points["leg"])
         if sock.shape != frame.shape[:2] or leg.shape != frame.shape[:2]:

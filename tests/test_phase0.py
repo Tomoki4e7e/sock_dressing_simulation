@@ -75,6 +75,33 @@ def test_sock_obj_is_open_triangulated_tube(tmp_path):
     assert points[:, 2].ptp() == pytest.approx(0.30)
 
 
+def test_production_sock_topology_matches_phase4_contract(tmp_path):
+    config = load_config(Path("config/custom_player.yaml"))
+    sock = config["scenario"]["sock"]
+    path = tmp_path / "sock.obj"
+    vertices, triangles = generate_sock_obj(
+        path,
+        length=float(sock["length_m"]),
+        radius=float(sock["radius_m"]),
+        radial_segments=int(sock["radial_segments"]),
+        length_segments=int(sock["length_segments"]),
+    )
+    points = np.asarray(
+        [
+            [float(value) for value in line.split()[1:]]
+            for line in path.read_text().splitlines()
+            if line.startswith("v ")
+        ]
+    )
+
+    assert vertices == 800
+    assert triangles == 1536
+    assert points.shape == (800, 3)
+    assert np.count_nonzero(np.isclose(points[:, 2], points[:, 2].min())) == 32
+    assert points[:, 2].max() - points[:, 2].min() == pytest.approx(0.30)
+    assert np.linalg.norm(points[:, :2], axis=1).max() == pytest.approx(0.04)
+
+
 def test_package_meshes_are_vendored_and_rewritten(tmp_path):
     package = tmp_path / "source" / "example"
     mesh = package / "meshes" / "part.stl"

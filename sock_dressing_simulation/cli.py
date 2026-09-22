@@ -375,10 +375,16 @@ def main(argv=None) -> int:
     )
     commands.add_parser("prepare-assets")
     smoke = commands.add_parser("smoke")
-    smoke.add_argument(
+    smoke_mode = smoke.add_mutually_exclusive_group()
+    smoke_mode.add_argument(
         "--headless",
         action="store_true",
         help="launch the configured Unity player without graphics (the default)",
+    )
+    smoke_mode.add_argument(
+        "--graphics",
+        action="store_true",
+        help="launch the configured Unity player with graphics",
     )
     smoke.add_argument(
         "--offline",
@@ -469,6 +475,20 @@ def main(argv=None) -> int:
         type=Path,
         default=resolve_package_path("artifacts/dressing_player/probe"),
     )
+    dressing_trial = commands.add_parser("dressing-trial")
+    dressing_trial.add_argument("--seed", type=int)
+    dressing_trial.add_argument(
+        "--output-root",
+        type=Path,
+        default=resolve_package_path("artifacts/dressing-trial"),
+    )
+    dressing_tune = commands.add_parser("dressing-tune")
+    dressing_tune.add_argument("--max-trials", type=int, default=0)
+    dressing_tune.add_argument(
+        "--output-root",
+        type=Path,
+        default=resolve_package_path("artifacts/dressing-tuning"),
+    )
     args = parser.parse_args(argv)
     config = load_config(args.config)
 
@@ -485,6 +505,33 @@ def main(argv=None) -> int:
             from .dressing_player import run_dressing_probe
 
             result = run_dressing_probe(config, output=args.output.resolve())
+        except (ImportError, OSError, RuntimeError, ValueError, KeyError) as error:
+            print(json.dumps({"ok": False, "error": str(error)}, indent=2))
+            return 2
+        print(json.dumps(result, indent=2))
+        return 0 if result["physical_sock_dressing_success"] else 3
+    if args.command in {"dressing-trial", "dressing-tune"}:
+        if config["rcareworld"].get("profile") != "custom_player":
+            parser.error(f"{args.command} requires config/custom_player.yaml")
+        config["rcareworld"]["graphics"] = True
+        try:
+            from .dressing_trial import run_dressing_trial, run_staged_tuning
+
+            prepared = _prepare(config)
+            if args.command == "dressing-trial":
+                result = run_dressing_trial(
+                    config,
+                    prepared=prepared,
+                    output_root=args.output_root.resolve(),
+                    seed=args.seed,
+                )
+            else:
+                result = run_staged_tuning(
+                    config,
+                    prepared=prepared,
+                    output_root=args.output_root.resolve(),
+                    max_trials=args.max_trials,
+                )
         except (ImportError, OSError, RuntimeError, ValueError, KeyError) as error:
             print(json.dumps({"ok": False, "error": str(error)}, indent=2))
             return 2
@@ -609,6 +656,8 @@ def main(argv=None) -> int:
         parser.error("--frames must be positive")
     if args.headless:
         config["rcareworld"]["graphics"] = False
+    elif args.graphics:
+        config["rcareworld"]["graphics"] = True
     try:
         result = (
             _offline_smoke(config, args.output_root.resolve(), args.frames)

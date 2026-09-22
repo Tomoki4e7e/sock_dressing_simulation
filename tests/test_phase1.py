@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -75,6 +76,9 @@ class _Robot:
     def SetJointPosition(self, values):
         self.data["joint_positions"] = np.asarray(values)
 
+    def SetJointPositionDirectly(self, values):
+        self.data["joint_positions"] = np.asarray(values)
+
 
 class _Cloth:
     def __init__(self):
@@ -82,6 +86,27 @@ class _Cloth:
 
     def SetTransform(self, **kwargs):
         self.transform = kwargs
+
+    def reset(self):
+        self.was_reset = True
+
+    def align_grasp_targets_to_opening(self):
+        self.was_aligned = True
+
+    def clamp_grasp_target_span(self, maximum_span_m):
+        self.maximum_grasp_span = maximum_span_m
+
+    def align_sock_opening_to_grasp_targets(self):
+        self.sock_was_aligned_to_grippers = True
+
+    def arm_slip_detection(self, armed=True):
+        self.slip_detection_armed = armed
+
+    def request_configuration(self):
+        self.configuration_requested = True
+
+    def align_human_visual_foot_to_sock(self, distance):
+        self.visual_foot_distance = distance
 
     def AddAttach(self, id, max_dis):
         self.attachments.append((id, max_dis))
@@ -134,6 +159,101 @@ def test_environment_applies_sock_foot_and_grasp_scenario():
         "left",
         "right",
     ]
+
+
+def test_custom_environment_starts_with_verified_bimanual_grasp(monkeypatch):
+    config = load_config(Path("config/custom_player.yaml"))
+    scenario = scenario_from_config(config)
+    environment = SockDressingEnv(config, backend=_Backend())
+    environment.robot = _Robot()
+    environment.cloth = _Cloth()
+    environment.sock_cloth = environment.cloth
+    environment.human = _Human()
+    calls = []
+    monkeypatch.setattr(
+        environment.sock_cloth,
+        "align_sock_opening_to_grasp_targets",
+        lambda: (
+            calls.append(("align_sock",))
+            or setattr(environment.cloth, "sock_was_aligned_to_grippers", True)
+        ),
+    )
+
+    def fake_grasp(side, distance):
+        calls.append(("grasp", side, distance))
+        return {"side": side, "attached": True, "particle_indices": [1, 2]}
+
+    monkeypatch.setattr(environment, "grasp", fake_grasp)
+    monkeypatch.setattr(environment, "_calibrate_foot_to_sock", lambda *args: None)
+    monkeypatch.setattr(
+        environment,
+        "_request_initial_pose_contract",
+        lambda: {
+            "ok": True,
+            "foot_to_sock_m": 0.1,
+            "right_leg_raise_degrees": 90,
+        },
+    )
+    report = environment.apply_scenario(scenario)
+    assert environment.cloth.was_reset
+    assert not hasattr(environment.cloth, "was_aligned")
+    assert environment.cloth.sock_was_aligned_to_grippers
+    assert environment.cloth.maximum_grasp_span == pytest.approx(
+        config["scene"]["grasp_anchors"]["maximum_anchor_span_m"]
+    )
+    assert environment.cloth.slip_detection_armed
+    assert getattr(environment.cloth, "visual_foot_distance", None) is None
+    assert calls == [
+        ("align_sock",),
+        ("grasp", "left", 0.04),
+        ("grasp", "right", 0.04),
+    ]
+    assert all(item["attached"] for item in report["initial_grasp"])
+    assert report["grasp_alignment"] is None
+    assert report["initial_pose_contract"]["ok"]
+
+
+def test_bimanual_cartesian_alignment_updates_both_arm_chains(monkeypatch):
+    config = load_config(Path("config/custom_player.yaml"))
+    config["scene"]["grasp_alignment"].update(
+        {
+            "tolerance_m": 0.001,
+            "finite_difference_rad": 0.01,
+            "damping": 0.0001,
+            "maximum_joint_step_rad": 0.1,
+            "maximum_iterations": 1,
+        }
+    )
+    environment = SockDressingEnv(config, backend=_Backend())
+    angle = np.zeros(18)
+    driven = []
+
+    def robot_signals():
+        return {"angle": angle.copy()}
+
+    def drive(target):
+        angle[:] = np.asarray(target, dtype=float)
+        driven.append(angle.copy())
+        return angle.copy()
+
+    def geometry():
+        return SimpleNamespace(
+            left_grasp_position=np.array([angle[0], 0.0, 0.0]),
+            right_grasp_position=np.array([angle[9], 0.0, 0.0]),
+        )
+
+    monkeypatch.setattr(environment, "robot_signals", robot_signals)
+    monkeypatch.setattr(environment, "_drive_joint_target", drive)
+    monkeypatch.setattr(environment, "_request_scene_geometry", geometry)
+
+    report = environment.move_grippers_to_targets(
+        [0.05, 0.0, 0.0], [0.05, 0.0, 0.0]
+    )
+
+    assert report["ok"]
+    assert angle[0] > 0
+    assert angle[9] > 0
+    assert driven[-1][0] > 0 and driven[-1][9] > 0
 
 
 def test_scene_contract_rejects_noncanonical_rest_mesh_and_left_target():

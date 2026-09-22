@@ -35,6 +35,9 @@ class GraspState:
     attached: bool
     particle_indices: Tuple[int, ...]
     constraint_error: float
+    peak_constraint_error: float = 0.0
+    over_threshold_steps: int = 0
+    release_reason: str = ""
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "GraspState":
@@ -45,12 +48,100 @@ class GraspState:
         if any(index < 0 for index in indices):
             raise ValueError("particle indices must be non-negative")
         error = float(value.get("constraint_error", 0.0))
-        if not np.isfinite(error) or error < 0:
+        peak = float(value.get("peak_constraint_error", error))
+        threshold_steps = int(value.get("over_threshold_steps", 0))
+        if not np.isfinite(error) or error < 0 or not np.isfinite(peak) or peak < 0:
             raise ValueError("constraint_error must be finite and non-negative")
+        if threshold_steps < 0:
+            raise ValueError("over_threshold_steps must be non-negative")
         attached = bool(value.get("attached", False))
         if attached != bool(indices):
             raise ValueError("attached must agree with particle_indices")
-        return cls(side, attached, indices, error)
+        return cls(
+            side,
+            attached,
+            indices,
+            error,
+            peak,
+            threshold_steps,
+            str(value.get("release_reason", "")),
+        )
+
+
+@dataclass(frozen=True)
+class SceneGeometry:
+    opening_center: Tuple[float, float, float]
+    opening_normal: Tuple[float, float, float]
+    sock_body_direction: Tuple[float, float, float]
+    sock_body_gravity_alignment: float
+    right_toe_position: Tuple[float, float, float]
+    foot_to_opening_plane_m: float
+    foot_to_opening_lateral_m: float
+    right_leg_raise_degrees: float
+    left_grasp_position: Tuple[float, float, float]
+    right_grasp_position: Tuple[float, float, float]
+    left_opening_edge: Tuple[float, float, float]
+    right_opening_edge: Tuple[float, float, float]
+    left_grasp_parent: str = ""
+    right_grasp_parent: str = ""
+    left_grasp_local_offset: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    right_grasp_local_offset: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "SceneGeometry":
+        if not bool(value.get("valid", False)):
+            raise ValueError("Player did not return valid sock/right-leg geometry")
+        vector_names = (
+            "opening_center",
+            "opening_normal",
+            "sock_body_direction",
+            "right_toe_position",
+            "left_grasp_position",
+            "right_grasp_position",
+            "left_opening_edge",
+            "right_opening_edge",
+            "left_grasp_local_offset",
+            "right_grasp_local_offset",
+        )
+        vectors = {}
+        for name in vector_names:
+            fallback_name = {
+                "left_opening_edge": "left_grasp_position",
+                "right_opening_edge": "right_grasp_position",
+            }.get(name)
+            fallback = (
+                value.get(fallback_name, ())
+                if fallback_name
+                else ((0.0, 0.0, 0.0) if name.endswith("_local_offset") else ())
+            )
+            vector = tuple(float(item) for item in value.get(name, fallback))
+            if len(vector) != 3 or not np.all(np.isfinite(vector)):
+                raise ValueError(f"{name} must contain three finite values")
+            vectors[name] = vector
+        distance = float(value["foot_to_opening_plane_m"])
+        lateral = float(value["foot_to_opening_lateral_m"])
+        angle = float(value["right_leg_raise_degrees"])
+        gravity_alignment = float(value["sock_body_gravity_alignment"])
+        if (
+            not np.isfinite(distance)
+            or distance < 0
+            or not np.isfinite(lateral)
+            or lateral < 0
+            or not np.isfinite(angle)
+            or not np.isfinite(gravity_alignment)
+            or gravity_alignment < -1.0
+            or gravity_alignment > 1.0
+        ):
+            raise ValueError("scene distances and angles must be finite")
+        return cls(
+            foot_to_opening_plane_m=distance,
+            foot_to_opening_lateral_m=lateral,
+            right_leg_raise_degrees=angle,
+            sock_body_gravity_alignment=gravity_alignment,
+            left_grasp_parent=str(value.get("left_grasp_parent", "")),
+            right_grasp_parent=str(value.get("right_grasp_parent", "")),
+            **vectors,
+        )
 
 
 @dataclass(frozen=True)
@@ -129,7 +220,7 @@ class SockClothAttr:
         self.data: Dict[str, Any] = dict(data or {})
 
     def parse_message(self, data: Mapping[str, Any]) -> None:
-        self.data = dict(data)
+        self.data.update(data)
 
     def _send_data(self, command: str, *args: Any) -> None:
         self.env._send_instance_data(self.id, command, *args)
@@ -156,6 +247,7 @@ class SockClothAttr:
         *,
         stretch_compliance: float,
         bend_compliance: float,
+        stretching_scale: float,
         particle_radius_m: float,
         particle_mass_kg: float,
         collision_margin_m: float,
@@ -168,6 +260,7 @@ class SockClothAttr:
             "ConfigureSock",
             float(stretch_compliance),
             float(bend_compliance),
+            float(stretching_scale),
             float(particle_radius_m),
             float(particle_mass_kg),
             float(collision_margin_m),
@@ -177,11 +270,160 @@ class SockClothAttr:
             int(solver_iterations),
         )
 
+    def configure_grasp(
+        self,
+        *,
+        linear_compliance: float,
+        rotational_compliance: float,
+        break_threshold: float,
+        slip_constraint_error_m: float,
+        slip_opening_span_m: float,
+        slip_consecutive_steps: int,
+        maximum_particles_per_side: int,
+    ) -> None:
+        values = np.asarray(
+            [
+                linear_compliance,
+                rotational_compliance,
+                break_threshold,
+                slip_constraint_error_m,
+                slip_opening_span_m,
+            ],
+            dtype=float,
+        )
+        if (
+            not np.all(np.isfinite(values))
+            or linear_compliance < 0
+            or rotational_compliance <= 0
+            or break_threshold <= 0
+            or slip_constraint_error_m <= 0
+            or slip_opening_span_m <= 0
+            or int(slip_consecutive_steps) < 1
+            or int(maximum_particles_per_side) < 1
+        ):
+            raise ValueError("invalid grasp/slip configuration")
+        self._send_data(
+            "ConfigureGrasp",
+            float(linear_compliance),
+            float(rotational_compliance),
+            float(break_threshold),
+            float(slip_constraint_error_m),
+            float(slip_opening_span_m),
+            int(slip_consecutive_steps),
+            int(maximum_particles_per_side),
+        )
+
     def set_grasp_targets(self, left_id: int, right_id: int) -> None:
         self._send_data("SetGraspTargets", int(left_id), int(right_id))
 
+    def align_grasp_targets_to_opening(self) -> None:
+        self._send_data("AlignGraspTargetsToOpening")
+
+    def clamp_grasp_target_span(self, maximum_span_m: float) -> None:
+        span = float(maximum_span_m)
+        if not np.isfinite(span) or span <= 0:
+            raise ValueError("maximum grasp target span must be finite and positive")
+        self._send_data("ClampGraspTargetSpan", span)
+
+    def align_sock_opening_to_grasp_targets(self) -> None:
+        self._send_data("AlignSockOpeningToGraspTargets")
+
+    def set_grasp_target_position(
+        self, side: str, position: Sequence[float]
+    ) -> None:
+        if side not in {"left", "right"}:
+            raise ValueError(f"unsupported grasp side: {side}")
+        value = np.asarray(position, dtype=float)
+        if value.shape != (3,) or not np.all(np.isfinite(value)):
+            raise ValueError("grasp target position must be a finite 3-vector")
+        self._send_data("SetGraspTargetPosition", side, *value.tolist())
+
     def configure_right_leg_colliders(self, human_id: int) -> None:
         self._send_data("ConfigureRightLegColliders", int(human_id))
+
+    def configure_human_visual_pose(
+        self, seat_position: Sequence[float], foot_position: Sequence[float]
+    ) -> None:
+        seat = np.asarray(seat_position, dtype=float)
+        foot = np.asarray(foot_position, dtype=float)
+        if (
+            seat.shape != (3,)
+            or foot.shape != (3,)
+            or not np.all(np.isfinite(seat))
+            or not np.all(np.isfinite(foot))
+        ):
+            raise ValueError("human visual pose points must be finite 3-vectors")
+        self._send_data("ConfigureHumanVisualPose", *seat.tolist(), *foot.tolist())
+
+    def configure_human_task_pose(
+        self,
+        seat_position: Sequence[float],
+        foot_position: Sequence[float],
+        seat_scale: Sequence[float],
+        plantarflexion_degrees: float = 0.0,
+    ) -> None:
+        seat = np.asarray(seat_position, dtype=float)
+        foot = np.asarray(foot_position, dtype=float)
+        scale = np.asarray(seat_scale, dtype=float)
+        plantarflexion = float(plantarflexion_degrees)
+        if (
+            seat.shape != (3,)
+            or foot.shape != (3,)
+            or scale.shape != (3,)
+            or not np.all(np.isfinite(seat))
+            or not np.all(np.isfinite(foot))
+            or not np.all(np.isfinite(scale))
+            or np.any(scale <= 0)
+            or not np.isfinite(plantarflexion)
+        ):
+            raise ValueError(
+                "human task pose points, plantarflexion, and seat scale are invalid"
+            )
+        self._send_data(
+            "ConfigureHumanTaskPose",
+            *seat.tolist(),
+            *foot.tolist(),
+            plantarflexion,
+            *scale.tolist(),
+        )
+
+    def set_task_right_toe_position(self, position: Sequence[float]) -> None:
+        vector = np.asarray(position, dtype=float)
+        if vector.shape != (3,) or not np.all(np.isfinite(vector)):
+            raise ValueError("task right toe position must be a finite 3-vector")
+        self._send_data("SetTaskRightToePosition", *vector.tolist())
+
+    def ignore_robot_human_rigid_collisions(self, robot_id: int) -> None:
+        self._send_data("IgnoreRobotHumanRigidCollisions", int(robot_id))
+
+    def align_human_visual_foot_to_sock(self, distance_m: float) -> None:
+        distance = float(distance_m)
+        if not np.isfinite(distance) or distance <= 0:
+            raise ValueError("visual foot distance must be finite and positive")
+        self._send_data("AlignHumanVisualFootToSock", distance)
+
+    def translate_human_and_ik(self, delta: Sequence[float]) -> None:
+        vector = np.asarray(delta, dtype=float)
+        if vector.shape != (3,) or not np.all(np.isfinite(vector)):
+            raise ValueError("human translation must contain three finite values")
+        self._send_data("TranslateHumanAndIK", *vector.tolist())
+
+    def freeze_human_right_toe_at(self, position: Sequence[float]) -> None:
+        vector = np.asarray(position, dtype=float)
+        if vector.shape != (3,) or not np.all(np.isfinite(vector)):
+            raise ValueError("right toe target must contain three finite values")
+        self._send_data("FreezeHumanRightToeAt", *vector.tolist())
+
+    def set_foot_clearance_target(
+        self, distance_m: float, chair_id: int = -1
+    ) -> None:
+        distance = float(distance_m)
+        if not np.isfinite(distance) or distance <= 0:
+            raise ValueError("foot clearance target must be finite and positive")
+        self._send_data("SetFootClearanceTarget", distance, int(chair_id))
+
+    def arm_slip_detection(self, armed: bool = True) -> None:
+        self._send_data("ArmSlipDetection", bool(armed))
 
     def configure_mask_proxy_cameras(self, proxy_layer: int = 31) -> None:
         self._send_data("ConfigureMaskProxyCameras", int(proxy_layer))
@@ -212,6 +454,18 @@ class SockClothAttr:
 
     def request_grasp_state(self) -> None:
         self._send_data("GetGraspState")
+
+    def request_scene_geometry(self) -> None:
+        self._send_data("GetSceneGeometry")
+
+    def request_visual_diagnostics(self, chair_id: int = -1) -> None:
+        self._send_data("GetVisualDiagnostics", int(chair_id))
+
+    def visual_diagnostics(self) -> Tuple[Mapping[str, Any], ...]:
+        return tuple(dict(item) for item in self.data.get("visual_diagnostics", ()))
+
+    def scene_geometry(self) -> SceneGeometry:
+        return SceneGeometry.from_mapping(self.data.get("scene_geometry", {}))
 
     def request_attached_particle_indices(self, side: str) -> None:
         side = str(side).lower()
@@ -250,8 +504,21 @@ class SockClothAttr:
     def reset(self) -> None:
         self._send_data("ResetSock")
 
-    def SetTransform(self, position=None, rotation=None, **_kwargs: Any) -> None:
-        self._send_data("SetTransform", position, rotation)
+    def SetTransform(
+        self,
+        position=None,
+        rotation=None,
+        scale=None,
+        is_world: bool = True,
+        **_kwargs: Any,
+    ) -> None:
+        self._send_data(
+            "SetTransform",
+            position,
+            rotation,
+            scale if scale is not None else [1.0, 1.0, 1.0],
+            bool(is_world),
+        )
 
     # Compatibility with the distributed ClothAttr naming.
     def GetParticles(self) -> None:

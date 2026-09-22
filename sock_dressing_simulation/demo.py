@@ -44,6 +44,33 @@ def run_demo(
     episode = output_root / config["dataset"]["name"] / "train" / _episode_name()
     policy = policy_factory(config, checkpoint=checkpoint, device=device)
     perception = perception_factory(config)
+    reference_actions = None
+    reference_path = settings.get("reference_actions")
+    if reference_path:
+        reference_actions = np.loadtxt(
+            resolve_package_path(reference_path),
+            delimiter=",",
+            dtype=float,
+            ndmin=2,
+        )
+        if (
+            reference_actions.ndim != 2
+            or reference_actions.shape[1] != 18
+            or not np.all(np.isfinite(reference_actions))
+        ):
+            raise ValueError("reference_actions must be a finite 18-column CSV")
+    reference_blend = float(settings.get("reference_action_blend", 0.0))
+    reference_hold = int(settings.get("reference_action_hold_steps", 1))
+    reference_interpolation = str(
+        settings.get("reference_action_interpolation", "hold")
+    )
+    reference_pull = float(settings.get("reference_cartesian_pull_m", 0.0))
+    if (
+        not 0 <= reference_blend <= 1
+        or reference_hold < 1
+        or reference_interpolation not in {"hold", "linear"}
+    ):
+        raise ValueError("invalid reference action projection settings")
     output = resolve_package_path(config["assets"]["output_dir"])
     metadata = {
         "phase": 4,
@@ -54,11 +81,19 @@ def run_demo(
         "seed": scenario.seed,
         "scenario": scenario.to_metadata(),
         "command_contract": "model 36D output -> first 18D -> JointMap.bound -> RCareWorld",
+        "reference_action_projection": {
+            "path": reference_path,
+            "blend": reference_blend,
+            "hold_steps": reference_hold,
+            "interpolation": reference_interpolation,
+        },
     }
     stop_reason = "max_steps"
     frames = 0
     quality_by_frame = []
     coverage_by_frame = []
+    grasp_quality_by_frame = []
+    foot_contact_ids_by_frame = []
     video_path = episode / "demo.mp4"
     configured_prompts = settings.get("prompts", {})
     if not sock_points:
@@ -74,9 +109,32 @@ def run_demo(
             initial_joints=scenario.initial_joints,
         )
         application = environment.apply_scenario(scenario)
+        cartesian_reference = None
+        if reference_pull > 0:
+            geometry = environment._request_scene_geometry()
+            direction = np.asarray(geometry.right_toe_position, dtype=float) - np.asarray(
+                geometry.opening_center, dtype=float
+            )
+            direction /= np.linalg.norm(direction)
+            cartesian_reference = {
+                "left": np.asarray(geometry.left_grasp_position, dtype=float),
+                "right": np.asarray(geometry.right_grasp_position, dtype=float),
+                "direction": direction,
+            }
         observation = environment.observe()
         if observation["camera"] is None:
             raise RuntimeError("camera observation is unavailable")
+        initial_renderer_masks = _renderer_masks(observation["camera"])
+        if (
+            config["rcareworld"].get("profile") == "custom_player"
+            and initial_renderer_masks is not None
+        ):
+            sock_center = _mask_centroid_point(initial_renderer_masks["sock"])
+            leg_center = _mask_centroid_point(initial_renderer_masks["leg"])
+            sock_points = [sock_center]
+            leg_points = [leg_center]
+            sock_negative_points = [leg_center]
+            leg_negative_points = [sock_center]
         sock_labels = leg_labels = None
         if not sock_points or not leg_points:
             if not config["rcareworld"].get("graphics", False):
@@ -126,6 +184,7 @@ def run_demo(
             "rotation": scene.get("recording_camera_rotation")
             if video_camera_source == "recording_camera"
             else scene.get("camera_rotation"),
+            "crop_xywh": settings.get("recording_crop_xywh"),
         }
         with EpisodeWriter(episode, joints.names, metadata) as writer:
             Image.fromarray(observation["camera"]["rgb"].astype("uint8"), "RGB").save(
@@ -158,19 +217,77 @@ def run_demo(
                     observation["camera"]["rgb"], **initialize_kwargs
                 )
                 for frame in range(steps):
-                    if frame:
-                        renderer_masks = _renderer_masks(observation["camera"])
-                        perceived = (
-                            perception.track(
-                                observation["camera"]["rgb"],
-                                renderer_masks=renderer_masks,
-                            )
-                            if renderer_masks is not None
-                            else perception.track(observation["camera"]["rgb"])
+                    prediction = policy.step(
+                        rgb=observation["camera"]["rgb"],
+                        sock_depth=perceived.sock_depth,
+                        leg_depth=perceived.leg_depth,
+                        angle=observation["angle"],
+                        torque=observation["torque"],
+                        step_index=frame,
+                    )
+                    predicted_writer.writerow(prediction["action"].tolist())
+                    command_action = np.asarray(
+                        prediction["action"], dtype=float
+                    ).copy()
+                    if reference_actions is not None and reference_blend > 0:
+                        reference_action = _reference_action_at_frame(
+                            reference_actions,
+                            frame=frame,
+                            steps=steps,
+                            hold_steps=reference_hold,
+                            interpolation=reference_interpolation,
                         )
+                        command_action[:18] = (
+                            (1 - reference_blend) * command_action[:18]
+                            + reference_blend * reference_action
+                        )
+                    applied = environment.command(
+                        command_action, observation["angle"]
+                    )
+                    if (
+                        cartesian_reference is not None
+                        and (frame + 1) % reference_hold == 0
+                    ):
+                        progress = (frame + 1) / steps
+                        distance = reference_pull * progress
+                        alignment = environment.move_grippers_to_targets(
+                            cartesian_reference["left"]
+                            + cartesian_reference["direction"] * distance,
+                            cartesian_reference["right"]
+                            + cartesian_reference["direction"] * distance,
+                        )
+                        if not alignment["ok"]:
+                            raise RuntimeError(
+                                "reference Cartesian projection failed: "
+                                + json.dumps(alignment)
+                            )
+                    observation = environment.observe()
+                    renderer_masks = _renderer_masks(observation["camera"])
+                    perceived = (
+                        perception.track(
+                            observation["camera"]["rgb"],
+                            renderer_masks=renderer_masks,
+                        )
+                        if renderer_masks is not None
+                        else perception.track(observation["camera"]["rgb"])
+                    )
                     quality_by_frame.append(perceived.quality)
                     coverage_by_frame.append(
                         _measured_coverage(environment, observation["camera"])
+                    )
+                    grasp_quality_by_frame.append(
+                        _grasp_frame_report(observation, config)
+                    )
+                    foot_contact_ids_by_frame.append(
+                        sorted(
+                            {
+                                int(item.get("collider_id", -1))
+                                for item in observation.get("contact_force", ())
+                                if 2101
+                                <= int(item.get("collider_id", -1))
+                                <= 2105
+                            }
+                        )
                     )
                     _save_mask_overlay(
                         episode / "mask_overlays" / f"{frame}.png",
@@ -190,24 +307,18 @@ def run_demo(
                     video_camera = observation.get("recording_camera")
                     if video_camera is None:
                         video_camera = observation["camera"]
-                    _write_video_frame(video, video_camera["rgb"], frame)
-                    prediction = policy.step(
-                        rgb=observation["camera"]["rgb"],
-                        sock_depth=perceived.sock_depth,
-                        leg_depth=perceived.leg_depth,
-                        angle=observation["angle"],
-                        torque=observation["torque"],
-                        step_index=frame,
+                    _write_video_frame(
+                        video,
+                        video_camera["rgb"],
+                        frame,
+                        crop_xywh=settings.get("recording_crop_xywh"),
                     )
-                    predicted_writer.writerow(prediction["action"].tolist())
-                    applied = environment.command(
-                        prediction["action"], observation["angle"]
-                    )
+                    if cartesian_reference is not None:
+                        applied = np.asarray(observation["angle"], dtype=float)
                     applied_writer.writerow(applied.tolist())
                     predicted_file.flush()
                     applied_file.flush()
                     frames += 1
-                    observation = environment.observe()
             except (RuntimeError, ValueError) as error:
                 stop_reason = f"fail_closed: {error}"
             finally:
@@ -221,8 +332,16 @@ def run_demo(
                         "video": str(video_path),
                         "perception_quality_by_frame": quality_by_frame,
                         "coverage_by_frame": coverage_by_frame,
+                        "grasp_quality_by_frame": grasp_quality_by_frame,
+                        "foot_contact_ids_by_frame": foot_contact_ids_by_frame,
                         "task_success": _task_success(
-                            observation, quality_by_frame, coverage_by_frame, config
+                            observation,
+                            quality_by_frame,
+                            coverage_by_frame,
+                            config,
+                            application=application,
+                            grasp_quality=grasp_quality_by_frame,
+                            foot_contact_ids_by_frame=foot_contact_ids_by_frame,
                         ),
                     }
                 )
@@ -271,6 +390,16 @@ def _renderer_masks(camera: Mapping) -> Optional[dict]:
     return {"sock": sock, "leg": leg}
 
 
+def _mask_centroid_point(mask: np.ndarray) -> list[int]:
+    rows, columns = np.nonzero(np.asarray(mask, dtype=bool))
+    if not len(rows):
+        raise ValueError("renderer mask does not contain a promptable pixel")
+    center = np.asarray([columns.mean(), rows.mean()])
+    distances = (columns - center[0]) ** 2 + (rows - center[1]) ** 2
+    index = int(np.argmin(distances))
+    return [int(columns[index]), int(rows[index])]
+
+
 def _save_mask_overlay(
     path: Path, rgb: np.ndarray, sock_mask: np.ndarray, leg_mask: np.ndarray
 ) -> None:
@@ -288,11 +417,80 @@ def _measured_coverage(environment, camera: Mapping) -> Optional[float]:
     return measure(camera) if callable(measure) else None
 
 
+def _reference_action_at_frame(
+    actions: np.ndarray,
+    *,
+    frame: int,
+    steps: int,
+    hold_steps: int,
+    interpolation: str,
+) -> np.ndarray:
+    if interpolation == "hold" or len(actions) == 1:
+        return actions[min(frame // hold_steps, len(actions) - 1)].copy()
+    if interpolation != "linear":
+        raise ValueError(f"unsupported reference action interpolation: {interpolation}")
+    if steps <= 1:
+        return actions[-1].copy()
+    position = frame * (len(actions) - 1) / (steps - 1)
+    lower = int(np.floor(position))
+    upper = min(lower + 1, len(actions) - 1)
+    weight = position - lower
+    return (1.0 - weight) * actions[lower] + weight * actions[upper]
+
+
+def _grasp_frame_report(observation: Mapping, config: Mapping) -> dict:
+    diagnostics = observation.get("diagnostics", {})
+    states = diagnostics.get("grasp_state", ())
+    attached_sides = {
+        str(item.get("side"))
+        for item in states
+        if item.get("attached", False)
+    }
+    geometry = diagnostics.get("scene_geometry", {})
+    errors = {}
+    for side in ("left", "right"):
+        grasp = geometry.get(f"{side}_grasp_position")
+        edge = geometry.get(f"{side}_opening_edge")
+        if grasp is None or edge is None:
+            continue
+        grasp_array = np.asarray(grasp, dtype=float)
+        edge_array = np.asarray(edge, dtype=float)
+        if (
+            grasp_array.shape == (3,)
+            and edge_array.shape == (3,)
+            and np.all(np.isfinite(grasp_array))
+            and np.all(np.isfinite(edge_array))
+        ):
+            errors[side] = float(np.linalg.norm(grasp_array - edge_array))
+    required = int(config.get("dressing_player", {}).get("required_grippers", 2))
+    maximum_error = float(
+        config["inference"].get("maximum_grasp_edge_error_m", 0.03)
+    )
+    available = len(states) > 0 and len(errors) == 2
+    return {
+        "available": available,
+        "attached_grippers": len(attached_sides),
+        "attached_sides": sorted(attached_sides),
+        "edge_errors_m": errors,
+        "maximum_edge_error_m": max(errors.values()) if errors else None,
+        "threshold_m": maximum_error,
+        "ok": (
+            available
+            and len(attached_sides) >= required
+            and max(errors.values()) <= maximum_error
+        ),
+    }
+
+
 def _task_success(
     observation: Mapping,
     quality: Sequence[Mapping],
     coverage: Sequence[Optional[float]],
     config: Mapping,
+    *,
+    application: Optional[Mapping] = None,
+    grasp_quality: Optional[Sequence[Mapping]] = None,
+    foot_contact_ids_by_frame: Optional[Sequence[Sequence[int]]] = None,
 ) -> dict:
     diagnostics = observation.get("diagnostics", {})
     verified = [
@@ -306,14 +504,72 @@ def _task_success(
         config.get("dressing_player", {}).get("minimum_coverage_gain", 0.10)
     )
     coverage_ok = gain is not None and gain >= minimum_gain
+    pose_ok = bool(
+        (application or {}).get("initial_pose_contract", {}).get("ok", False)
+    )
+    stretch = SockDressingEnv.cloth_radius_qa(
+        observation.get("cloth", {}),
+        radial_segments=int(config["scenario"]["sock"]["radial_segments"]),
+    )
+    stretch_ok = bool(stretch.get("passes", False))
+    grasp_quality = list(grasp_quality or ())
+    continuous_grasp_required = (
+        config["rcareworld"].get("profile") == "custom_player"
+    )
+    continuous_grasp_ok = bool(
+        grasp_quality and all(item.get("ok", False) for item in grasp_quality)
+    )
+    if not continuous_grasp_required:
+        continuous_grasp_ok = len(verified) >= required
+    minimum_attached = (
+        min(int(item.get("attached_grippers", 0)) for item in grasp_quality)
+        if grasp_quality
+        else 0
+    )
+    measured_edge_errors = [
+        float(item["maximum_edge_error_m"])
+        for item in grasp_quality
+        if item.get("maximum_edge_error_m") is not None
+    ]
+    foot_contact_ids = sorted(
+        {
+            int(collider_id)
+            for frame_ids in (foot_contact_ids_by_frame or ())
+            for collider_id in frame_ids
+            if 2101 <= int(collider_id) <= 2105
+        }
+    )
+    foot_contact_required = bool(
+        config.get("dressing_player", {}).get("require_foot_contact", False)
+    )
+    foot_contact_ok = bool(foot_contact_ids) or not foot_contact_required
     return {
-        "success": semantic_ok and len(verified) >= required and coverage_ok,
+        "success": (
+            semantic_ok
+            and len(verified) >= required
+            and continuous_grasp_ok
+            and coverage_ok
+            and pose_ok
+            and stretch_ok
+            and foot_contact_ok
+        ),
         "semantic_masks_ok": semantic_ok,
         "verified_grippers": len(verified),
         "required_grippers": required,
+        "continuous_grasp_ok": continuous_grasp_ok,
+        "minimum_attached_grippers": minimum_attached,
+        "maximum_grasp_edge_error_m": (
+            max(measured_edge_errors) if measured_edge_errors else None
+        ),
         "coverage_gain": gain,
         "minimum_coverage_gain": minimum_gain,
         "coverage_ok": coverage_ok,
+        "initial_pose_ok": pose_ok,
+        "foot_contact_required": foot_contact_required,
+        "foot_contact_ok": foot_contact_ok,
+        "foot_contact_collider_ids": foot_contact_ids,
+        "cloth_qa": stretch,
+        "stretch_ok": stretch_ok,
         "note": (
             None
             if gain is not None
@@ -345,10 +601,34 @@ def _open_video(path: Path, frame_shape: tuple, fps: float):
     return video
 
 
-def _write_video_frame(video, rgb: np.ndarray, frame: int) -> None:
+def _write_video_frame(
+    video,
+    rgb: np.ndarray,
+    frame: int,
+    *,
+    crop_xywh: Optional[Sequence[int]] = None,
+) -> None:
     import cv2
 
-    bgr = np.asarray(rgb, dtype=np.uint8)[..., ::-1].copy()
+    image = np.asarray(rgb, dtype=np.uint8)
+    if crop_xywh is not None:
+        if len(crop_xywh) != 4:
+            raise ValueError("recording_crop_xywh must contain x, y, width, height")
+        x, y, width, height = map(int, crop_xywh)
+        source_height, source_width = image.shape[:2]
+        if (
+            min(x, y) < 0
+            or min(width, height) < 1
+            or x + width > source_width
+            or y + height > source_height
+        ):
+            raise ValueError("recording_crop_xywh is outside the recording frame")
+        image = cv2.resize(
+            image[y : y + height, x : x + width],
+            (source_width, source_height),
+            interpolation=cv2.INTER_LINEAR,
+        )
+    bgr = image[..., ::-1].copy()
     cv2.putText(
         bgr,
         f"AIREC inference frame {frame}",

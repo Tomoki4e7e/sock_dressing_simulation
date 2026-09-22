@@ -39,7 +39,11 @@ def load_training_specs(config: Mapping) -> list:
                 TrainingEpisode(
                     name=str(name),
                     split=split,
-                    directory=root / dataset_name / split / str(name),
+                    directory=(
+                        resolve_package_path(window["path"])
+                        if window.get("path")
+                        else root / dataset_name / split / str(name)
+                    ),
                     start=int(window["start"]),
                     end=int(window["end"]),
                 )
@@ -249,8 +253,16 @@ def train_policy(
         for split in ("train", "test")
     }
     train_joints = np.concatenate([episode[1] for episode in arrays["train"]], axis=0)
-    low = train_joints.min(axis=0)
-    high = train_joints.max(axis=0)
+    preserve_stats = bool(settings.get("preserve_resume_stats", False))
+    if resume and preserve_stats:
+        stats_payload = json.loads(
+            resolve_package_path(settings["stats"]).read_text(encoding="utf-8")
+        )
+        low = np.asarray(stats_payload["joint_min"], dtype=np.float32)
+        high = np.asarray(stats_payload["joint_max"], dtype=np.float32)
+    else:
+        low = train_joints.min(axis=0)
+        high = train_joints.max(axis=0)
     if np.any(high <= low):
         raise ValueError("normalization contains a zero-width channel")
 
@@ -304,7 +316,9 @@ def train_policy(
         payload = torch.load(str(resume), map_location=selected_device)
         model.load_state_dict(payload.get("model_state_dict", payload))
         start_epoch = int(payload.get("epoch", -1)) + 1
-        if "optimizer_state_dict" in payload:
+        if "optimizer_state_dict" in payload and settings.get(
+            "resume_optimizer", True
+        ):
             optimizer.load_state_dict(payload["optimizer_state_dict"])
     trainer = Trainer(
         model,

@@ -1,0 +1,25 @@
+model:
+  name: SAMDAMSARNN
+  rec_dim: 50
+  k_dim: 3
+  joint_dim: 36
+  temperature: 0.0001
+  heatmap_size: 0.1
+  im_size: [64, 64]
+  img_size: 64
+
+hyperparameters:
+  learning_rate: 0.00015
+  batch_size: 2
+  num_epochs: 10050
+  weight_decay: 0.0001
+  vmax: 1.0
+  vmin: 0.0
+  stdev: 0.02
+  img_loss: 0.1
+  angle_loss: 1.5
+  torque_loss: 1.0
+  joint_loss: 1.0
+  pt_loss: 0.1
+  smooth_torque: 3
+  skip_num: 1

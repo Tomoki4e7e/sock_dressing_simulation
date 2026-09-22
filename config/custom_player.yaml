@@ -4,10 +4,10 @@ rcareworld:
   profile: custom_player
   commit: greenfield-sock-cloth-v1
   native_rcareworld: true
-  executable: Build/SockDressingPlayer/Player.x86_64
+  executable: Build/SockDressingPlayer/Development/Player.x86_64
   checkout: RCareUnity
   graphics: false
-  log_level: 3
+  log_level: 1
   port: 5005
 
 scene:
@@ -15,10 +15,23 @@ scene:
   preloaded: false
   human_id: 168242
   camera_id: 1300
-  recording_camera_id: null
+  recording_camera_id: 1301
+  # Calibrated so the ka grippers meet the canonical HumanBodyIK sock pose.
+  robot_position: [-0.144, -0.15, 0.88]
+  robot_immovable: true
+  robot_joint_gravity: false
+  robot_direct_joint_control: true
+  ignore_robot_human_rigid_collisions: true
+  human_position: [0.06, 1.48, -0.72]
+  sock_position: [-0.14, 0.53, 0.68]
+  sock_rotation: [0.0, 0.0, 0.0]
   human_foot_collider_ids: [2101, 2102, 2103, 2104, 2105]
   contact_proxy_ids: [2101, 2102, 2103, 2104, 2105, 2201, 2202, 2301]
   enable_human_obi_collider: true
+  visuals:
+    # The canonical skinned avatar is authoritative. Capsule bones are debug-only.
+    human_proxy: false
+    task_right_toe_position: [-0.14, 0.53, 0.608]
   chair:
     enabled: true
     asset_name: Collider_Box
@@ -27,10 +40,31 @@ scene:
   grasp_anchors:
     enabled: true
     attach: false
-    max_distance_m: 0.03
+    auto_grasp: true
+    align_sock_to_grippers: true
+    max_distance_m: 0.04
+    maximum_anchor_span_m: 0.09
     anchors:
-      - {id: 2201, side: left, parent_link: "left_gripper/grasping_frame", position: [-0.18, 0.53, 0.68]}
-      - {id: 2202, side: right, parent_link: "right_gripper/grasping_frame", position: [-0.10, 0.53, 0.68]}
+      - {id: 2201, side: left, parent_link: "left_gripper/grasping_frame", local_position: [0.0, 0.0, 0.0]}
+      - {id: 2202, side: right, parent_link: "right_gripper/grasping_frame", local_position: [0.0, 0.0, 0.0]}
+  grasp_alignment:
+    enabled: false
+    target_span_m: 0.09
+    tolerance_m: 0.015
+    finite_difference_rad: 0.02
+    damping: 0.002
+    maximum_joint_step_rad: 0.06
+    maximum_iterations: 20
+    joint_settle_steps: 3
+  initial_pose_contract:
+    calibrate_foot_to_sock: true
+    enforce: true
+    foot_to_sock_m: 0.10
+    foot_to_sock_tolerance_m: 0.02
+    foot_lateral_tolerance_m: 0.03
+    sock_body_gravity_alignment_min: 0.7
+    right_leg_raise_degrees: 90.0
+    right_leg_raise_tolerance_degrees: 16.0
   stable_ids:
     sock: 1200
     robot: 1100
@@ -49,18 +83,86 @@ obi:
   expected:
     protocol_version: sock-cloth-v1
     obi_available: true
-    stretch_compliance: 0.0005
-    bend_compliance: 0.005
+    stretch_compliance: 0.0
+    bend_compliance: 0.01
+    stretching_scale: 1.0
     maximum_circumferential_stretch: 1.5
     self_collision: true
-    substeps: 4
-    solver_iterations: 8
+    substeps: 8
+    solver_iterations: 20
     particle_radius_m: 0.008
     particle_mass_kg: 0.005
     collision_margin_m: 0.002
-    friction: 0.5
+    friction: 0.1
+    grasp_linear_compliance: 0.00002
+    grasp_rotational_compliance: 0.01
+    grasp_break_threshold: 100.0
+    maximum_grasp_particles_per_side: 2
+    slip_constraint_error_m: 0.20
+    slip_opening_span_m: 0.115
+    slip_consecutive_steps: 2
   settings_applied: true
   version: player-reported
   timestep_s: 0.02
-  substeps: 4
-  solver_iterations: 8
+  substeps: 8
+  solver_iterations: 20
+
+inference:
+  use_renderer_masks: true
+  training_data_root: .
+  training_manifest: artifacts/sarnn-expert/dataset_sarnn_expert.yaml
+  training_dataset_name: sarnn_custom
+  training_config: config/custom_player_training.yaml
+  output_dir: artifacts/phase4/model_custom
+  checkpoint: artifacts/phase4/model_custom/SARNN_latest.pth
+  stats: artifacts/phase4/model_custom/data.json
+  preserve_resume_stats: true
+  resume_optimizer: false
+  reference_actions: artifacts/dressing-trial-bimanual-sync-fix/dressing_trial_20260922T082802Z/training_episode/angle.csv
+  reference_action_blend: 1.0
+  reference_action_hold_steps: 10
+  reference_action_interpolation: linear
+  reference_cartesian_pull_m: 0.02
+  maximum_grasp_edge_error_m: 0.08
+  recording_crop_xywh: [120, 360, 720, 540]
+  semantic_mask:
+    require_prompt_containment: true
+    keep_prompt_components: false
+    sock_min_fraction: 0.0001
+    sock_max_fraction: 0.10
+    leg_min_fraction: 0.0001
+    leg_max_fraction: 0.15
+    maximum_overlap_fraction: 0.35
+
+scenario:
+  sock:
+    position: [-0.14, 0.53, 0.68]
+    rotation: [0.0, 0.0, 0.0]
+  foot:
+    ik_index: null
+    position: [0.0, 0.93, 0.68]
+  support_foot:
+    ik_index: null
+
+dressing_trial:
+  trajectory_mode: arm_jacobian
+  axial_pull_m: 0.04
+  waypoint_count: 5
+  hold_steps: 3
+  maximum_tracking_error_m: 0.08
+  minimum_coverage_gain: 0.10
+  expert_minimum_coverage_gain: 0.09
+  required_grippers: 2
+  tuning:
+    grasp_max_distance_m: [0.04, 0.07, 0.10]
+    friction: [0.0, 0.1, 0.3]
+    grasp_linear_compliance: [0.00010, 0.00020, 0.00050]
+    grasp_break_threshold: [5.0, 10.0, 20.0]
+    slip_constraint_error_m: [0.015, 0.025, 0.040]
+    slip_opening_span_m: [0.085, 0.100, 0.110]
+    axial_pull_m: [0.12, 0.15, 0.18]
+
+dressing_player:
+  required_grippers: 2
+  minimum_coverage_gain: 0.03
+  require_foot_contact: true
