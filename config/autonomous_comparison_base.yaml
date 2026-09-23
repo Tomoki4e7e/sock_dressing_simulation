@@ -1,0 +1,17 @@
+extends: custom_player.yaml
+
+inference:
+  training_config: config/autonomous_comparison_training.yaml
+  training_sequence_length: 50
+  training_seed: 20260922
+  preserve_resume_stats: false
+  resume_optimizer: false
+  reference_actions: null
+  reference_action_blend: 0.0
+  reference_cartesian_pull_m: 0.0
+
+dressing_trial:
+  waypoint_count: 50
+  # Match the closed-loop task-success coverage threshold. Physical-trial
+  # success (0.10 coverage and stretch QA) remains separately reported.
+  expert_minimum_coverage_gain: 0.03

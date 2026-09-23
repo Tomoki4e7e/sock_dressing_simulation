@@ -17,8 +17,12 @@ SUPPORTED_RCAREWORLD_PROFILES = {
 }
 
 
-def load_config(path: Path = DEFAULT_CONFIG) -> Dict[str, Any]:
-    config_path = Path(path).expanduser().resolve()
+def _load_config_payload(config_path: Path, seen: set[Path]) -> Dict[str, Any]:
+    config_path = config_path.expanduser().resolve()
+    if config_path in seen:
+        chain = " -> ".join(str(path) for path in (*seen, config_path))
+        raise ValueError(f"config extends cycle: {chain}")
+    seen = {*seen, config_path}
     with config_path.open(encoding="utf-8") as stream:
         config = yaml.safe_load(stream)
     extends = config.pop("extends", None)
@@ -26,9 +30,13 @@ def load_config(path: Path = DEFAULT_CONFIG) -> Dict[str, Any]:
         base_path = Path(extends).expanduser()
         if not base_path.is_absolute():
             base_path = config_path.parent / base_path
-        with base_path.resolve().open(encoding="utf-8") as stream:
-            base = yaml.safe_load(stream)
+        base = _load_config_payload(base_path, seen)
         config = _deep_merge(base, config)
+    return config
+
+
+def load_config(path: Path = DEFAULT_CONFIG) -> Dict[str, Any]:
+    config = _load_config_payload(Path(path), set())
     profile = str(config["rcareworld"].get("profile", "canonical"))
     if profile not in SUPPORTED_RCAREWORLD_PROFILES:
         raise ValueError(f"unsupported RCareWorld profile: {profile}")

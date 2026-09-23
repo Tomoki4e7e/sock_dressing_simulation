@@ -159,17 +159,34 @@ def _load_image(path: Path, size: int, depth: bool) -> np.ndarray:
 
 
 def load_episode_arrays(
-    spec: TrainingEpisode, *, image_size: int, smooth_torque: int, skip_num: int
+    spec: TrainingEpisode,
+    *,
+    image_size: int,
+    smooth_torque: int,
+    skip_num: int,
+    sequence_length: Optional[int] = None,
 ) -> tuple:
     angle = _load_signal(spec.directory / "angle.csv", spec.start, spec.end)
     torque = _smooth(
         _load_signal(spec.directory / "torque.csv", spec.start, spec.end),
         smooth_torque,
     )
+    if sequence_length is not None:
+        if sequence_length < 2:
+            raise ValueError("sequence_length must be at least 2")
+        if sequence_length > len(angle):
+            raise ValueError(
+                f"sequence_length {sequence_length} exceeds episode length {len(angle)}"
+            )
+        local_indices = np.rint(
+            np.linspace(0, len(angle) - 1, num=sequence_length)
+        ).astype(int)
+    else:
+        local_indices = np.arange(0, len(angle), skip_num, dtype=int)
+    indices = (local_indices + spec.start).tolist()
     foot_dir = spec.directory / "depth_mask" / "foot_depth"
     if not foot_dir.is_dir():
         foot_dir = spec.directory / "depth_mask" / "leg_depth"
-    indices = range(spec.start, spec.end, skip_num)
     rgb = np.stack(
         [_load_image(spec.directory / "camera_right" / f"{i}.png", image_size, False) for i in indices]
     )
@@ -177,7 +194,7 @@ def load_episode_arrays(
         [_load_image(spec.directory / "depth_mask" / "sock_depth" / f"{i}.png", image_size, True) for i in indices]
     )
     leg = np.stack([_load_image(foot_dir / f"{i}.png", image_size, True) for i in indices])
-    joints = np.concatenate((angle, torque), axis=1)[::skip_num]
+    joints = np.concatenate((angle, torque), axis=1)[local_indices]
     if not (len(rgb) == len(sock) == len(leg) == len(joints)):
         raise ValueError(f"frame alignment failed for {spec.directory}")
     return rgb, joints.astype(np.float32), sock, leg
@@ -238,6 +255,14 @@ def train_policy(
     hyper = training_config["hyperparameters"]
     image_size = int(settings.get("image_size", model_config["img_size"]))
     skip_num = int(hyper["skip_num"])
+    sequence_length = settings.get("training_sequence_length")
+    if sequence_length is not None:
+        sequence_length = int(sequence_length)
+    training_seed = int(settings.get("training_seed", 0))
+    np.random.seed(training_seed)
+    torch.manual_seed(training_seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(training_seed)
     specs = load_training_specs(config)
     arrays = {
         split: [
@@ -246,6 +271,7 @@ def train_policy(
                 image_size=image_size,
                 smooth_torque=int(hyper["smooth_torque"]),
                 skip_num=skip_num,
+                sequence_length=sequence_length,
             )
             for spec in specs
             if spec.split == split
@@ -263,8 +289,15 @@ def train_policy(
     else:
         low = train_joints.min(axis=0)
         high = train_joints.max(axis=0)
-    if np.any(high <= low):
-        raise ValueError("normalization contains a zero-width channel")
+    if np.any(high < low):
+        raise ValueError("normalization contains a negative-width channel")
+    constant_channels = np.flatnonzero(high == low)
+    if len(constant_channels):
+        epsilon = float(settings.get("normalization_epsilon", 1e-6))
+        if epsilon <= 0:
+            raise ValueError("normalization_epsilon must be positive")
+        high = high.copy()
+        high[constant_channels] = low[constant_channels] + epsilon
 
     def normalized(episodes):
         return [
@@ -273,10 +306,13 @@ def train_policy(
         ]
 
     batch_size = min(int(hyper["batch_size"]), len(arrays["train"]))
+    loader_generator = torch.Generator()
+    loader_generator.manual_seed(training_seed)
     train_loader = DataLoader(
         _SequenceDataset(normalized(arrays["train"]), stdev=float(hyper["stdev"]), training=True),
         batch_size=batch_size,
         shuffle=True,
+        generator=loader_generator,
     )
     test_loader = DataLoader(
         _SequenceDataset(normalized(arrays["test"]), stdev=0.0, training=False),
@@ -345,13 +381,19 @@ def train_policy(
         }
         torch.save(payload, latest)
         history.append({"epoch": epoch, "train_loss": train_loss, "test_loss": test_loss})
-    stats = {"joint_min": low.tolist(), "joint_max": high.tolist()}
+    stats = {
+        "joint_min": low.tolist(),
+        "joint_max": high.tolist(),
+        "constant_channels": constant_channels.tolist(),
+    }
     (output / "data.json").write_text(json.dumps(stats, indent=2) + "\n", encoding="utf-8")
     parameters = {
         "model": model_config,
         "hyperparameters": hyper,
         "epochs_requested": selected_epochs,
         "training_manifest": str(resolve_package_path(settings["training_manifest"])),
+        "training_seed": training_seed,
+        "training_sequence_length": sequence_length,
     }
     (output / "parameter.json").write_text(
         json.dumps(parameters, indent=2) + "\n", encoding="utf-8"

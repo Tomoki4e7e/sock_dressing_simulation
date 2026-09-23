@@ -58,6 +58,48 @@ def test_training_audit_and_foot_to_leg_mapping(tmp_path):
     assert sock.shape == leg.shape == (3, 1, 4, 4)
 
 
+def test_training_resamples_episode_to_fixed_sequence_length(tmp_path):
+    config = _teacher_data(tmp_path)
+    spec = load_training_specs(config)[0]
+    rgb, joints, sock, leg = load_episode_arrays(
+        spec,
+        image_size=4,
+        smooth_torque=1,
+        skip_num=1,
+        sequence_length=2,
+    )
+    assert rgb.shape == (2, 3, 4, 4)
+    assert joints.shape == (2, 36)
+    assert sock.shape == leg.shape == (2, 1, 4, 4)
+    np.testing.assert_array_equal(joints[:, 0], [0.0, 36.0])
+
+
+def test_training_rejects_sequence_longer_than_episode(tmp_path):
+    config = _teacher_data(tmp_path)
+    spec = load_training_specs(config)[0]
+    try:
+        load_episode_arrays(
+            spec,
+            image_size=4,
+            smooth_torque=1,
+            skip_num=1,
+            sequence_length=4,
+        )
+    except ValueError as error:
+        assert "exceeds episode length" in str(error)
+    else:
+        raise AssertionError("oversized sequence_length was accepted")
+
+
+def test_autonomous_comparison_config_resolves_nested_extends():
+    config = load_config(Path("config/autonomous_real_only.yaml"))
+    assert config["rcareworld"]["profile"] == "custom_player"
+    assert config["inference"]["training_sequence_length"] == 50
+    assert config["inference"]["reference_actions"] is None
+    assert config["inference"]["reference_action_blend"] == 0.0
+    assert config["inference"]["reference_cartesian_pull_m"] == 0.0
+
+
 def test_training_audit_rejects_missing_visual_frame(tmp_path):
     config = _teacher_data(tmp_path)
     missing = (

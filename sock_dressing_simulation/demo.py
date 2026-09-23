@@ -86,6 +86,7 @@ def run_demo(
             "blend": reference_blend,
             "hold_steps": reference_hold,
             "interpolation": reference_interpolation,
+            "cartesian_pull_m": reference_pull,
         },
     }
     stop_reason = "max_steps"

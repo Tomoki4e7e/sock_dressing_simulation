@@ -1,0 +1,9 @@
+extends: autonomous_comparison_base.yaml
+
+inference:
+  training_data_root: .
+  training_manifest: artifacts/autonomous-comparison/manifests/real_sim.yaml
+  training_dataset_name: autonomous_real_sim
+  output_dir: artifacts/autonomous-comparison/models/real_sim
+  checkpoint: artifacts/autonomous-comparison/models/real_sim/SARNN_latest.pth
+  stats: artifacts/autonomous-comparison/models/real_sim/data.json

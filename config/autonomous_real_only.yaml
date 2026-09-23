@@ -1,0 +1,9 @@
+extends: autonomous_comparison_base.yaml
+
+inference:
+  training_data_root: .
+  training_manifest: artifacts/autonomous-comparison/manifests/real_only.yaml
+  training_dataset_name: autonomous_real_only
+  output_dir: artifacts/autonomous-comparison/models/real_only
+  checkpoint: artifacts/autonomous-comparison/models/real_only/SARNN_latest.pth
+  stats: artifacts/autonomous-comparison/models/real_only/data.json

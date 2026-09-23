@@ -207,15 +207,42 @@ def _inference_checks(config: Mapping) -> tuple:
     data_root = resolved("training_data_root")
     dataset_name = settings.get("training_dataset_name", "")
     dataset = data_root / dataset_name
-    sample_rgb = next(dataset.glob("train/*/camera_right/*.png"), None) if dataset.is_dir() else None
-    sample_sock = next(dataset.glob("train/*/depth_mask/sock_depth/*.png"), None) if dataset.is_dir() else None
-    sample_foot = next(dataset.glob("train/*/depth_mask/foot_depth/*.png"), None) if dataset.is_dir() else None
-    if sample_foot is None and dataset.is_dir():
-        sample_foot = next(dataset.glob("train/*/depth_mask/leg_depth/*.png"), None)
+    sample_episode = None
+    try:
+        from .training import load_training_specs
+
+        sample_episode = next(
+            spec.directory
+            for spec in load_training_specs(config)
+            if spec.split == "train"
+        )
+    except (KeyError, OSError, StopIteration, TypeError, ValueError):
+        pass
+    if sample_episode is None and dataset.is_dir():
+        sample_episode = next(dataset.glob("train/*"), None)
+    sample_rgb = (
+        next((sample_episode / "camera_right").glob("*.png"), None)
+        if sample_episode
+        else None
+    )
+    sample_sock = (
+        next((sample_episode / "depth_mask" / "sock_depth").glob("*.png"), None)
+        if sample_episode
+        else None
+    )
+    sample_foot = (
+        next((sample_episode / "depth_mask" / "foot_depth").glob("*.png"), None)
+        if sample_episode
+        else None
+    )
+    if sample_foot is None and sample_episode:
+        sample_foot = next(
+            (sample_episode / "depth_mask" / "leg_depth").glob("*.png"), None
+        )
     paths = {
         "shareset_model_source": resolved("shareset_src"),
         "training_manifest": resolved("training_manifest"),
-        "training_dataset": dataset,
+        "training_dataset": sample_episode,
         "training_rgb": sample_rgb,
         "training_sock_depth": sample_sock,
         "training_foot_depth": sample_foot,
