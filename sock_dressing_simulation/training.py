@@ -85,11 +85,19 @@ def audit_training_data(config: Mapping) -> Dict[str, Any]:
             path = spec.directory / name
             try:
                 values = np.loadtxt(str(path), delimiter=",", ndmin=2)
-                signals[name] = list(values.shape)
+                signals[name] = {
+                    "shape": list(values.shape),
+                    "minimum": float(np.min(values)) if values.size else None,
+                    "maximum": float(np.max(values)) if values.size else None,
+                    "standard_deviation": float(np.std(values)) if values.size else None,
+                }
                 if values.ndim != 2 or values.shape[1] != 18:
                     errors.append(f"{name} must have 18 columns")
                 if values.shape[0] < spec.end:
                     errors.append(f"{name} has fewer than {spec.end} rows")
+                window = values[spec.start : min(spec.end, values.shape[0])]
+                if name == "torque.csv" and window.size and not np.any(window):
+                    errors.append("torque.csv is all zero in the requested window")
             except (OSError, ValueError) as error:
                 errors.append(f"{name}: {error}")
         modalities = {

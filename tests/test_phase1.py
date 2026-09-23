@@ -1,6 +1,7 @@
 import json
+import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import numpy as np
 import pytest
@@ -61,7 +62,7 @@ class _Backend:
     def close(self):
         pass
 
-    def InstanceObject(self, name, id=None):
+    def InstanceObject(self, name, id=None, **kwargs):
         return _Anchor(id)
 
 
@@ -137,6 +138,51 @@ class _Human:
         self.calls.append(("complete", index))
 
 
+def test_inference_camera_is_parented_to_right_see3cam(monkeypatch):
+    attributes = ModuleType("pyrcareworld.attributes")
+    attributes.CameraAttr = object
+    package = ModuleType("pyrcareworld")
+    package.attributes = attributes
+    monkeypatch.setitem(sys.modules, "pyrcareworld", package)
+    monkeypatch.setitem(sys.modules, "pyrcareworld.attributes", attributes)
+    config = load_config(Path("config/custom_player.yaml"))
+    environment = SockDressingEnv(config, backend=_Backend())
+    environment.robot = _Robot()
+
+    environment._create_native_cameras()
+
+    assert environment.camera.parent == (
+        environment.robot.id,
+        "head/see3cam_right/camera_color_frame",
+    )
+    assert environment.camera.transform == {
+        "position": [0.0, 0.0, 0.0],
+        "rotation": [20.0, 0.0, 0.0],
+        "scale": [1.0, 1.0, 1.0],
+        "is_world": False,
+    }
+    assert environment._camera_mount_report["mode"] == "robot_link"
+
+
+def test_inference_camera_world_pose_remains_an_explicit_fallback(monkeypatch):
+    attributes = ModuleType("pyrcareworld.attributes")
+    attributes.CameraAttr = object
+    package = ModuleType("pyrcareworld")
+    package.attributes = attributes
+    monkeypatch.setitem(sys.modules, "pyrcareworld", package)
+    monkeypatch.setitem(sys.modules, "pyrcareworld.attributes", attributes)
+    config = load_config()
+    config["scene"]["camera_parent_link"] = None
+    environment = SockDressingEnv(config, backend=_Backend())
+    environment.robot = _Robot()
+
+    environment._create_native_cameras()
+
+    assert not hasattr(environment.camera, "parent")
+    assert environment.camera.transform["position"] == config["scene"]["camera_position"]
+    assert environment._camera_mount_report["mode"] == "world"
+
+
 def test_environment_applies_sock_foot_and_grasp_scenario():
     scenario = scenario_from_config(load_config())
     environment = SockDressingEnv(load_config(), backend=_Backend())
@@ -159,6 +205,32 @@ def test_environment_applies_sock_foot_and_grasp_scenario():
         "left",
         "right",
     ]
+
+
+def test_custom_foot_calibration_translates_human_and_chair_together():
+    config = load_config(Path("config/custom_player.yaml"))
+    environment = SockDressingEnv(config, backend=_Backend())
+
+    class Cloth:
+        def __init__(self):
+            self.clearance = None
+
+        def set_foot_clearance_target(self, distance, chair_id):
+            self.clearance = (distance, chair_id)
+
+        def request_scene_geometry(self):
+            pass
+
+        def scene_geometry(self):
+            return SimpleNamespace(
+                foot_to_opening_plane_m=0.1,
+                foot_to_opening_lateral_m=0.0,
+            )
+
+    environment.sock_cloth = Cloth()
+    environment._calibrate_foot_to_sock(None, 0.1)
+
+    assert environment.sock_cloth.clearance == (0.1, 2301)
 
 
 def test_custom_environment_starts_with_verified_bimanual_grasp(monkeypatch):
@@ -294,7 +366,21 @@ def test_cloth_radius_qa_uses_mesh_rings_not_global_tube_axis():
     )
     assert report["passes"]
     assert report["maximum_radius_m"] == pytest.approx(0.04)
-    assert report["method"] == "mesh-ring centroid radial distance"
+    assert report["method"] == "mesh-ring maximum edge stretch"
+
+
+def test_cloth_radius_qa_prefers_obi_topology_over_particle_array_order():
+    report = SockDressingEnv.cloth_radius_qa(
+        {
+            "particles": [[0, 0, 0], [10, 0, 0], [0.01, 0, 0]],
+            "particle_edges": [[0, 2]],
+            "particle_rest_edge_lengths": [0.01],
+        },
+        radial_segments=3,
+    )
+    assert report["passes"]
+    assert report["circumferential_stretch_proxy"] == pytest.approx(1.0)
+    assert report["method"] == "Obi topology structural edge stretch"
 
 
 def test_synthetic_episode_passes_feature_visualization_and_audit(tmp_path):

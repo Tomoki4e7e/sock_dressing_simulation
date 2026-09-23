@@ -1,4 +1,5 @@
 import json
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -6,6 +7,7 @@ import yaml
 from PIL import Image
 
 from sock_dressing_simulation.config import load_config
+from sock_dressing_simulation.quality import compare_learning_domains
 from sock_dressing_simulation.training import (
     audit_training_data,
     load_episode_arrays,
@@ -109,3 +111,41 @@ def test_training_audit_rejects_missing_visual_frame(tmp_path):
     report = audit_training_data(config)
     assert not report["ok"]
     assert any("foot_depth missing" in error for error in report["episodes"][0]["errors"])
+
+
+def test_training_audit_rejects_zero_torque(tmp_path):
+    config = _teacher_data(tmp_path)
+    episode = tmp_path / "data" / "sock" / "train" / "a"
+    np.savetxt(episode / "torque.csv", np.zeros((3, 18)), delimiter=",")
+
+    report = audit_training_data(config)
+
+    assert not report["ok"]
+    assert any("all zero" in error for error in report["episodes"][0]["errors"])
+
+
+def test_domain_audit_maps_foot_and_leg_and_requires_head_mount(tmp_path):
+    _teacher_data(tmp_path)
+    real = tmp_path / "data" / "sock" / "train" / "a"
+    simulation = tmp_path / "simulation"
+    shutil.copytree(real, simulation)
+    (simulation / "camera_right_mask" / "leg_mask").mkdir(parents=True)
+    for index in range(3):
+        Image.fromarray(np.eye(8, 9, dtype=np.uint8) * 255).save(
+            simulation / "camera_right_mask" / "leg_mask" / f"{index}.png"
+        )
+    (simulation / "depth_mask" / "leg_depth").mkdir(parents=True)
+    shutil.rmtree(simulation / "depth_mask" / "foot_depth")
+    for index in range(3):
+        Image.fromarray(np.eye(8, 9, dtype=np.uint8) * 100).save(
+            simulation / "depth_mask" / "leg_depth" / f"{index}.png"
+        )
+    (simulation / "metadata.json").write_text(
+        json.dumps({"diagnostics": {"camera_mount": {"mode": "robot_link"}}})
+    )
+
+    report = compare_learning_domains([real], [simulation])
+
+    assert report["ok"]
+    assert report["simulation"][0]["limb_alias"] == "leg"
+    assert report["simulation"][0]["camera_mount"]["mode"] == "robot_link"

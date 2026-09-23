@@ -1,3 +1,4 @@
+import json
 import numpy as np
 import pytest
 from pathlib import Path
@@ -22,7 +23,7 @@ class FakeEnvironment:
         self.messages.append(args)
 
 
-def test_custom_sock_visual_is_two_sided_and_high_contrast():
+def test_custom_sock_visual_is_two_sided_and_inherits_canonical_materials():
     source = Path(
         "RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs"
     ).read_text()
@@ -36,11 +37,52 @@ def test_custom_sock_visual_is_two_sided_and_high_contrast():
     assert 'new[] { frontMaterial, backMaterial }' in source
     assert '"SockVisualFront"' in source
     assert '"SockVisualBack"' in source
-    assert 'material.SetTexture("_MainTex", null)' in source
+    assert source.count("canonicalMaterials[0]") >= 2
+    assert 'material.SetTexture("_MainTex", null)' not in source
+    assert "CreateOpeningRimMaterial(" in source
+    assert 'material.SetColor("_EmissionColor", color * 0.6f)' in source
     assert "ObiClothStencil canonical materials are unresolved" in source
-    assert "new Color(0.1f, 0.35f, 0.9f, 1)" not in source
+    assert "cluster.vertexIndices" in source
+    assert "sockVisualVertexParticles[vertexIndex] = cluster.index;" in source
+    assert 'new GameObject("sock_opening_rim")' in source
+    assert '"SockOpeningRim"' in source
+    assert "openingRimRenderer.loop = true;" in source
+    assert "openingRimRenderer.SetPosition(" in source
+    assert "cloth.GetParticleRuntimeIndex(openingParticles[i])" in source
+    assert "Mathf.Atan2(" in source
+    assert "Vector3.Dot(offset, bitangent)" in source
+    assert '"sock_" + side + "_grasp_patch"' in source
+    assert "entry.Value.transform.position = GraspParticleCenter(grasp);" in source
+    assert "new Color(0.95f, 0.12f, 0.03f, 1)" not in source
+    assert "new Color(1.0f, 0.45f, 0.02f, 1)" not in source
     assert "guid: 3862df0f523254bcda0733ce0d63c68a" in stencil
     assert "guid: a5d1f0e373f1848d98dcc85a2607d980" in stencil
+
+
+def test_custom_player_obeys_canonical_sock_physics_contract():
+    config = load_config(Path("config/custom_player.yaml"))
+    expected = config["obi"]["expected"]
+    contract = json.loads(
+        Path(
+            "unity/SockDressingPlayer/Assets/StreamingAssets/"
+            "SockDressingContract.json"
+        ).read_text()
+    )["obi"]
+
+    for name, value in contract.items():
+        if name == "timestep_s":
+            continue
+        assert expected[name] == value
+    assert config["obi"]["timestep_s"] == contract["timestep_s"]
+    assert config["obi"]["substeps"] == contract["substeps"]
+    assert config["obi"]["solver_iterations"] == contract["solver_iterations"]
+    assert expected["grasp_linear_compliance"] == 0.00005
+    assert expected["grasp_rotational_compliance"] == 1000000.0
+    assert expected["grasp_break_threshold"] == 20.0
+    assert expected["slip_constraint_error_m"] == 0.20
+    assert expected["slip_opening_span_m"] == 0.11
+    assert expected["slip_consecutive_steps"] == 2
+    assert expected["maximum_grasp_particles_per_side"] == 2
 
 
 def test_sock_opening_alignment_writes_solver_local_particle_positions():
@@ -61,6 +103,12 @@ def test_sock_geometry_reports_particle_derived_hanging_direction():
     ).read_text()
 
     assert "Vector3 sockBodyDirection = ClothCenter() - openingCenter;" in source
+    assert "Vector3 openingNormal = OpeningNormal();" in source
+    assert "normal += Vector3.Cross(current, next);" in source
+    assert '"opening_target_center", openingTargetCenter' in source
+    assert '"opening_target_normal", openingTargetNormal' in source
+    assert "Vector3 footOffset = toePosition - openingTargetCenter;" in source
+    assert "Vector3.Dot(footOffset, openingTargetNormal)" in source
     assert '"sock_body_direction", sockBodyDirection' in source
     assert '"sock_body_gravity_alignment", sockBodyGravityAlignment' in source
     assert "solver.positions[solverIndex] = aligned;" not in source
@@ -79,6 +127,10 @@ def test_grasp_only_pins_small_opening_patches_and_leaves_body_dynamic():
     assert "cloth.tetherConstraintsEnabled = false;" in source
     assert "cloth.volumeConstraintsEnabled = false;" in source
     assert "solver.invMasses[solverIndex] = 1.0f / particleMass;" in source
+    assert "leftOpeningEdge = GraspParticleCenter(grasps[\"left\"]);" in source
+    assert "rightOpeningEdge = GraspParticleCenter(grasps[\"right\"]);" in source
+    assert '"opening_span_m", openingSpan' in source
+    assert "Release(movingSide, \"over_tension\")" not in source
 
 
 def test_right_leg_colliders_follow_actual_bones():
@@ -102,6 +154,10 @@ def test_human_task_pose_preserves_rig_bone_lengths():
     ).read_text()
 
     assert "SolveTwoBoneKnee(" in pose_source
+    assert "taskStraightRightLeg" in pose_source
+    assert '"right_knee_flexion_degrees"' in pose_source
+    assert "visualRightHip += correction;" in pose_source
+    assert "visualSeatPosition += correction;" in pose_source
     assert "RotateBoneToward(" in pose_source
     assert "maximumTaskBoneLengthError <= 1e-4f" in pose_source
     assert 'Resources.Load<CanonicalHumanPose>("CanonicalHumanPose")' in pose_source
@@ -166,24 +222,25 @@ def test_sock_cloth_commands_match_unity_contract():
     cloth.request_particles()
     cloth.request_particle_velocities()
     cloth.configure(
-        stretch_compliance=0.0005,
-        bend_compliance=0.005,
-        stretching_scale=0.85,
+        stretch_compliance=0.0,
+        bend_compliance=0.01,
+        stretching_scale=1.0,
         particle_radius_m=0.008,
         particle_mass_kg=0.005,
         collision_margin_m=0.002,
         friction=0.5,
         self_collision=True,
-        substeps=4,
-        solver_iterations=8,
+        damping=0.95,
+        substeps=8,
+        solver_iterations=20,
     )
     cloth.configure_grasp(
-        linear_compliance=0.00005,
-        rotational_compliance=0.01,
-        break_threshold=10.0,
-        slip_constraint_error_m=0.015,
-        slip_opening_span_m=0.085,
-        slip_consecutive_steps=3,
+        linear_compliance=0.0002,
+        rotational_compliance=1000000.0,
+        break_threshold=20.0,
+        slip_constraint_error_m=0.20,
+        slip_opening_span_m=0.11,
+        slip_consecutive_steps=2,
         maximum_particles_per_side=2,
     )
     cloth.set_grasp_targets(2201, 2202)
@@ -217,8 +274,22 @@ def test_sock_cloth_commands_match_unity_contract():
     assert env.messages == [
         (1200, "GetParticles"),
         (1200, "GetParticleVelocities"),
-        (1200, "ConfigureSock", 0.0005, 0.005, 0.85, 0.008, 0.005, 0.002, 0.5, True, 4, 8),
-        (1200, "ConfigureGrasp", 0.00005, 0.01, 10.0, 0.015, 0.085, 3, 2),
+        (
+            1200,
+            "ConfigureSock",
+            0.0,
+            0.01,
+            1.0,
+            0.008,
+            0.005,
+            0.002,
+            0.5,
+            True,
+            0.95,
+            8,
+            20,
+        ),
+        (1200, "ConfigureGrasp", 0.0002, 1000000.0, 20.0, 0.20, 0.11, 2, 2),
         (1200, "SetGraspTargets", 2201, 2202),
         (1200, "AlignGraspTargetsToOpening"),
         (1200, "ClampGraspTargetSpan", 0.115),
@@ -240,6 +311,7 @@ def test_sock_cloth_commands_match_unity_contract():
             0.6,
             0.1,
             0.5,
+            False,
         ),
         (1200, "SetTaskRightToePosition", 0.0, 0.6, 0.8),
         (1200, "SetFootClearanceTarget", 0.1, 2301),
@@ -265,6 +337,7 @@ def test_configuration_is_fail_closed():
         "stretch_compliance": 0.0005,
         "bend_compliance": 0.005,
         "self_collision": True,
+        "damping": 0.8,
     }
     actual = {
         **expected,
@@ -333,8 +406,10 @@ def test_scene_geometry_is_typed_and_fail_closed():
         }
     )
     assert geometry.foot_to_opening_plane_m == pytest.approx(0.1)
+    assert geometry.opening_target_normal == (1.0, 0.0, 0.0)
     assert geometry.sock_body_direction == (0.0, -1.0, 0.0)
     assert geometry.sock_body_gravity_alignment == pytest.approx(0.95)
+    assert geometry.opening_span_m == pytest.approx(0.08)
     with pytest.raises(ValueError, match="valid"):
         SceneGeometry.from_mapping({"valid": False})
 

@@ -65,9 +65,11 @@ def run_demo(
         settings.get("reference_action_interpolation", "hold")
     )
     reference_pull = float(settings.get("reference_cartesian_pull_m", 0.0))
+    physics_steps_per_action = int(settings.get("physics_steps_per_action", 1))
     if (
         not 0 <= reference_blend <= 1
         or reference_hold < 1
+        or physics_steps_per_action < 1
         or reference_interpolation not in {"hold", "linear"}
     ):
         raise ValueError("invalid reference action projection settings")
@@ -110,6 +112,13 @@ def run_demo(
             initial_joints=scenario.initial_joints,
         )
         application = environment.apply_scenario(scenario)
+        recording_camera_frame = None
+        if config["scene"].get("recording_camera_frame_opening", False):
+            recording_camera_frame = environment.frame_recording_camera_on_opening(
+                float(config["scene"].get("recording_camera_opening_distance_m", 0.65)),
+                float(config["scene"].get("recording_camera_opening_lateral_m", 0.0)),
+                bool(config["scene"].get("recording_camera_opening_reverse", False)),
+            )
         cartesian_reference = None
         if reference_pull > 0:
             geometry = environment._request_scene_geometry()
@@ -170,6 +179,13 @@ def run_demo(
         }
         metadata["scenario_application"] = application
         metadata["diagnostics"] = observation["diagnostics"]
+        metadata["torque_source"] = observation.get("torque_source", "unavailable")
+        metadata["torque_available"] = bool(
+            observation.get("torque_available", False)
+        )
+        metadata["external_torque_source"] = observation.get(
+            "external_torque_source", "unavailable"
+        )
         video_camera = observation.get("recording_camera")
         video_camera_source = (
             "recording_camera" if video_camera is not None else "inference_camera"
@@ -179,13 +195,22 @@ def run_demo(
         scene = config["scene"]
         metadata["video_camera"] = {
             "source": video_camera_source,
-            "position": scene.get("recording_camera_position")
+            "position": (
+                recording_camera_frame["position"]
+                if recording_camera_frame is not None
+                else scene.get("recording_camera_position")
+            )
             if video_camera_source == "recording_camera"
             else scene.get("camera_position"),
-            "rotation": scene.get("recording_camera_rotation")
+            "rotation": (
+                recording_camera_frame["rotation"]
+                if recording_camera_frame is not None
+                else scene.get("recording_camera_rotation")
+            )
             if video_camera_source == "recording_camera"
             else scene.get("camera_rotation"),
             "crop_xywh": settings.get("recording_crop_xywh"),
+            "opening_frame": recording_camera_frame,
         }
         with EpisodeWriter(episode, joints.names, metadata) as writer:
             Image.fromarray(observation["camera"]["rgb"].astype("uint8"), "RGB").save(
@@ -245,6 +270,7 @@ def run_demo(
                     applied = environment.command(
                         command_action, observation["angle"]
                     )
+                    environment.advance_physics(physics_steps_per_action - 1)
                     if (
                         cartesian_reference is not None
                         and (frame + 1) % reference_hold == 0
@@ -276,9 +302,8 @@ def run_demo(
                     coverage_by_frame.append(
                         _measured_coverage(environment, observation["camera"])
                     )
-                    grasp_quality_by_frame.append(
-                        _grasp_frame_report(observation, config)
-                    )
+                    grasp_report = _grasp_frame_report(observation, config)
+                    grasp_quality_by_frame.append(grasp_report)
                     foot_contact_ids_by_frame.append(
                         sorted(
                             {
@@ -320,6 +345,14 @@ def run_demo(
                     predicted_file.flush()
                     applied_file.flush()
                     frames += 1
+                    if (
+                        config["rcareworld"].get("profile") == "custom_player"
+                        and not grasp_report["ok"]
+                    ):
+                        raise RuntimeError(
+                            "continuous bimanual grasp failed: "
+                            + json.dumps(grasp_report, sort_keys=True)
+                        )
             except (RuntimeError, ValueError) as error:
                 stop_reason = f"fail_closed: {error}"
             finally:
@@ -448,7 +481,7 @@ def _grasp_frame_report(observation: Mapping, config: Mapping) -> dict:
         if item.get("attached", False)
     }
     geometry = diagnostics.get("scene_geometry", {})
-    errors = {}
+    target_to_edge = {}
     for side in ("left", "right"):
         grasp = geometry.get(f"{side}_grasp_position")
         edge = geometry.get(f"{side}_opening_edge")
@@ -462,18 +495,42 @@ def _grasp_frame_report(observation: Mapping, config: Mapping) -> dict:
             and np.all(np.isfinite(grasp_array))
             and np.all(np.isfinite(edge_array))
         ):
-            errors[side] = float(np.linalg.norm(grasp_array - edge_array))
+            target_to_edge[side] = float(np.linalg.norm(grasp_array - edge_array))
+    constraint_errors = {
+        str(item.get("side")): float(item["constraint_error"])
+        for item in states
+        if item.get("attached", False)
+        and item.get("constraint_error") is not None
+        and np.isfinite(float(item["constraint_error"]))
+    }
+    errors = (
+        constraint_errors
+        if len(constraint_errors) == 2
+        else target_to_edge
+    )
     required = int(config.get("dressing_player", {}).get("required_grippers", 2))
     maximum_error = float(
         config["inference"].get("maximum_grasp_edge_error_m", 0.03)
     )
     available = len(states) > 0 and len(errors) == 2
+    opening_span = geometry.get("opening_span_m")
+    if opening_span is None and len(errors) == 2:
+        opening_span = float(
+            np.linalg.norm(
+                np.asarray(geometry["right_opening_edge"], dtype=float)
+                - np.asarray(geometry["left_opening_edge"], dtype=float)
+            )
+        )
+    if opening_span is not None:
+        opening_span = float(opening_span)
     return {
         "available": available,
         "attached_grippers": len(attached_sides),
         "attached_sides": sorted(attached_sides),
         "edge_errors_m": errors,
+        "target_to_edge_distances_m": target_to_edge,
         "maximum_edge_error_m": max(errors.values()) if errors else None,
+        "opening_span_m": opening_span,
         "threshold_m": maximum_error,
         "ok": (
             available

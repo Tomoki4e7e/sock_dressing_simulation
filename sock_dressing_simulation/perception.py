@@ -79,7 +79,12 @@ def assess_masks(
                 if 0 <= int(y) < mask.shape[0] and 0 <= int(x) < mask.shape[1]
             ]
             prompt_containment[name] = bool(valid and all(valid))
-        if semantic.get("require_prompt_containment", False):
+        # SAM2 prompts initialize tracking; a freely moving object is not
+        # expected to keep covering the original image-space point.
+        if (
+            semantic.get("require_prompt_containment", False)
+            and previous_areas is None
+        ):
             checks["prompt_containment"] = all(prompt_containment.values())
     renderer_agreement = {}
     if renderer_masks:

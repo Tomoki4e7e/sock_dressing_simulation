@@ -586,3 +586,162 @@ collision、mask IDは変更していない。
   - coverage gain: `0.072681`
   - 最終stretch proxy: `1.387026`
   - 動画: `demo.mp4`（1280x960、5 fps、50 frame、10秒）
+
+## canonical青外観・減衰付き自由変形修復（2026-09-23）
+
+commit `05d738238d098af973b698d4e417868bdad9fb79`の配布Playerは青い
+canonical materialと`LoadCloth`を使用していたが、要求した
+`stretch_compliance=0.0005`等はPythonから適用・検証できず、自由変形の
+goldenではなかった。現行custom Playerで同値を実適用するとring stretchが
+`2.72`まで増え、Obi solverの無減衰振動で重力方向alignmentも反転した。
+
+そこで、過去の段階probeで同定済みの物性を再採用し、Obi solver dampingを
+新たにPython–Unity契約へ追加した。
+
+- stretch compliance `0.0001`、bend compliance `0.002`
+- stretching scale `0.85`
+- substeps `6`、solver iterations `12`、timestep `0.02 s`
+- friction `0.5`、damping `0.95`
+- graspは開口縁の左右各`2`粒子のみ、開口外Pin `0`
+- foot pose契約は変形する開口粒子重心ではなく、固定grasp target中点を
+  approach frameとして校正する
+- visual proxyの表裏submeshはともにcanonical `ObiBlue`を継承し、
+  橙/赤のruntime色上書きを廃止
+
+検証結果:
+
+- Python regression: `54 passed`
+- Development Player再build、doctor: pass
+- strict live acceptance: pass
+  (`artifacts/unity/live-acceptance-canonical-physics.json`)
+  - 粒子数: `800`
+  - 初期重力方向alignment: `0.924742`（閾値`0.7`）
+  - 非把持粒子の最大下方変位: `0.052180 m`
+  - 最大ring stretch proxy: `1.440252`（上限`1.5`）
+  - 左右各`2`粒子Pin、開口外Pin `0`
+  - 足接触ID: `2105`（toes）
+- Phase 4 seed 0、50 step: strict task success
+  (`artifacts/phase4/canonical-blue-free-cloth-final/data_sock_sim_smoke/train/phase4_20260923T050939Z`)
+  - canonical青色・両面表示: pass
+  - 全frame左右把持、足接触: pass
+  - 最終stretch proxy: `1.248475`
+  - 動画: `demo.mp4`（1280x960、5 fps、50 frame、10秒）
+
+## 把持軸固定の解除（2026-09-23）
+
+開口部の位置把持を残しながら、Obi Pinの姿勢拘束を
+`grasp_rotational_compliance=1000000`として実質無効化した。scenario開始時の
+整列は初期化時の1回だけとし、settle後に粒子位置を軸へ戻す再整列を削除した。
+物理開口法線は変形後の開口粒子から算出し、足位置校正だけは独立した
+`opening_target_normal`を使用する。この基準法線は配置用であり、布へ力や姿勢拘束を
+加えない。
+
+また、Obi topologyのcluster順とinput mesh頂点順が一致するという誤った仮定を除去した。
+visual proxyは`cluster.vertexIndices`を介して粒子へ対応付け、変形QAはparticle配列の
+連番ringではなくObi構造辺を使用する。
+
+検証結果:
+
+- Python regression: `55 passed`
+- Development Player再build: pass
+- graphics smoke: pass
+  (`artifacts/unity/smoke-free-axis/data_sock_sim_smoke/train/smoke_20260923T055229Z`)
+- live実測 (`artifacts/unity/live-acceptance-free-axis.json`)
+  - 開口法線: `[0.1164, -0.7167, 0.6876]`
+  - 配置基準法線: `[0, 0, 1]`（両者が一致せず、軸へ固定されていない）
+  - 非把持粒子の下方変位: `0.005943 m`
+  - 左右各`2`粒子Pin、開口外Pin `0`
+  - 足接触ID: `2105`
+  - pose contract: pass
+- topology構造辺の最大stretchは`2.996`で上限`1.5`を超えるため、
+  live acceptance全体は引き続きfail-closed。軸固定解除の判定項目は通過しているが、
+  局所伸びを隠して成功扱いにはしていない。
+
+## 靴下開口部の把持可視化（2026-09-23）
+
+グリッパー間spanが閾値を超えただけで片側Pinを解除していた判定を廃止し、実測した
+Pin拘束誤差だけで滑りを判定するよう修正した。5 Hzのpolicy actionごとにUnityの
+`fixedDeltaTime=0.02 s`を10 step進め、腕のrate limitを`0.02 rad/action`へ下げて、
+布が実grasping frameへ追従する時間を確保した。開口端QAはring最遠点ではなく、
+左右で実際にPinされた各2粒子の中心と拘束誤差を使用する。
+
+描画ではopening particleを開口面内の角度順に並べ、canonical青materialを継承した
+両面カフを生成した。左右の把持粒子中心にも同じ青色のcontact patchを追従させ、
+物理位置を変えずに把持箇所を確認できるようにした。録画は開口部の近接cropへ変更した。
+
+検証結果:
+
+- Python regression: `56 passed`
+- Development Player再build: pass
+- Phase 4 real-only seed 0、50 step: strict task success
+  (`artifacts/phase4/grasp-visibility-real-only-autonomous/data_sock_sim_smoke/train/phase4_20260923T065227Z`)
+  - 全frame左右把持: pass（最小`2`）
+  - 最大Pin拘束誤差: `0.036387 m`（上限`0.12 m`）
+  - 開口span: `0.052731–0.105416 m`
+  - coverage gain: `0.190146`
+  - 最終stretch proxy: `1.292271`（上限`1.5`）
+  - 足接触: pass
+  - 動画: `demo.mp4`（1280x960、5 fps、50 frame、10秒）
+
+## Dry-AIREC頭部カメラ整合（2026-09-23）
+
+推論用CameraAttrを固定world poseから
+`head/see3cam_right/camera_color_frame`の子へ変更した。これによりcustom profileで
+ロボット本体を移動しても右See3CAMの物理位置へ追従する。実データの広角画像に合わせ、
+4:3画像における約120度対角画角をUnityの垂直FOV `92度`として設定し、custom task pose
+では足・靴下・両腕が同時に入るよう局所pitchを下向きへ`20度`校正した。
+
+実データ11 episodeとsim episodeを同一基準で監査する`domain-audit`も追加した。
+`foot_*`/`leg_*`を同じlimb modalityとして扱い、解像度、同期、RGB/depth統計、
+mask面積・重心、angle/torque範囲、頭部リンクmountをJSONへ記録する。
+
+検証結果:
+
+- Python regression: `60 passed`
+- real training manifest audit: `11/11` episode pass
+- Phase 4 real-only seed 0、50 step: strict task success
+  (`artifacts/phase4/head-camera-aligned-real-only-autonomous/data_sock_sim_smoke/train/phase4_20260923T071844Z`)
+  - camera parent: `head/see3cam_right/camera_color_frame`
+  - camera world pose: `[-0.1860, 0.8331, 0.5805]`,
+    rotation `[75.0000, 180.0000, 0.0000]`
+  - coverage gain: `0.205147`
+  - 最大Pin拘束誤差: `0.050396 m`
+  - 最終stretch proxy: `1.211593`（上限`1.5`）
+  - 足接触: pass
+- domain audit:
+  `artifacts/phase4/head-camera-aligned-real-only-autonomous/domain-audit.json`
+  - RGB平均値の実/sim差は修正前`0.334`から修正後`0.165`へ縮小
+  - 残差: simは50 frame（実データ中央値266）、limb mask面積は実データの`6.05倍`
+  - `torque.csv`が全ゼロのため学習可能判定はfail。画像改善とは独立した未解決の
+    simulator effort取得問題として、simデータを教師データへ混入させない
+
+## 右脚伸展配置とトルク計測（2026-09-23）
+
+右大腿・下腿の実測長を維持して股関節、膝、足首を一直線に配置し、人体と椅子を
+同じ平行移動量でグリッパー正面へ移動するtask poseを追加した。配置契約では
+右膝屈曲角、脚挙上角、足先と把持目標面の距離・横ずれ、骨長誤差を検査する。
+
+全トルク0の原因は、direct関節位置指令後の通常観測ではUnityの逆動力学値を
+要求していなかったことだった。各観測前に逆動力学を更新し、非ゼロの
+`drive_forces`を`torque.csv`へ保存するよう変更した。取得不能時は0を有効値として
+扱わず、`torque_available=false`と明示する。
+
+検証結果:
+
+- Python regression: `62 passed`
+- Development Player再build: pass
+- Phase 4 real-only seed 0、50 step:
+  `artifacts/phase4/straight-leg-torque-real-only/data_sock_sim_smoke/train/phase4_20260923T074201Z`
+  - 初期pose contract: pass
+  - 右膝屈曲角: `0.0度`、脚挙上角: `90.000008度`
+  - 足先距離: `0.100006 m`（目標`0.10±0.02 m`）
+  - 足先横ずれ: `0.0000015 m`（上限`0.035 m`）
+  - 最大骨長誤差: `1.19e-7 m`
+  - 最終stretch proxy: `1.154536`（上限`1.5`）
+  - torque source: `drive_forces`、50x18要素すべて非ゼロ
+  - torque範囲: `-0.092554–0.109122`
+- domain audit:
+  `artifacts/phase4/straight-leg-torque-real-only/domain-audit.json`
+  - 学習可能判定: pass（errorなし、全ゼロtorque問題を解消）
+  - 残差warning: simは50 frame（実データ中央値266）、sock mask面積は実データの
+    `0.170倍`

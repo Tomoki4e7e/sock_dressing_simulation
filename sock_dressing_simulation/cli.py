@@ -21,10 +21,10 @@ from .doctor import format_report, run_doctor
 from .environment import SockDressingEnv
 from .episode import EpisodeWriter
 from .joints import JointMap
-from .quality import assess_observation_quality
+from .quality import assess_observation_quality, compare_learning_domains
 from .scenario import scenario_from_config
 from .pipeline import run_phase1_pipeline
-from .training import audit_training_data, train_policy
+from .training import audit_training_data, load_training_specs, train_policy
 
 
 def _prepare(config, scenario=None):
@@ -146,6 +146,8 @@ def _unity_smoke(config, output_root: Path, frames: int):
             if not config["rcareworld"].get("graphics", False)
             else "unity-graphics",
             "diagnostics": first["diagnostics"],
+            "torque_source": first["torque_source"],
+            "torque_available": first["torque_available"],
             "external_torque_source": first["external_torque_source"],
             "rcareworld_commit": config["rcareworld"]["commit"],
             "mesh_compatibility": prepared["mesh_compatibility"],
@@ -229,6 +231,8 @@ def _unity_collect(config, output_root: Path, frames: int, seed: int):
             },
             "scenario_application": application,
             "diagnostics": observation["diagnostics"],
+            "torque_source": observation["torque_source"],
+            "torque_available": observation["torque_available"],
             "external_torque_source": observation["external_torque_source"],
             "rcareworld_commit": config["rcareworld"]["commit"],
             "mesh_compatibility": prepared["mesh_compatibility"],
@@ -453,6 +457,15 @@ def main(argv=None) -> int:
     train.add_argument(
         "--audit-only", action="store_true", help="validate teacher data without training"
     )
+    domain_audit = commands.add_parser("domain-audit")
+    domain_audit.add_argument(
+        "--simulation-episode", type=Path, action="append", required=True
+    )
+    domain_audit.add_argument(
+        "--output",
+        type=Path,
+        default=resolve_package_path("artifacts/domain-audit.json"),
+    )
     demo = commands.add_parser("demo")
     demo.add_argument("--checkpoint", type=Path)
     demo.add_argument("--device")
@@ -583,6 +596,21 @@ def main(argv=None) -> int:
                 )
             )
         except (ImportError, OSError, RuntimeError, ValueError, KeyError) as error:
+            print(json.dumps({"ok": False, "error": str(error)}, indent=2))
+            return 2
+        print(json.dumps(result, indent=2))
+        return 0 if result["ok"] else 3
+    if args.command == "domain-audit":
+        try:
+            real_episodes = [spec.directory for spec in load_training_specs(config)]
+            result = compare_learning_domains(
+                real_episodes,
+                [path.resolve() for path in args.simulation_episode],
+            )
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(json.dumps(result, indent=2), encoding="utf-8")
+            result["report"] = str(args.output.resolve())
+        except (OSError, RuntimeError, ValueError, KeyError) as error:
             print(json.dumps({"ok": False, "error": str(error)}, indent=2))
             return 2
         print(json.dumps(result, indent=2))

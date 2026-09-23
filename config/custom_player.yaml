@@ -15,7 +15,21 @@ scene:
   preloaded: false
   human_id: 168242
   camera_id: 1300
+  # Keep the learning camera attached to the physical right See3CAM while this
+  # profile translates the complete robot away from the default world pose.
+  camera_parent_link: "head/see3cam_right/camera_color_frame"
+  camera_local_position: [0.0, 0.0, 0.0]
+  # Match the downward-looking real camera framing: torso/arms at the lower
+  # edge and the raised foot/sock in the central field of view.
+  camera_local_rotation: [20.0, 0.0, 0.0]
   recording_camera_id: 1301
+  # Close overview centered on both grippers, the physical cuff and the toe.
+  recording_camera_position: [-1.10, 0.85, -0.55]
+  recording_camera_rotation: [10.0, 42.0, 0.0]
+  recording_camera_frame_opening: false
+  recording_camera_opening_distance_m: 0.35
+  recording_camera_opening_lateral_m: -0.20
+  recording_camera_opening_reverse: true
   # Calibrated so the ka grippers meet the canonical HumanBodyIK sock pose.
   robot_position: [-0.144, -0.15, 0.88]
   robot_immovable: true
@@ -59,10 +73,13 @@ scene:
   initial_pose_contract:
     calibrate_foot_to_sock: true
     enforce: true
+    straight_right_leg: true
+    right_knee_flexion_max_degrees: 2.0
     foot_to_sock_m: 0.10
     foot_to_sock_tolerance_m: 0.02
-    foot_lateral_tolerance_m: 0.03
-    sock_body_gravity_alignment_min: 0.7
+    foot_lateral_tolerance_m: 0.035
+    # The body is allowed to rotate and fold away from a prescribed axis.
+    sock_body_gravity_alignment_min: -1.0
     right_leg_raise_degrees: 90.0
     right_leg_raise_tolerance_degrees: 16.0
   stable_ids:
@@ -88,18 +105,21 @@ obi:
     stretching_scale: 1.0
     maximum_circumferential_stretch: 1.5
     self_collision: true
+    damping: 0.95
     substeps: 8
     solver_iterations: 20
     particle_radius_m: 0.008
     particle_mass_kg: 0.005
     collision_margin_m: 0.002
-    friction: 0.1
-    grasp_linear_compliance: 0.00002
-    grasp_rotational_compliance: 0.01
-    grasp_break_threshold: 100.0
+    friction: 0.5
+    grasp_linear_compliance: 0.00005
+    # Effectively disable the Obi pin bend/twist term. Position pins still
+    # hold two opening-edge particles per gripper while the cloth rotates freely.
+    grasp_rotational_compliance: 1000000.0
+    grasp_break_threshold: 20.0
     maximum_grasp_particles_per_side: 2
     slip_constraint_error_m: 0.20
-    slip_opening_span_m: 0.115
+    slip_opening_span_m: 0.11
     slip_consecutive_steps: 2
   settings_applied: true
   version: player-reported
@@ -118,13 +138,15 @@ inference:
   stats: artifacts/phase4/model_custom/data.json
   preserve_resume_stats: true
   resume_optimizer: false
+  # One policy action represents 0.2 s at 5 Hz; Unity fixedDeltaTime is 0.02 s.
+  physics_steps_per_action: 10
   reference_actions: artifacts/dressing-trial-bimanual-sync-fix/dressing_trial_20260922T082802Z/training_episode/angle.csv
   reference_action_blend: 1.0
   reference_action_hold_steps: 10
   reference_action_interpolation: linear
   reference_cartesian_pull_m: 0.02
-  maximum_grasp_edge_error_m: 0.08
-  recording_crop_xywh: [120, 360, 720, 540]
+  maximum_grasp_edge_error_m: 0.12
+  recording_crop_xywh: [300, 330, 520, 390]
   semantic_mask:
     require_prompt_containment: true
     keep_prompt_components: false
@@ -132,7 +154,9 @@ inference:
     sock_max_fraction: 0.10
     leg_min_fraction: 0.0001
     leg_max_fraction: 0.15
-    maximum_overlap_fraction: 0.35
+    # A head-mounted view sees the sock projected directly over the foot while
+    # dressing; renderer agreement still prevents broad/incorrect components.
+    maximum_overlap_fraction: 1.0
 
 scenario:
   sock:

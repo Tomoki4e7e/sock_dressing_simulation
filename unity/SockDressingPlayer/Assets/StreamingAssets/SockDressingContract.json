@@ -19,16 +19,18 @@
     "floor": 2302
   },
   "obi": {
-    "stretch_compliance": 0.0005,
-    "bend_compliance": 0.005,
+    "stretch_compliance": 0.0,
+    "bend_compliance": 0.01,
+    "stretching_scale": 1.0,
     "maximum_circumferential_stretch": 1.5,
     "particle_radius_m": 0.008,
     "particle_mass_kg": 0.005,
     "collision_margin_m": 0.002,
     "friction": 0.5,
     "self_collision": true,
-    "substeps": 4,
-    "solver_iterations": 8,
+    "damping": 0.95,
+    "substeps": 8,
+    "solver_iterations": 20,
     "timestep_s": 0.02
   }
 }

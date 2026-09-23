@@ -28,8 +28,9 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--grasp-distance", type=float, default=0.1)
     parser.add_argument("--hold-steps", type=int, default=10)
-    parser.add_argument("--insertion-step-m", type=float, default=0.001)
+    parser.add_argument("--insertion-step-m", type=float, default=0.005)
     parser.add_argument("--insertion-steps", type=int, default=20)
+    parser.add_argument("--insertion-lift-m", type=float, default=0.10)
     parser.add_argument("--pull-step-m", type=float, default=0.002)
     parser.add_argument("--pull-steps", type=int, default=20)
     args = parser.parse_args()
@@ -58,6 +59,35 @@ def main() -> int:
         environment.sock_cloth.request_configuration()
         environment._env.step()
         held = [state.__dict__ for state in environment.sock_cloth.grasp_states()]
+        settled, _ = particle_snapshot(environment)
+        attached_indices = {
+            int(index)
+            for state in held
+            for index in state["particle_indices"]
+        }
+        body_indices = np.asarray(
+            [
+                index
+                for index in range(initial.shape[0])
+                if index not in attached_indices
+            ],
+            dtype=int,
+        )
+        body_displacement = (
+            settled[body_indices] - initial[body_indices]
+            if body_indices.size and settled.shape == initial.shape
+            else np.empty((0, 3), dtype=float)
+        )
+        maximum_unpinned_displacement = (
+            float(np.linalg.norm(body_displacement, axis=1).max())
+            if body_displacement.size
+            else None
+        )
+        maximum_unpinned_downward_displacement = (
+            float(np.maximum(0.0, -body_displacement[:, 1]).max())
+            if body_displacement.size
+            else None
+        )
         left_position = np.asarray(
             application["initial_pose_contract"]["left_grasp_position"], dtype=float
         )
@@ -74,8 +104,10 @@ def main() -> int:
         insertion_direction /= np.linalg.norm(insertion_direction)
         insertion_trace = []
         for index in range(args.insertion_steps):
+            progress = float(index + 1) / float(args.insertion_steps)
             offset = (
                 insertion_direction * args.insertion_step_m * float(index + 1)
+                + np.asarray([0.0, args.insertion_lift_m * progress, 0.0])
             )
             environment.sock_cloth.set_grasp_target_position(
                 "left", left_position + offset
@@ -110,41 +142,23 @@ def main() -> int:
             )
         insertion_offset = (
             insertion_direction * args.insertion_step_m * args.insertion_steps
+            + np.asarray([0.0, args.insertion_lift_m, 0.0])
         )
         left_position += insertion_offset
         right_position += insertion_offset
         before_pull, _ = particle_snapshot(environment)
         before_pull_qa = environment.cloth_radius_qa(
-            {"particles": before_pull},
+            {
+                "particles": before_pull,
+                "particle_edges": environment.sock_cloth.data.get(
+                    "particle_edges", ()
+                ),
+                "particle_rest_edge_lengths": environment.sock_cloth.data.get(
+                    "particle_rest_edge_lengths", ()
+                ),
+                "grasp_state": held,
+            },
             radial_segments=scenario.sock_mesh.radial_segments,
-        )
-        attached_indices = {
-            int(index)
-            for state in held
-            for index in state["particle_indices"]
-        }
-        body_indices = np.asarray(
-            [
-                index
-                for index in range(initial.shape[0])
-                if index not in attached_indices
-            ],
-            dtype=int,
-        )
-        body_displacement = (
-            before_pull[body_indices] - initial[body_indices]
-            if body_indices.size and before_pull.shape == initial.shape
-            else np.empty((0, 3), dtype=float)
-        )
-        maximum_unpinned_displacement = (
-            float(np.linalg.norm(body_displacement, axis=1).max())
-            if body_displacement.size
-            else None
-        )
-        maximum_unpinned_downward_displacement = (
-            float(np.maximum(0.0, -body_displacement[:, 1]).max())
-            if body_displacement.size
-            else None
         )
         pull_direction = right_position - left_position
         pull_direction /= np.linalg.norm(pull_direction)
@@ -166,7 +180,18 @@ def main() -> int:
                 state.side: state for state in environment.sock_cloth.grasp_states()
             }
             qa = environment.cloth_radius_qa(
-                {"particles": environment.sock_cloth.particles()},
+                {
+                    "particles": environment.sock_cloth.particles(),
+                    "particle_edges": environment.sock_cloth.data.get(
+                        "particle_edges", ()
+                    ),
+                    "particle_rest_edge_lengths": environment.sock_cloth.data.get(
+                        "particle_rest_edge_lengths", ()
+                    ),
+                    "grasp_state": [
+                        state.__dict__ for state in states.values()
+                    ],
+                },
                 radial_segments=scenario.sock_mesh.radial_segments,
             )
             geometry = environment.sock_cloth.scene_geometry()
@@ -252,6 +277,8 @@ def main() -> int:
                 and application["initial_pose_contract"]["ok"]
                 and maximum_stretch is not None
                 and maximum_stretch <= 1.5
+                and maximum_particle_ring_stretch is not None
+                and maximum_particle_ring_stretch <= 1.5
             ),
             "particle_count": int(initial.shape[0]),
             "maximum_particle_displacement_m": (
@@ -284,6 +311,7 @@ def main() -> int:
             ),
             "foot_contact_collider_ids": sorted(foot_contact_ids),
             "grasp_max_distance_m": float(args.grasp_distance),
+            "insertion_lift_m": float(args.insertion_lift_m),
             "configuration": configuration,
             "registered_collider_count": len(
                 environment.sock_cloth.registered_colliders()

@@ -254,6 +254,26 @@ def test_environment_maps_full_simulator_state_and_command():
     np.testing.assert_allclose(environment.robot.target[7:10], [-45.0, 100.0, 0.0])
 
 
+def test_robot_signals_ignores_zero_drive_force_and_reports_unavailable():
+    config = load_config()
+    environment = SockDressingEnv(config, backend=_Backend())
+    environment.robot = _Robot()
+    environment.robot.data["drive_forces"] = np.zeros(29)
+    signals = environment.robot_signals()
+    assert signals["torque_source"] == "joint_force"
+    np.testing.assert_array_equal(
+        signals["torque"],
+        environment.robot.data["joint_force"][
+            config["joints"]["simulator_indices"]
+        ],
+    )
+
+    environment.robot.data["joint_force"] = np.zeros(29)
+    signals = environment.robot_signals()
+    assert not signals["torque_available"]
+    assert signals["torque_source"] == "unavailable"
+
+
 def test_fixed_joint_mapping_rejects_wrong_simulator_name():
     config = load_config()
     config["joints"]["fixed"]["names"][0] = "torso/not_joint_1"

@@ -23,6 +23,7 @@ class SockDressingEnv:
         self.chair = []
         self.grasp_anchors = []
         self._grasp_attachment_report = []
+        self._camera_mount_report: Dict[str, Any] = {}
         self.sock_cloth = None
 
     def connect(self) -> "SockDressingEnv":
@@ -250,6 +251,7 @@ class SockDressingEnv:
                         .get("foot", {})
                         .get("plantarflexion_degrees", 0.0)
                     ),
+                    bool(pose_contract.get("straight_right_leg", False)),
                 )
         if scene.get("ignore_robot_human_rigid_collisions", True):
             self.sock_cloth.ignore_robot_human_rigid_collisions(
@@ -276,6 +278,7 @@ class SockDressingEnv:
             collision_margin_m=float(expected["collision_margin_m"]),
             friction=float(expected["friction"]),
             self_collision=bool(expected["self_collision"]),
+            damping=float(expected["damping"]),
             substeps=int(expected["substeps"]),
             solver_iterations=int(expected["solver_iterations"]),
         )
@@ -318,11 +321,39 @@ class SockDressingEnv:
                 id=int(scene["camera_id"]),
                 attr_type=attr.CameraAttr,
             )
-            self.camera.SetTransform(
-                position=list(scene["camera_position"]),
-                rotation=list(scene["camera_rotation"]),
-                scale=[1.0, 1.0, 1.0],
-            )
+            parent_link = scene.get("camera_parent_link")
+            local_position = scene.get("camera_local_position", [0.0, 0.0, 0.0])
+            local_rotation = scene.get("camera_local_rotation", [0.0, 0.0, 0.0])
+            if parent_link:
+                if self.robot is None:
+                    raise RuntimeError(
+                        "camera_parent_link requires a loaded Dry-AIREC robot"
+                    )
+                self.camera.SetParent(self.robot.id, str(parent_link))
+                self.camera.SetTransform(
+                    position=list(local_position),
+                    rotation=list(local_rotation),
+                    scale=[1.0, 1.0, 1.0],
+                    is_world=False,
+                )
+                self._camera_mount_report = {
+                    "mode": "robot_link",
+                    "parent_id": int(self.robot.id),
+                    "parent_link": str(parent_link),
+                    "local_position": list(local_position),
+                    "local_rotation": list(local_rotation),
+                }
+            else:
+                self.camera.SetTransform(
+                    position=list(scene["camera_position"]),
+                    rotation=list(scene["camera_rotation"]),
+                    scale=[1.0, 1.0, 1.0],
+                )
+                self._camera_mount_report = {
+                    "mode": "world",
+                    "position": list(scene["camera_position"]),
+                    "rotation": list(scene["camera_rotation"]),
+                }
         if scene.get("recording_camera_id") is not None:
             self.recording_camera = self._env.InstanceObject(
                 name="Camera",
@@ -335,6 +366,14 @@ class SockDressingEnv:
                 scale=[1.0, 1.0, 1.0],
             )
         self._env.step()
+        camera_data = getattr(self.camera, "data", {}) if self.camera is not None else {}
+        if self._camera_mount_report and camera_data:
+            self._camera_mount_report["world_position"] = list(
+                camera_data.get("position", ())
+            )
+            self._camera_mount_report["world_rotation"] = list(
+                camera_data.get("rotation", ())
+            )
 
     def _load_custom_player(self) -> None:
         """Bind to objects authored into the greenfield Player scene."""
@@ -469,6 +508,54 @@ class SockDressingEnv:
         self.sock_cloth.request_scene_geometry()
         self._env.step()
         return self.sock_cloth.scene_geometry()
+
+    def frame_recording_camera_on_opening(
+        self,
+        distance_m: float,
+        lateral_m: float = 0.0,
+        reverse: bool = False,
+    ) -> Dict[str, Any]:
+        """Aim the overview camera along the measured physical opening normal."""
+        if self.recording_camera is None:
+            raise RuntimeError("recording camera is unavailable")
+        distance = float(distance_m)
+        lateral = float(lateral_m)
+        if (
+            not np.isfinite(distance)
+            or distance <= 0
+            or not np.isfinite(lateral)
+        ):
+            raise ValueError("recording camera offset must be finite and distance positive")
+        geometry = self._request_scene_geometry()
+        center = np.asarray(geometry.opening_center, dtype=float)
+        opening_normal = np.asarray(geometry.opening_normal, dtype=float)
+        opening_normal /= np.linalg.norm(opening_normal)
+        opening_axis = (
+            np.asarray(geometry.right_grasp_position, dtype=float)
+            - np.asarray(geometry.left_grasp_position, dtype=float)
+        )
+        opening_axis /= np.linalg.norm(opening_axis)
+        normal_offset = opening_normal * distance * (1.0 if reverse else -1.0)
+        position = center + normal_offset + opening_axis * lateral
+        forward = center - position
+        forward /= np.linalg.norm(forward)
+        pitch = -np.degrees(np.arcsin(np.clip(forward[1], -1.0, 1.0)))
+        yaw = np.degrees(np.arctan2(forward[0], forward[2]))
+        rotation = np.asarray([pitch, yaw, 0.0], dtype=float)
+        self.recording_camera.SetTransform(
+            position=position.tolist(),
+            rotation=rotation.tolist(),
+        )
+        self._env.step()
+        return {
+            "position": position.tolist(),
+            "rotation": rotation.tolist(),
+            "opening_center": center.tolist(),
+            "opening_normal": opening_normal.tolist(),
+            "distance_m": distance,
+            "lateral_m": lateral,
+            "reverse": bool(reverse),
+        }
 
     def _drive_joint_target(
         self, target: np.ndarray, *, maximum_steps: int = 64
@@ -919,6 +1006,7 @@ class SockDressingEnv:
                     self.camera is not None
                     or bool(getattr(self.cloth, "data", {}).get("rgb_png"))
                 ),
+                "camera_mount": dict(self._camera_mount_report),
                 "exact_foot_colliders_configured": bool(
                     scene.get("human_foot_collider_ids")
                 ),
@@ -957,6 +1045,7 @@ class SockDressingEnv:
         return {
             "human_configured": scene.get("human_id") is not None,
             "camera_configured": scene.get("camera_id") is not None,
+            "camera_mount": dict(self._camera_mount_report),
             "exact_foot_colliders_configured": bool(scene.get("human_foot_collider_ids")),
             "contact_force_available": False,
             "robot_obi_collider_verified": False,
@@ -1015,8 +1104,11 @@ class SockDressingEnv:
         self.sock_cloth.request_grasp_state()
         self.sock_cloth.request_scene_geometry()
         self.sock_cloth.request_contacts()
+        if hasattr(self.robot, "GetJointInverseDynamicsForce"):
+            self.robot.GetJointInverseDynamicsForce()
         self._env.step()
         cloth = dict(self.sock_cloth.data)
+        robot_data = dict(getattr(self.robot, "data", {}) or {})
         contacts = list(cloth.get("cloth_contacts", []))
         camera = self._capture_camera() if self.camera is not None else None
         recording = (
@@ -1032,7 +1124,7 @@ class SockDressingEnv:
             }
         )
         observation = {
-            "robot": dict(getattr(self.robot, "data", {}) or {}),
+            "robot": robot_data,
             "human": dict(getattr(self.human, "data", {}) or {}),
             "cloth": cloth,
             "camera": camera,
@@ -1041,7 +1133,7 @@ class SockDressingEnv:
             "collision_pairs": collision_pairs,
             "diagnostics": self.diagnostics(),
         }
-        observation.update(self.robot_signals())
+        observation.update(self.robot_signals(robot_data))
         return observation
 
     def _request_initial_pose_contract(self) -> Dict[str, Any]:
@@ -1062,6 +1154,9 @@ class SockDressingEnv:
         lateral_tolerance = float(settings["foot_lateral_tolerance_m"])
         wanted_angle = float(settings["right_leg_raise_degrees"])
         angle_tolerance = float(settings["right_leg_raise_tolerance_degrees"])
+        maximum_knee_flexion = float(
+            settings.get("right_knee_flexion_max_degrees", 180.0)
+        )
         minimum_gravity_alignment = float(
             settings.get("sock_body_gravity_alignment_min", 0.8)
         )
@@ -1082,6 +1177,7 @@ class SockDressingEnv:
                 distance_error <= distance_tolerance
                 and geometry.foot_to_opening_lateral_m <= lateral_tolerance
                 and angle_error <= angle_tolerance
+                and geometry.right_knee_flexion_degrees <= maximum_knee_flexion
                 and geometry.sock_body_gravity_alignment
                 >= minimum_gravity_alignment
                 and visual_ok
@@ -1094,8 +1190,11 @@ class SockDressingEnv:
             "right_leg_raise_degrees": geometry.right_leg_raise_degrees,
             "right_leg_raise_target_degrees": wanted_angle,
             "right_leg_raise_tolerance_degrees": angle_tolerance,
+            "right_knee_flexion_degrees": geometry.right_knee_flexion_degrees,
+            "right_knee_flexion_max_degrees": maximum_knee_flexion,
             "opening_center": list(geometry.opening_center),
             "opening_normal": list(geometry.opening_normal),
+            "opening_target_normal": list(geometry.opening_target_normal),
             "sock_body_direction": list(geometry.sock_body_direction),
             "sock_body_gravity_alignment": geometry.sock_body_gravity_alignment,
             "sock_body_gravity_alignment_min": minimum_gravity_alignment,
@@ -1116,6 +1215,13 @@ class SockDressingEnv:
             raise ValueError("right foot calibration requires a positive target distance")
         if foot_ik_index is None and self.sock_cloth is None:
             raise ValueError("right foot calibration requires IK or the custom player")
+        if foot_ik_index is None:
+            chair_id = int(
+                self.config["scene"].get("stable_ids", {}).get("chair", -1)
+            )
+            self.sock_cloth.set_foot_clearance_target(
+                target_distance_m, chair_id
+            )
         for _ in range(iterations):
             self.sock_cloth.request_scene_geometry()
             self._env.step()
@@ -1125,12 +1231,15 @@ class SockDressingEnv:
                 and geometry.foot_to_opening_lateral_m <= 0.002
             ):
                 return
-            opening = np.asarray(geometry.opening_center, dtype=float)
-            normal = np.asarray(geometry.opening_normal, dtype=float)
+            opening = (
+                np.asarray(geometry.left_grasp_position, dtype=float)
+                + np.asarray(geometry.right_grasp_position, dtype=float)
+            ) * 0.5
+            normal = np.asarray(geometry.opening_target_normal, dtype=float)
             toe = np.asarray(geometry.right_toe_position, dtype=float)
             desired = opening - normal * target_distance_m
             if foot_ik_index is None:
-                self.sock_cloth.set_task_right_toe_position(desired.tolist())
+                continue
             else:
                 self.sock_cloth.translate_human_and_ik((desired - toe).tolist())
             self._env.step()
@@ -1143,8 +1252,11 @@ class SockDressingEnv:
         self.sock_cloth.request_grasp_state()
         self.sock_cloth.request_contacts()
         self.sock_cloth.request_coverage()
+        if hasattr(self.robot, "GetJointInverseDynamicsForce"):
+            self.robot.GetJointInverseDynamicsForce()
         self._env.step()
         cloth = dict(self.sock_cloth.data)
+        robot_data = dict(getattr(self.robot, "data", {}) or {})
         contacts = list(cloth.get("cloth_contacts", []))
         collision_pairs = sorted(
             {
@@ -1153,7 +1265,7 @@ class SockDressingEnv:
             }
         )
         observation = {
-            "robot": dict(getattr(self.robot, "data", {}) or {}),
+            "robot": robot_data,
             "human": dict(getattr(self.human, "data", {}) or {}),
             "cloth": cloth,
             "camera": self._capture_custom_camera(cloth),
@@ -1162,7 +1274,7 @@ class SockDressingEnv:
             "collision_pairs": collision_pairs,
             "diagnostics": self.diagnostics(),
         }
-        observation.update(self.robot_signals())
+        observation.update(self.robot_signals(robot_data))
         return observation
 
     def _capture_custom_camera(
@@ -1244,14 +1356,72 @@ class SockDressingEnv:
         particles = np.asarray(cloth.get("particles", []), dtype=float)
         if particles.ndim != 2 or particles.shape[0] < 3 or particles.shape[1] != 3:
             return {"available": False, "passes": False}
+        edges = np.asarray(cloth.get("particle_edges", ()), dtype=int)
+        rest_lengths = np.asarray(
+            cloth.get("particle_rest_edge_lengths", ()), dtype=float
+        )
+        diagnostics: Dict[str, Any] = {}
         if (
+            edges.ndim == 2
+            and edges.shape[1:] == (2,)
+            and edges.shape[0] == rest_lengths.size
+            and edges.size
+            and edges.min() >= 0
+            and edges.max() < particles.shape[0]
+            and np.all(np.isfinite(rest_lengths))
+            and np.all(rest_lengths > 0)
+        ):
+            pinned_particles = {
+                int(index)
+                for state in cloth.get("grasp_state", ())
+                if bool(state.get("attached", False))
+                for index in state.get("particle_indices", ())
+            }
+            if pinned_particles:
+                body_edge_mask = np.asarray(
+                    [
+                        int(edge[0]) not in pinned_particles
+                        and int(edge[1]) not in pinned_particles
+                        for edge in edges
+                    ],
+                    dtype=bool,
+                )
+                edges = edges[body_edge_mask]
+                rest_lengths = rest_lengths[body_edge_mask]
+            edge_lengths = np.linalg.norm(
+                particles[edges[:, 0]] - particles[edges[:, 1]],
+                axis=1,
+            )
+            edge_stretches = edge_lengths / rest_lengths
+            maximum_stretch_index = int(np.argmax(edge_stretches))
+            stretch = float(edge_stretches[maximum_stretch_index])
+            maximum = float(edge_lengths.max())
+            method = "Obi topology structural edge stretch"
+            diagnostics = {
+                "minimum_rest_edge_m": float(rest_lengths.min()),
+                "maximum_rest_edge_m": float(rest_lengths.max()),
+                "minimum_current_edge_m": float(edge_lengths.min()),
+                "maximum_current_edge_m": maximum,
+                "maximum_stretch_edge": edges[maximum_stretch_index].tolist(),
+                "excluded_pinned_particle_count": len(pinned_particles),
+            }
+        elif (
             radial_segments is not None
             and radial_segments >= 3
             and particles.shape[0] % radial_segments == 0
         ):
             rings = particles.reshape((-1, radial_segments, 3))
-            radius = np.linalg.norm(rings - rings.mean(axis=1, keepdims=True), axis=2)
-            method = "mesh-ring centroid radial distance"
+            edge_lengths = np.linalg.norm(
+                np.roll(rings, -1, axis=1) - rings,
+                axis=2,
+            )
+            rest_edge_length = 2.0 * 0.04 * np.sin(np.pi / radial_segments)
+            stretch = float(edge_lengths.max() / rest_edge_length)
+            maximum = float(
+                edge_lengths.max()
+                / (2.0 * np.sin(np.pi / radial_segments))
+            )
+            method = "mesh-ring maximum edge stretch"
         else:
             centered = particles - particles.mean(axis=0)
             _, _, axes = np.linalg.svd(centered, full_matrices=False)
@@ -1259,8 +1429,8 @@ class SockDressingEnv:
             axial = np.outer(centered @ axis, axis)
             radius = np.linalg.norm(centered - axial, axis=1)
             method = "PCA axis radial-distance proxy"
-        maximum = float(radius.max())
-        stretch = maximum / 0.04
+            maximum = float(radius.max())
+            stretch = maximum / 0.04
         return {
             "available": True,
             "centroid_world": particles.mean(axis=0).tolist(),
@@ -1272,6 +1442,7 @@ class SockDressingEnv:
             "circumferential_stretch_proxy": stretch,
             "passes": maximum <= 0.06 and stretch <= 1.5,
             "method": method,
+            **diagnostics,
         }
 
     def _capture_camera(self) -> Dict[str, np.ndarray]:
@@ -1322,13 +1493,17 @@ class SockDressingEnv:
             "raw": dict(self.recording_camera.data),
         }
 
-    def robot_signals(self) -> Dict[str, np.ndarray]:
+    def robot_signals(
+        self, robot_data: Optional[Mapping[str, Any]] = None
+    ) -> Dict[str, Any]:
         """Extract the configured 18 joints and an explicitly labelled force proxy."""
         from .joints import JointMap
 
         if self.robot is None:
             raise RuntimeError("robot is not loaded")
-        data = getattr(self.robot, "data", {}) or {}
+        data = robot_data if robot_data is not None else (
+            getattr(self.robot, "data", {}) or {}
+        )
         mapping = JointMap.from_config(self.config)
         indices = mapping.simulator_indices
 
@@ -1351,7 +1526,17 @@ class SockDressingEnv:
             raise RuntimeError(
                 "RCareWorld did not return joint_positions/joint_force for all configured joints"
             )
-        torque = drive if drive is not None else joint_force
+        drive_available = drive is not None and bool(np.any(np.abs(drive) > 1e-9))
+        joint_force_available = bool(np.any(np.abs(joint_force) > 1e-9))
+        if drive_available:
+            torque = drive
+            torque_source = "drive_forces"
+        elif joint_force_available:
+            torque = joint_force
+            torque_source = "joint_force"
+        else:
+            torque = np.zeros_like(joint_force)
+            torque_source = "unavailable"
         if drive is not None and gravity is not None and coriolis is not None:
             external = joint_force - drive - gravity - coriolis
             source = "joint_force-drive_forces-gravity_forces-coriolis_centrifugal_forces"
@@ -1363,6 +1548,8 @@ class SockDressingEnv:
             "torque": torque,
             "external_torque": external,
             "external_torque_source": source,
+            "torque_source": torque_source,
+            "torque_available": torque_source != "unavailable",
         }
 
     def command(self, command: np.ndarray, previous: Optional[np.ndarray] = None) -> np.ndarray:
@@ -1383,6 +1570,16 @@ class SockDressingEnv:
             self.robot.SetJointPosition(target.tolist())
         self._env.step()
         return bounded
+
+    def advance_physics(self, steps: int) -> None:
+        """Advance additional fixed steps after a command without changing its target."""
+        count = int(steps)
+        if count < 0:
+            raise ValueError("physics step count must be non-negative")
+        if self._env is None:
+            raise RuntimeError("environment is not connected")
+        for _ in range(count):
+            self._env.step()
 
     def grasp(self, side: str, max_distance_m: float = 0.03) -> Dict[str, Any]:
         if self.sock_cloth is None:

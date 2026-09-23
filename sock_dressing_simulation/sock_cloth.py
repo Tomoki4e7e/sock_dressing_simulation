@@ -78,6 +78,7 @@ class SceneGeometry:
     foot_to_opening_plane_m: float
     foot_to_opening_lateral_m: float
     right_leg_raise_degrees: float
+    right_knee_flexion_degrees: float
     left_grasp_position: Tuple[float, float, float]
     right_grasp_position: Tuple[float, float, float]
     left_opening_edge: Tuple[float, float, float]
@@ -86,6 +87,8 @@ class SceneGeometry:
     right_grasp_parent: str = ""
     left_grasp_local_offset: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     right_grasp_local_offset: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    opening_target_normal: Tuple[float, float, float] = (0.0, 0.0, 1.0)
+    opening_span_m: float = 0.0
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "SceneGeometry":
@@ -102,12 +105,14 @@ class SceneGeometry:
             "right_opening_edge",
             "left_grasp_local_offset",
             "right_grasp_local_offset",
+            "opening_target_normal",
         )
         vectors = {}
         for name in vector_names:
             fallback_name = {
                 "left_opening_edge": "left_grasp_position",
                 "right_opening_edge": "right_grasp_position",
+                "opening_target_normal": "opening_normal",
             }.get(name)
             fallback = (
                 value.get(fallback_name, ())
@@ -121,25 +126,42 @@ class SceneGeometry:
         distance = float(value["foot_to_opening_plane_m"])
         lateral = float(value["foot_to_opening_lateral_m"])
         angle = float(value["right_leg_raise_degrees"])
+        knee_flexion = float(value.get("right_knee_flexion_degrees", 0.0))
         gravity_alignment = float(value["sock_body_gravity_alignment"])
+        opening_span = float(
+            value.get(
+                "opening_span_m",
+                np.linalg.norm(
+                    np.asarray(vectors["right_opening_edge"])
+                    - np.asarray(vectors["left_opening_edge"])
+                ),
+            )
+        )
         if (
             not np.isfinite(distance)
             or distance < 0
             or not np.isfinite(lateral)
             or lateral < 0
             or not np.isfinite(angle)
+            or not np.isfinite(knee_flexion)
+            or knee_flexion < 0
+            or knee_flexion > 180
             or not np.isfinite(gravity_alignment)
             or gravity_alignment < -1.0
             or gravity_alignment > 1.0
+            or not np.isfinite(opening_span)
+            or opening_span < 0
         ):
             raise ValueError("scene distances and angles must be finite")
         return cls(
             foot_to_opening_plane_m=distance,
             foot_to_opening_lateral_m=lateral,
             right_leg_raise_degrees=angle,
+            right_knee_flexion_degrees=knee_flexion,
             sock_body_gravity_alignment=gravity_alignment,
             left_grasp_parent=str(value.get("left_grasp_parent", "")),
             right_grasp_parent=str(value.get("right_grasp_parent", "")),
+            opening_span_m=opening_span,
             **vectors,
         )
 
@@ -189,6 +211,7 @@ def validate_configuration(
         "stretch_compliance",
         "bend_compliance",
         "self_collision",
+        "damping",
     )
     missing = [name for name in required if name not in actual]
     mismatches = {}
@@ -253,6 +276,7 @@ class SockClothAttr:
         collision_margin_m: float,
         friction: float,
         self_collision: bool,
+        damping: float,
         substeps: int,
         solver_iterations: int,
     ) -> None:
@@ -266,6 +290,7 @@ class SockClothAttr:
             float(collision_margin_m),
             float(friction),
             bool(self_collision),
+            float(damping),
             int(substeps),
             int(solver_iterations),
         )
@@ -361,6 +386,7 @@ class SockClothAttr:
         foot_position: Sequence[float],
         seat_scale: Sequence[float],
         plantarflexion_degrees: float = 0.0,
+        straight_right_leg: bool = False,
     ) -> None:
         seat = np.asarray(seat_position, dtype=float)
         foot = np.asarray(foot_position, dtype=float)
@@ -385,6 +411,7 @@ class SockClothAttr:
             *foot.tolist(),
             plantarflexion,
             *scale.tolist(),
+            bool(straight_right_leg),
         )
 
     def set_task_right_toe_position(self, position: Sequence[float]) -> None:

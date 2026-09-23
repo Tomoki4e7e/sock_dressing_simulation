@@ -52,6 +52,9 @@ class _Environment:
         self.commands.append(bounded)
         return bounded
 
+    def advance_physics(self, steps):
+        self.physics_steps = getattr(self, "physics_steps", 0) + int(steps)
+
 
 class _Perception:
     def __init__(self, config):
@@ -165,6 +168,7 @@ def test_grasp_frame_report_checks_both_attachment_and_opening_edges():
                 "left_opening_edge": [0.01, 0.0, 0.0],
                 "right_grasp_position": [0.0, 0.1, 0.0],
                 "right_opening_edge": [0.0, 0.11, 0.0],
+                "opening_span_m": 0.11,
             },
         }
     }
@@ -174,6 +178,31 @@ def test_grasp_frame_report_checks_both_attachment_and_opening_edges():
     assert report["ok"]
     assert report["attached_sides"] == ["left", "right"]
     assert report["maximum_edge_error_m"] == 0.01
+    assert report["opening_span_m"] == 0.11
+
+
+def test_grasp_frame_report_uses_pin_error_when_target_has_local_offset():
+    config = load_config()
+    observation = {
+        "diagnostics": {
+            "grasp_state": [
+                {"side": "left", "attached": True, "constraint_error": 0.02},
+                {"side": "right", "attached": True, "constraint_error": 0.01},
+            ],
+            "scene_geometry": {
+                "left_grasp_position": [0.0, 0.0, 0.0],
+                "left_opening_edge": [0.09, 0.0, 0.0],
+                "right_grasp_position": [0.0, 0.1, 0.0],
+                "right_opening_edge": [0.0, 0.12, 0.0],
+            },
+        }
+    }
+
+    report = _grasp_frame_report(observation, config)
+
+    assert report["ok"]
+    assert report["maximum_edge_error_m"] == 0.02
+    assert report["target_to_edge_distances_m"]["left"] == 0.09
 
 
 def test_task_success_rejects_any_intermediate_bimanual_grasp_failure(monkeypatch):

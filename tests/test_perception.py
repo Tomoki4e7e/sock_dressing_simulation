@@ -118,6 +118,17 @@ def test_semantic_mask_contract_checks_prompts_and_renderer():
     )
     assert not wrong["ok"]
 
+    tracked = assess_masks(
+        sock,
+        leg,
+        previous_areas=(int(sock.sum()), int(leg.sum())),
+        prompt_points={"sock": [[8, 8]], "leg": [[6, 6]]},
+        semantic={"require_prompt_containment": True},
+    )
+    assert tracked["ok"]
+    assert not tracked["prompt_containment"]["sock"]
+    assert "prompt_containment" not in tracked["checks"]
+
 
 def test_prompt_components_remove_unselected_false_positive():
     mask = np.zeros((8, 8), bool)

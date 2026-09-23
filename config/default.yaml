@@ -26,9 +26,17 @@ scene:
   # Measured RCareWorld world transform of the right See3CAM camera frame
   # after applying the default ka arms and fixed kb torso posture. RCareWorld's
   # CameraAttr uses the camera-frame Euler rotation rather than the ROS optical
-  # frame rotation.
+  # frame rotation. This is the legacy fallback for Players without the
+  # imported Dry-AIREC camera link.
   camera_position: [-0.04204, 0.98332, 1.05015]
   camera_rotation: [55.18068, 180.01147, 0.01028]
+  # The inference camera follows the physical right See3CAM frame from the
+  # Dry-AIREC URDF. camera_color_frame uses the Unity camera convention;
+  # camera_color_optical_frame uses the ROS optical convention and must not be
+  # used directly by CameraAttr.
+  camera_parent_link: "head/see3cam_right/camera_color_frame"
+  camera_local_position: [0.0, 0.0, 0.0]
+  camera_local_rotation: [0.0, 0.0, 0.0]
   # A separate overview camera records demo.mp4 without changing inference.
   recording_camera_id: 1301
   recording_camera_position: [-1.8, 1.05, -1.5]
@@ -61,7 +69,9 @@ camera:
   # ShareSet feature extraction crops to this 1280x960 contract.
   width: 1280
   height: 960
-  fov: 60.0
+  # Approximate the right See3CAM's 120-degree diagonal lens at 4:3. Unity
+  # Camera.fieldOfView is vertical, giving about 92 degrees.
+  fov: 92.0
   depth_near_m: 0.1
   depth_far_m: 3.0
 obi:
