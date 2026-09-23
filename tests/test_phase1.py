@@ -97,8 +97,9 @@ class _Cloth:
     def clamp_grasp_target_span(self, maximum_span_m):
         self.maximum_grasp_span = maximum_span_m
 
-    def align_sock_opening_to_grasp_targets(self):
+    def align_sock_opening_to_grasp_targets(self, toe_target):
         self.sock_was_aligned_to_grippers = True
+        self.sock_toe_target = list(toe_target)
 
     def arm_slip_detection(self, armed=True):
         self.slip_detection_armed = armed
@@ -233,6 +234,54 @@ def test_custom_foot_calibration_translates_human_and_chair_together():
     assert environment.sock_cloth.clearance == (0.1, 2301)
 
 
+@pytest.mark.parametrize(
+    ("toe_alignment", "left_depth", "expected"),
+    [(0.95, 0.025, True), (0.5, 0.025, False), (0.95, 0.005, False)],
+)
+def test_initial_pose_contract_requires_toe_facing_inner_cuff_grasp(
+    toe_alignment, left_depth, expected
+):
+    config = load_config(Path("config/custom_player.yaml"))
+    environment = SockDressingEnv(config, backend=_Backend())
+
+    class Cloth:
+        def request_scene_geometry(self):
+            pass
+
+        def request_visual_diagnostics(self, chair_id):
+            assert chair_id == 2301
+
+        def scene_geometry(self):
+            return SimpleNamespace(
+                foot_to_opening_plane_m=0.1,
+                foot_to_opening_lateral_m=0.0,
+                right_leg_raise_degrees=90.0,
+                right_knee_flexion_degrees=0.0,
+                sock_body_gravity_alignment=0.0,
+                opening_to_toe_alignment=toe_alignment,
+                left_cuff_insertion_depth_m=left_depth,
+                right_cuff_insertion_depth_m=0.025,
+                opening_center=(0.0, 0.0, 0.0),
+                opening_normal=(0.0, 0.0, 1.0),
+                opening_outward_normal=(0.0, 0.0, -1.0),
+                opening_target_normal=(0.0, 0.0, 1.0),
+                sock_body_direction=(0.0, -1.0, 0.0),
+                right_toe_position=(0.0, 0.0, -0.1),
+                left_grasp_position=(-0.04, 0.0, 0.03),
+                right_grasp_position=(0.04, 0.0, 0.03),
+            )
+
+        def visual_diagnostics(self):
+            return [{"role": "human_task_pose", "valid": True}]
+
+    environment.sock_cloth = Cloth()
+    report = environment._request_initial_pose_contract()
+
+    assert report["ok"] is expected
+    assert report["opening_to_toe_alignment"] == pytest.approx(toe_alignment)
+    assert report["left_cuff_insertion_depth_m"] == pytest.approx(left_depth)
+
+
 def test_custom_environment_starts_with_verified_bimanual_grasp(monkeypatch):
     config = load_config(Path("config/custom_player.yaml"))
     scenario = scenario_from_config(config)
@@ -245,8 +294,8 @@ def test_custom_environment_starts_with_verified_bimanual_grasp(monkeypatch):
     monkeypatch.setattr(
         environment.sock_cloth,
         "align_sock_opening_to_grasp_targets",
-        lambda: (
-            calls.append(("align_sock",))
+        lambda toe_target: (
+            calls.append(("align_sock", tuple(toe_target)))
             or setattr(environment.cloth, "sock_was_aligned_to_grippers", True)
         ),
     )
@@ -276,9 +325,12 @@ def test_custom_environment_starts_with_verified_bimanual_grasp(monkeypatch):
     assert environment.cloth.slip_detection_armed
     assert getattr(environment.cloth, "visual_foot_distance", None) is None
     assert calls == [
-        ("align_sock",),
-        ("grasp", "left", 0.04),
-        ("grasp", "right", 0.04),
+        (
+            "align_sock",
+            tuple(config["scene"]["visuals"]["task_right_toe_position"]),
+        ),
+        ("grasp", "left", config["scene"]["grasp_anchors"]["max_distance_m"]),
+        ("grasp", "right", config["scene"]["grasp_anchors"]["max_distance_m"]),
     ]
     assert all(item["attached"] for item in report["initial_grasp"])
     assert report["grasp_alignment"] is None

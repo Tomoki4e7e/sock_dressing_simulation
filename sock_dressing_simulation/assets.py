@@ -173,15 +173,56 @@ def generate_sock_obj(
     radius: float = 0.04,
     radial_segments: int = 32,
     length_segments: int = 24,
+    bend_start: float = 0.0,
+    bend_length: float = 0.0,
+    bend_degrees: float = 0.0,
 ) -> Tuple[int, int]:
-    if length <= 0 or radius <= 0 or radial_segments < 3 or length_segments < 1:
+    if (
+        length <= 0
+        or radius <= 0
+        or radial_segments < 3
+        or length_segments < 1
+        or bend_start < 0
+        or bend_length < 0
+        or bend_degrees < 0
+        or bend_degrees > 180
+        or bend_start + bend_length > length
+        or (bend_degrees > 0 and bend_length <= 0)
+    ):
         raise ValueError("invalid tubular sock dimensions")
     vertices = []
+    total_angle = math.radians(bend_degrees)
+    bend_radius = bend_length / total_angle if total_angle > 0 else 0.0
     for row in range(length_segments + 1):
-        z = length * row / length_segments
+        axial = length * row / length_segments
+        after_start = max(0.0, axial - bend_start)
+        bent_distance = min(after_start, bend_length)
+        fraction = bent_distance / bend_length if bend_length > 0 else 0.0
+        bend_angle = total_angle * fraction
+        center_y = (
+            -bend_radius * (1.0 - math.cos(bend_angle))
+            if total_angle > 0
+            else 0.0
+        )
+        center_z = (
+            bend_start + bend_radius * math.sin(bend_angle)
+            if axial > bend_start and total_angle > 0
+            else axial
+        )
+        if after_start > bend_length and total_angle > 0:
+            remainder = after_start - bend_length
+            center_y -= remainder * math.sin(total_angle)
+            center_z += remainder * math.cos(total_angle)
         for column in range(radial_segments):
             angle = 2.0 * math.pi * column / radial_segments
-            vertices.append((radius * math.cos(angle), radius * math.sin(angle), z))
+            radial = radius * math.sin(angle)
+            vertices.append(
+                (
+                    radius * math.cos(angle),
+                    center_y + radial * math.cos(bend_angle),
+                    center_z + radial * math.sin(bend_angle),
+                )
+            )
     faces = []
     for row in range(length_segments):
         for column in range(radial_segments):

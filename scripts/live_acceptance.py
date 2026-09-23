@@ -88,20 +88,29 @@ def main() -> int:
             if body_displacement.size
             else None
         )
+        initial_contract = application["initial_pose_contract"]
         left_position = np.asarray(
-            application["initial_pose_contract"]["left_grasp_position"], dtype=float
+            initial_contract["left_grasp_position"], dtype=float
         )
         right_position = np.asarray(
-            application["initial_pose_contract"]["right_grasp_position"], dtype=float
+            initial_contract["right_grasp_position"], dtype=float
         )
         opening_position = np.asarray(
-            application["initial_pose_contract"]["opening_center"], dtype=float
+            initial_contract["opening_center"], dtype=float
         )
         toe_position = np.asarray(
-            application["initial_pose_contract"]["right_toe_position"], dtype=float
+            initial_contract["right_toe_position"], dtype=float
         )
-        insertion_direction = toe_position - opening_position
+        insertion_direction = np.asarray(
+            initial_contract["opening_outward_normal"], dtype=float
+        )
         insertion_direction /= np.linalg.norm(insertion_direction)
+        toe_direction = toe_position - opening_position
+        toe_direction /= np.linalg.norm(toe_direction)
+        if float(np.dot(insertion_direction, toe_direction)) < float(
+            initial_contract["opening_to_toe_alignment_min"]
+        ):
+            raise RuntimeError("sock opening is not oriented toward the right toe")
         insertion_trace = []
         for index in range(args.insertion_steps):
             progress = float(index + 1) / float(args.insertion_steps)
@@ -250,7 +259,13 @@ def main() -> int:
         pin_limit = int(configuration["maximum_grasp_particles_per_side"])
         localized_pins = all(
             len(state["particle_indices"]) <= pin_limit for state in held
-        ) and int(configuration["non_opening_grasp_particle_count"]) == 0
+        ) and int(configuration["non_cuff_grasp_particle_count"]) == 0
+        cuff_insertion_ok = (
+            float(initial_contract["left_cuff_insertion_depth_m"])
+            >= float(initial_contract["minimum_cuff_insertion_depth_m"])
+            and float(initial_contract["right_cuff_insertion_depth_m"])
+            >= float(initial_contract["minimum_cuff_insertion_depth_m"])
+        )
 
         displacement = (
             np.linalg.norm(final - initial, axis=1)
@@ -269,6 +284,7 @@ def main() -> int:
                 and float(displacement.max()) > 0
                 and all(state["attached"] for state in held)
                 and localized_pins
+                and cuff_insertion_ok
                 and maximum_unpinned_downward_displacement is not None
                 and maximum_unpinned_downward_displacement > 0.001
                 and bool(foot_contact_ids)
@@ -287,7 +303,8 @@ def main() -> int:
             "maximum_particle_speed_m_s": float(speed.max()) if speed.size else None,
             "application": application,
             "held_after_settle": held,
-            "localized_opening_pins": localized_pins,
+            "localized_cuff_pins": localized_pins,
+            "cuff_insertion_ok": cuff_insertion_ok,
             "maximum_unpinned_displacement_m": maximum_unpinned_displacement,
             "maximum_unpinned_downward_displacement_m": (
                 maximum_unpinned_downward_displacement

@@ -745,3 +745,39 @@ mask面積・重心、angle/torque範囲、頭部リンクmountをJSONへ記録�
   - 学習可能判定: pass（errorなし、全ゼロtorque問題を解消）
   - 残差warning: simは50 frame（実データ中央値266）、sock mask面積は実データの
     `0.170倍`
+
+## カフ内側把持と完全自律着衣試験（2026-09-23）
+
+初期靴下整列を、靴下本体を重力方向へ向ける方式から、設定した右足先へ開口外向き
+法線を向ける方式へ変更した。グリッパー先端を開口面より`0.03 m`内側へ置き、
+開口リム左右各2粒子を先端からの局所offsetで保持する。自由な靴下本体が下へ垂れる
+rest bendもmeshへ追加した。scene geometryと初期pose contractでは、実測した
+開口―つま先alignment、左右のカフ挿入深さ、足先距離をfail-closed検証する。
+
+検証結果:
+
+- Python regression: `65 passed`
+- Development Player再build: pass
+- 初期graphics smoke:
+  `artifacts/phase4/inside-cuff-smoke-bent-rest/data_sock_sim_smoke/train/phase4_20260923T085321Z`
+  - 開口は下向きではなくつま先正面を向き、グリッパー間で開いていることを
+    `camera_right/0.png`で確認
+- 実世界データ学習済みSAMDAMSARNN、seed 0、50 step完全自律試験:
+  `artifacts/phase4/inside-cuff-real-only-autonomous/data_sock_sim_smoke/train/phase4_20260923T085622Z`
+  - reference action: なし、Cartesian projection: `0`
+  - checkpoint SHA-256:
+    `135102bd9e35b8daf71937f1a13a19c17880bf38758af83e9fe72ab7444ee161`
+  - 初期開口―つま先alignment: `0.993809`（下限`0.9`）
+  - 左右カフ挿入深さ: `0.03 m`、足先距離: `0.100000 m`
+  - 両把持・足接触・トルク取得: pass
+  - coverage gain: `4.97e-8`、最終stretch proxy: `2.453670`
+  - 自律モデルは足先へ挿入できず、stretch上限`1.5`も超えたため着衣成功判定はfail
+  - 動画: `demo.mp4`（1280x960、5 fps、50 frame、10秒）
+- live acceptance:
+  `artifacts/unity/live-acceptance-inside-cuff-final.json`
+  - カフ方向・挿入深さ契約は通過したが、pull時stretch `3.028951`および
+    slip未発生のため全体はfail-closed
+- domain audit:
+  `artifacts/phase4/inside-cuff-real-only-autonomous/domain-audit.json`
+  - errorなし、status `warn`
+  - 残差: 50 frame（実中央値266）、sock mask重心距離`0.443`

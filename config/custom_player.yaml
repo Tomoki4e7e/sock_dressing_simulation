@@ -78,6 +78,8 @@ scene:
     foot_to_sock_m: 0.10
     foot_to_sock_tolerance_m: 0.02
     foot_lateral_tolerance_m: 0.035
+    opening_to_toe_alignment_min: 0.90
+    minimum_cuff_insertion_depth_m: 0.015
     # The body is allowed to rotate and fold away from a prescribed axis.
     sock_body_gravity_alignment_min: -1.0
     right_leg_raise_degrees: 90.0
@@ -113,11 +115,16 @@ obi:
     collision_margin_m: 0.002
     friction: 0.5
     grasp_linear_compliance: 0.00005
-    # Effectively disable the Obi pin bend/twist term. Position pins still
-    # hold two opening-edge particles per gripper while the cloth rotates freely.
+    # Lip and inner-band position pins define the cuff plane; leave particle
+    # bend/twist unconstrained so the fabric can drape without artificial strain.
     grasp_rotational_compliance: 1000000.0
     grasp_break_threshold: 20.0
+    # Two lip particles per side are held at a 3 cm local offset from the
+    # inserted gripper tip; the rest of the cuff and sock remain dynamic.
     maximum_grasp_particles_per_side: 2
+    # Pin an inner cuff ring so the physical gripper tips sit inside the sock
+    # while the free opening rim remains in front of them toward the toe.
+    cuff_insertion_depth_m: 0.03
     slip_constraint_error_m: 0.20
     slip_opening_span_m: 0.11
     slip_consecutive_steps: 2
@@ -162,6 +169,11 @@ scenario:
   sock:
     position: [-0.14, 0.53, 0.68]
     rotation: [0.0, 0.0, 0.0]
+    # Rest-shape the free body downward after a straight 3 cm cuff. This keeps
+    # the opening toe-facing without stretching a straight tube into a 90° bend.
+    rest_bend_start_m: 0.03
+    rest_bend_length_m: 0.18
+    rest_bend_degrees: 90.0
   foot:
     ik_index: null
     position: [0.0, 0.93, 0.68]

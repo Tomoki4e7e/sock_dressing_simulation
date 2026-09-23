@@ -292,6 +292,7 @@ class SockDressingEnv:
             maximum_particles_per_side=int(
                 expected["maximum_grasp_particles_per_side"]
             ),
+            cuff_insertion_depth_m=float(expected["cuff_insertion_depth_m"]),
         )
         self.sock_cloth.request_configuration()
         self.sock_cloth.request_registered_colliders()
@@ -808,7 +809,14 @@ class SockDressingEnv:
                             f"{grasp_alignment}"
                         )
                 if grasp_settings.get("align_sock_to_grippers", False):
-                    self.sock_cloth.align_sock_opening_to_grasp_targets()
+                    toe_target = (
+                        self.config["scene"]
+                        .get("visuals", {})
+                        .get("task_right_toe_position", scenario.foot_position)
+                    )
+                    self.sock_cloth.align_sock_opening_to_grasp_targets(
+                        toe_target
+                    )
                     self._env.step()
                 elif not alignment_settings.get("enabled", False):
                     self.sock_cloth.align_grasp_targets_to_opening()
@@ -1160,6 +1168,12 @@ class SockDressingEnv:
         minimum_gravity_alignment = float(
             settings.get("sock_body_gravity_alignment_min", 0.8)
         )
+        minimum_toe_alignment = float(
+            settings.get("opening_to_toe_alignment_min", 0.9)
+        )
+        minimum_cuff_insertion = float(
+            settings.get("minimum_cuff_insertion_depth_m", 0.0)
+        )
         distance_error = abs(geometry.foot_to_opening_plane_m - wanted_distance)
         angle_error = abs(geometry.right_leg_raise_degrees - wanted_angle)
         visual_entries = self.sock_cloth.visual_diagnostics()
@@ -1180,6 +1194,11 @@ class SockDressingEnv:
                 and geometry.right_knee_flexion_degrees <= maximum_knee_flexion
                 and geometry.sock_body_gravity_alignment
                 >= minimum_gravity_alignment
+                and geometry.opening_to_toe_alignment >= minimum_toe_alignment
+                and geometry.left_cuff_insertion_depth_m
+                >= minimum_cuff_insertion
+                and geometry.right_cuff_insertion_depth_m
+                >= minimum_cuff_insertion
                 and visual_ok
             ),
             "foot_to_sock_m": geometry.foot_to_opening_plane_m,
@@ -1194,7 +1213,13 @@ class SockDressingEnv:
             "right_knee_flexion_max_degrees": maximum_knee_flexion,
             "opening_center": list(geometry.opening_center),
             "opening_normal": list(geometry.opening_normal),
+            "opening_outward_normal": list(geometry.opening_outward_normal),
             "opening_target_normal": list(geometry.opening_target_normal),
+            "opening_to_toe_alignment": geometry.opening_to_toe_alignment,
+            "opening_to_toe_alignment_min": minimum_toe_alignment,
+            "left_cuff_insertion_depth_m": geometry.left_cuff_insertion_depth_m,
+            "right_cuff_insertion_depth_m": geometry.right_cuff_insertion_depth_m,
+            "minimum_cuff_insertion_depth_m": minimum_cuff_insertion,
             "sock_body_direction": list(geometry.sock_body_direction),
             "sock_body_gravity_alignment": geometry.sock_body_gravity_alignment,
             "sock_body_gravity_alignment_min": minimum_gravity_alignment,

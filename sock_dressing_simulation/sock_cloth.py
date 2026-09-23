@@ -72,6 +72,7 @@ class GraspState:
 class SceneGeometry:
     opening_center: Tuple[float, float, float]
     opening_normal: Tuple[float, float, float]
+    opening_outward_normal: Tuple[float, float, float]
     sock_body_direction: Tuple[float, float, float]
     sock_body_gravity_alignment: float
     right_toe_position: Tuple[float, float, float]
@@ -83,6 +84,9 @@ class SceneGeometry:
     right_grasp_position: Tuple[float, float, float]
     left_opening_edge: Tuple[float, float, float]
     right_opening_edge: Tuple[float, float, float]
+    opening_to_toe_alignment: float
+    left_cuff_insertion_depth_m: float
+    right_cuff_insertion_depth_m: float
     left_grasp_parent: str = ""
     right_grasp_parent: str = ""
     left_grasp_local_offset: Tuple[float, float, float] = (0.0, 0.0, 0.0)
@@ -97,6 +101,7 @@ class SceneGeometry:
         vector_names = (
             "opening_center",
             "opening_normal",
+            "opening_outward_normal",
             "sock_body_direction",
             "right_toe_position",
             "left_grasp_position",
@@ -110,6 +115,7 @@ class SceneGeometry:
         vectors = {}
         for name in vector_names:
             fallback_name = {
+                "opening_outward_normal": "opening_normal",
                 "left_opening_edge": "left_grasp_position",
                 "right_opening_edge": "right_grasp_position",
                 "opening_target_normal": "opening_normal",
@@ -128,6 +134,9 @@ class SceneGeometry:
         angle = float(value["right_leg_raise_degrees"])
         knee_flexion = float(value.get("right_knee_flexion_degrees", 0.0))
         gravity_alignment = float(value["sock_body_gravity_alignment"])
+        toe_alignment = float(value.get("opening_to_toe_alignment", -1.0))
+        left_insertion = float(value.get("left_cuff_insertion_depth_m", 0.0))
+        right_insertion = float(value.get("right_cuff_insertion_depth_m", 0.0))
         opening_span = float(
             value.get(
                 "opening_span_m",
@@ -149,6 +158,13 @@ class SceneGeometry:
             or not np.isfinite(gravity_alignment)
             or gravity_alignment < -1.0
             or gravity_alignment > 1.0
+            or not np.isfinite(toe_alignment)
+            or toe_alignment < -1.0
+            or toe_alignment > 1.0
+            or not np.isfinite(left_insertion)
+            or left_insertion < 0
+            or not np.isfinite(right_insertion)
+            or right_insertion < 0
             or not np.isfinite(opening_span)
             or opening_span < 0
         ):
@@ -159,6 +175,9 @@ class SceneGeometry:
             right_leg_raise_degrees=angle,
             right_knee_flexion_degrees=knee_flexion,
             sock_body_gravity_alignment=gravity_alignment,
+            opening_to_toe_alignment=toe_alignment,
+            left_cuff_insertion_depth_m=left_insertion,
+            right_cuff_insertion_depth_m=right_insertion,
             left_grasp_parent=str(value.get("left_grasp_parent", "")),
             right_grasp_parent=str(value.get("right_grasp_parent", "")),
             opening_span_m=opening_span,
@@ -305,6 +324,7 @@ class SockClothAttr:
         slip_opening_span_m: float,
         slip_consecutive_steps: int,
         maximum_particles_per_side: int,
+        cuff_insertion_depth_m: float,
     ) -> None:
         values = np.asarray(
             [
@@ -313,6 +333,7 @@ class SockClothAttr:
                 break_threshold,
                 slip_constraint_error_m,
                 slip_opening_span_m,
+                cuff_insertion_depth_m,
             ],
             dtype=float,
         )
@@ -323,6 +344,7 @@ class SockClothAttr:
             or break_threshold <= 0
             or slip_constraint_error_m <= 0
             or slip_opening_span_m <= 0
+            or cuff_insertion_depth_m <= 0
             or int(slip_consecutive_steps) < 1
             or int(maximum_particles_per_side) < 1
         ):
@@ -336,6 +358,7 @@ class SockClothAttr:
             float(slip_opening_span_m),
             int(slip_consecutive_steps),
             int(maximum_particles_per_side),
+            float(cuff_insertion_depth_m),
         )
 
     def set_grasp_targets(self, left_id: int, right_id: int) -> None:
@@ -350,8 +373,13 @@ class SockClothAttr:
             raise ValueError("maximum grasp target span must be finite and positive")
         self._send_data("ClampGraspTargetSpan", span)
 
-    def align_sock_opening_to_grasp_targets(self) -> None:
-        self._send_data("AlignSockOpeningToGraspTargets")
+    def align_sock_opening_to_grasp_targets(
+        self, toe_target: Sequence[float]
+    ) -> None:
+        target = np.asarray(toe_target, dtype=float)
+        if target.shape != (3,) or not np.all(np.isfinite(target)):
+            raise ValueError("right toe target must be a finite 3-vector")
+        self._send_data("AlignSockOpeningToGraspTargets", *target.tolist())
 
     def set_grasp_target_position(
         self, side: str, position: Sequence[float]

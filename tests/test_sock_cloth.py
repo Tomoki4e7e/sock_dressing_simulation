@@ -107,6 +107,13 @@ def test_sock_geometry_reports_particle_derived_hanging_direction():
     assert "normal += Vector3.Cross(current, next);" in source
     assert '"opening_target_center", openingTargetCenter' in source
     assert '"opening_target_normal", openingTargetNormal' in source
+    assert '"opening_outward_normal", -openingNormal' in source
+    assert '"opening_to_toe_alignment", openingToToeAlignment' in source
+    assert "targetMidpoint - toeTarget" in source
+    assert "Physics.gravity," not in source[
+        source.index("public void AlignSockOpeningToGraspTargets"):
+        source.index("public void SetGraspTargetPosition")
+    ]
     assert "Vector3 footOffset = toePosition - openingTargetCenter;" in source
     assert "Vector3.Dot(footOffset, openingTargetNormal)" in source
     assert '"sock_body_direction", sockBodyDirection' in source
@@ -116,19 +123,23 @@ def test_sock_geometry_reports_particle_derived_hanging_direction():
     assert "Physics.IgnoreCollision(robotCollider, humanCollider, true)" in source
 
 
-def test_grasp_only_pins_small_opening_patches_and_leaves_body_dynamic():
+def test_grasp_pins_small_inner_cuff_patches_and_leaves_rim_dynamic():
     source = Path(
         "RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs"
     ).read_text()
 
     assert ".Take(maximumGraspParticlesPerSide)" in source
     assert "graspRotationalCompliance" in source
-    assert '"non_opening_grasp_particle_count"' in source
+    assert '"non_cuff_grasp_particle_count"' in source
+    assert "int[] selected = openingParticles" in source
+    assert "targetMidpoint - toeTarget" in source
+    assert "minimum + cuffInsertionDepth" in source
+    assert '"cuff_insertion_depth_m", cuffInsertionDepth' in source
     assert "cloth.tetherConstraintsEnabled = false;" in source
     assert "cloth.volumeConstraintsEnabled = false;" in source
     assert "solver.invMasses[solverIndex] = 1.0f / particleMass;" in source
-    assert "leftOpeningEdge = GraspParticleCenter(grasps[\"left\"]);" in source
-    assert "rightOpeningEdge = GraspParticleCenter(grasps[\"right\"]);" in source
+    assert "leftOpeningEdge = GraspParticleCenter(grasps[\"left\"]);" not in source
+    assert "rightOpeningEdge = GraspParticleCenter(grasps[\"right\"]);" not in source
     assert '"opening_span_m", openingSpan' in source
     assert "Release(movingSide, \"over_tension\")" not in source
 
@@ -242,11 +253,12 @@ def test_sock_cloth_commands_match_unity_contract():
         slip_opening_span_m=0.11,
         slip_consecutive_steps=2,
         maximum_particles_per_side=2,
+        cuff_insertion_depth_m=0.03,
     )
     cloth.set_grasp_targets(2201, 2202)
     cloth.align_grasp_targets_to_opening()
     cloth.clamp_grasp_target_span(0.115)
-    cloth.align_sock_opening_to_grasp_targets()
+    cloth.align_sock_opening_to_grasp_targets([0.0, 0.5, 0.6])
     cloth.ignore_robot_human_rigid_collisions(1100)
     cloth.configure_right_leg_colliders(2000)
     cloth.translate_human_and_ik([0.1, 0.0, -0.2])
@@ -289,11 +301,22 @@ def test_sock_cloth_commands_match_unity_contract():
             8,
             20,
         ),
-        (1200, "ConfigureGrasp", 0.0002, 1000000.0, 20.0, 0.20, 0.11, 2, 2),
+        (
+            1200,
+            "ConfigureGrasp",
+            0.0002,
+            1000000.0,
+            20.0,
+            0.20,
+            0.11,
+            2,
+            2,
+            0.03,
+        ),
         (1200, "SetGraspTargets", 2201, 2202),
         (1200, "AlignGraspTargetsToOpening"),
         (1200, "ClampGraspTargetSpan", 0.115),
-        (1200, "AlignSockOpeningToGraspTargets"),
+        (1200, "AlignSockOpeningToGraspTargets", 0.0, 0.5, 0.6),
         (1200, "IgnoreRobotHumanRigidCollisions", 1100),
         (1200, "ConfigureRightLegColliders", 2000),
         (1200, "TranslateHumanAndIK", 0.1, 0.0, -0.2),
@@ -395,6 +418,10 @@ def test_scene_geometry_is_typed_and_fail_closed():
             "valid": True,
             "opening_center": [0, 0, 0],
             "opening_normal": [1, 0, 0],
+            "opening_outward_normal": [-1, 0, 0],
+            "opening_to_toe_alignment": 1.0,
+            "left_cuff_insertion_depth_m": 0.03,
+            "right_cuff_insertion_depth_m": 0.03,
             "sock_body_direction": [0, -1, 0],
             "sock_body_gravity_alignment": 0.95,
             "right_toe_position": [-0.1, 0, 0],
@@ -407,6 +434,9 @@ def test_scene_geometry_is_typed_and_fail_closed():
     )
     assert geometry.foot_to_opening_plane_m == pytest.approx(0.1)
     assert geometry.opening_target_normal == (1.0, 0.0, 0.0)
+    assert geometry.opening_outward_normal == (-1.0, 0.0, 0.0)
+    assert geometry.opening_to_toe_alignment == pytest.approx(1.0)
+    assert geometry.left_cuff_insertion_depth_m == pytest.approx(0.03)
     assert geometry.sock_body_direction == (0.0, -1.0, 0.0)
     assert geometry.sock_body_gravity_alignment == pytest.approx(0.95)
     assert geometry.opening_span_m == pytest.approx(0.08)
@@ -425,6 +455,7 @@ def test_grasp_configuration_rejects_invalid_thresholds():
             slip_opening_span_m=0.085,
             slip_consecutive_steps=3,
             maximum_particles_per_side=2,
+            cuff_insertion_depth_m=0.03,
         )
 
 

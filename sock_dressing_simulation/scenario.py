@@ -25,6 +25,9 @@ class SockMesh:
     radius_m: float
     radial_segments: int
     length_segments: int
+    rest_bend_start_m: float = 0.0
+    rest_bend_length_m: float = 0.0
+    rest_bend_degrees: float = 0.0
 
     def validate(self) -> None:
         if self.length_m <= 0 or self.radius_m <= 0:
@@ -40,6 +43,15 @@ class SockMesh:
             raise ValueError("sock circumferential stretch QA limit exceeds 1.5")
         if self.radial_segments < 3 or self.length_segments < 1:
             raise ValueError("sock mesh segment counts are invalid")
+        if (
+            self.rest_bend_start_m < 0
+            or self.rest_bend_length_m < 0
+            or self.rest_bend_degrees < 0
+            or self.rest_bend_degrees > 180
+            or self.rest_bend_start_m + self.rest_bend_length_m > self.length_m
+            or (self.rest_bend_degrees > 0 and self.rest_bend_length_m <= 0)
+        ):
+            raise ValueError("sock rest bend is invalid")
 
 
 @dataclass(frozen=True)
@@ -159,6 +171,9 @@ def scenario_from_config(
         ),
         radial_segments=int(sock.get("radial_segments", 32)),
         length_segments=int(sock.get("length_segments", 24)),
+        rest_bend_start_m=float(sock.get("rest_bend_start_m", 0.0)),
+        rest_bend_length_m=float(sock.get("rest_bend_length_m", 0.0)),
+        rest_bend_degrees=float(sock.get("rest_bend_degrees", 0.0)),
     )
     mesh.validate()
 
