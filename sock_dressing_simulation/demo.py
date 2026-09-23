@@ -557,17 +557,6 @@ def _grasp_frame_report(observation: Mapping, config: Mapping) -> dict:
         "target_to_edge_distances_m": target_to_edge,
         "maximum_edge_error_m": max(errors.values()) if errors else None,
         "opening_span_m": opening_span,
-        "opening_area_m2": geometry.get("opening_area_m2"),
-        "opening_convex_hull_area_m2": geometry.get(
-            "opening_convex_hull_area_m2"
-        ),
-        "opening_convexity_ratio": geometry.get("opening_convexity_ratio"),
-        "opening_major_diameter_m": geometry.get(
-            "opening_major_diameter_m"
-        ),
-        "opening_minor_diameter_m": geometry.get(
-            "opening_minor_diameter_m"
-        ),
         "threshold_m": maximum_error,
         "ok": (
             available

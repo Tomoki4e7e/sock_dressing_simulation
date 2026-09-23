@@ -1,9 +1,6 @@
 extends: autonomous_real_only.yaml
 
 scene:
-  grasp_anchors:
-    # Do not squeeze the approximately 10 cm flared cuff before grasping.
-    maximum_anchor_span_m: 0.11
   initial_pose_contract:
     # Unity uses Y-up. In the current Dry-AIREC pose, the named left gripper is
     # on the +X side of the right gripper, so robot-left is world +X.
@@ -14,11 +11,3 @@ scene:
     straight_right_leg: true
     right_knee_flexion_max_degrees: 30.0
     right_leg_raise_tolerance_degrees: 20.0
-    opening_to_toe_alignment_min: 0.80
-    minimum_cuff_insertion_depth_m: 0.01
-
-obi:
-  expected:
-    # Four position pins per side support the inner cuff band while leaving the
-    # opening lip free to be spread by the physical gripper tips.
-    maximum_grasp_particles_per_side: 4

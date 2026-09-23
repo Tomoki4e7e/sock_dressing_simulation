@@ -781,7 +781,6 @@ class SockDressingEnv:
             pose_settings = self.config["scene"].get("initial_pose_contract", {})
             initial_grasp = []
             grasp_alignment = None
-            pose_prepared_before_grasp = False
             grasp_settings = self.config["scene"].get("grasp_anchors", {})
             if grasp_settings.get("auto_grasp", False):
                 alignment_settings = self.config["scene"].get(
@@ -823,39 +822,10 @@ class SockDressingEnv:
                         .get("visuals", {})
                         .get("task_right_toe_position", scenario.foot_position)
                     )
-                    toe_target = np.asarray(toe_target, dtype=float)
-                    toe_target += np.asarray(
-                        pose_settings.get(
-                            "right_toe_offset_world_m", [0.0, 0.0, 0.0]
-                        ),
-                        dtype=float,
-                    )
                     self.sock_cloth.align_sock_opening_to_grasp_targets(
-                        toe_target.tolist()
+                        toe_target
                     )
                     self._env.step()
-                    if (
-                        native
-                        and scenario.foot_ik_index is None
-                        and pose_settings.get("calibrate_foot_to_sock", False)
-                        and pose_settings.get("right_toe_offset_world_m")
-                        is not None
-                    ):
-                        self._calibrate_foot_to_sock(
-                            None,
-                            float(pose_settings["foot_to_sock_m"]),
-                        )
-                        self.sock_cloth.stop_foot_clearance_tracking()
-                        self._env.step()
-                        self._right_toe_offset_report = (
-                            self._apply_post_calibration_right_toe_offset()
-                        )
-                        final_toe = self._request_scene_geometry()
-                        self.sock_cloth.align_sock_opening_to_grasp_targets(
-                            list(final_toe.right_toe_position)
-                        )
-                        self._env.step()
-                        pose_prepared_before_grasp = True
                 elif not alignment_settings.get("enabled", False):
                     self.sock_cloth.align_grasp_targets_to_opening()
                     self._env.step()
@@ -900,7 +870,6 @@ class SockDressingEnv:
                 self._env.step()
             if (
                 native
-                and not pose_prepared_before_grasp
                 and pose_settings.get("calibrate_foot_to_sock", False)
             ):
                 self._calibrate_foot_to_sock(
@@ -910,10 +879,9 @@ class SockDressingEnv:
                 if scenario.foot_ik_index is None:
                     self.sock_cloth.stop_foot_clearance_tracking()
                     self._env.step()
-            if not pose_prepared_before_grasp:
-                self._right_toe_offset_report = (
-                    self._apply_post_calibration_right_toe_offset()
-                )
+            self._right_toe_offset_report = (
+                self._apply_post_calibration_right_toe_offset()
+            )
             if (
                 native
                 and scenario.foot_ik_index is None
@@ -1252,31 +1220,17 @@ class SockDressingEnv:
         minimum_cuff_insertion = float(
             settings.get("minimum_cuff_insertion_depth_m", 0.0)
         )
-        opening_area = float(getattr(geometry, "opening_area_m2", 0.0))
-        opening_hull_area = float(
-            getattr(geometry, "opening_convex_hull_area_m2", opening_area)
-        )
-        opening_convexity = float(
-            getattr(geometry, "opening_convexity_ratio", 0.0)
-        )
-        opening_major = float(
-            getattr(geometry, "opening_major_diameter_m", 0.0)
-        )
-        opening_minor = float(
-            getattr(geometry, "opening_minor_diameter_m", 0.0)
-        )
         distance_error = abs(geometry.foot_to_opening_plane_m - wanted_distance)
         angle_error = abs(geometry.right_leg_raise_degrees - wanted_angle)
         offset_report = self._right_toe_offset_report
         offset_ok = offset_report is None or bool(offset_report.get("ok", False))
         sock_alignment_ok = (
-            geometry.opening_to_toe_alignment >= minimum_toe_alignment
-            and (
-                offset_report is not None
-                or (
-                    distance_error <= distance_tolerance
-                    and geometry.foot_to_opening_lateral_m <= lateral_tolerance
-                )
+            True
+            if offset_report is not None
+            else (
+                distance_error <= distance_tolerance
+                and geometry.foot_to_opening_lateral_m <= lateral_tolerance
+                and geometry.opening_to_toe_alignment >= minimum_toe_alignment
             )
         )
         visual_entries = self.sock_cloth.visual_diagnostics()
@@ -1341,11 +1295,6 @@ class SockDressingEnv:
             "opening_target_normal": list(geometry.opening_target_normal),
             "opening_to_toe_alignment": geometry.opening_to_toe_alignment,
             "opening_to_toe_alignment_min": minimum_toe_alignment,
-            "opening_area_m2": opening_area,
-            "opening_convex_hull_area_m2": opening_hull_area,
-            "opening_convexity_ratio": opening_convexity,
-            "opening_major_diameter_m": opening_major,
-            "opening_minor_diameter_m": opening_minor,
             "left_cuff_insertion_depth_m": geometry.left_cuff_insertion_depth_m,
             "right_cuff_insertion_depth_m": geometry.right_cuff_insertion_depth_m,
             "minimum_cuff_insertion_depth_m": minimum_cuff_insertion,

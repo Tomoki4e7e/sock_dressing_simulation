@@ -93,11 +93,6 @@ class SceneGeometry:
     right_grasp_local_offset: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     opening_target_normal: Tuple[float, float, float] = (0.0, 0.0, 1.0)
     opening_span_m: float = 0.0
-    opening_area_m2: float = 0.0
-    opening_convex_hull_area_m2: float = 0.0
-    opening_convexity_ratio: float = 0.0
-    opening_major_diameter_m: float = 0.0
-    opening_minor_diameter_m: float = 0.0
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "SceneGeometry":
@@ -151,22 +146,6 @@ class SceneGeometry:
                 ),
             )
         )
-        opening_area = float(value.get("opening_area_m2", 0.0))
-        opening_hull_area = float(
-            value.get("opening_convex_hull_area_m2", opening_area)
-        )
-        opening_convexity = float(
-            value.get(
-                "opening_convexity_ratio",
-                1.0 if opening_hull_area > 0 else 0.0,
-            )
-        )
-        opening_major = float(
-            value.get("opening_major_diameter_m", opening_span)
-        )
-        opening_minor = float(
-            value.get("opening_minor_diameter_m", 0.0)
-        )
         if (
             not np.isfinite(distance)
             or distance < 0
@@ -188,16 +167,6 @@ class SceneGeometry:
             or right_insertion < 0
             or not np.isfinite(opening_span)
             or opening_span < 0
-            or not np.isfinite(opening_area)
-            or opening_area < 0
-            or not np.isfinite(opening_hull_area)
-            or opening_hull_area < 0
-            or not np.isfinite(opening_convexity)
-            or not 0 <= opening_convexity <= 1
-            or not np.isfinite(opening_major)
-            or opening_major < 0
-            or not np.isfinite(opening_minor)
-            or opening_minor < 0
         ):
             raise ValueError("scene distances and angles must be finite")
         return cls(
@@ -212,11 +181,6 @@ class SceneGeometry:
             left_grasp_parent=str(value.get("left_grasp_parent", "")),
             right_grasp_parent=str(value.get("right_grasp_parent", "")),
             opening_span_m=opening_span,
-            opening_area_m2=opening_area,
-            opening_convex_hull_area_m2=opening_hull_area,
-            opening_convexity_ratio=opening_convexity,
-            opening_major_diameter_m=opening_major,
-            opening_minor_diameter_m=opening_minor,
             **vectors,
         )
 

@@ -1,5 +1,0 @@
-extends: autonomous_real_only_toe_left_down.yaml
-
-obi:
-  expected:
-    stretching_scale: 0.85

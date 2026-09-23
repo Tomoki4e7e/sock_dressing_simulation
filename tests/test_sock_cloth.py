@@ -139,12 +139,10 @@ def test_grasp_pins_small_inner_cuff_patches_and_leaves_rim_dynamic():
     assert ".Take(maximumGraspParticlesPerSide)" in source
     assert "graspRotationalCompliance" in source
     assert '"non_cuff_grasp_particle_count"' in source
-    assert "IList<int> graspCandidates = cuffGraspParticles.Count > 0" in source
-    assert "int[] selected = graspCandidates" in source
+    assert "int[] selected = openingParticles" in source
     assert "targetMidpoint - toeTarget" in source
     assert "minimum + cuffInsertionDepth" in source
     assert '"cuff_insertion_depth_m", cuffInsertionDepth' in source
-    assert "grasp.target.position - OpeningCenter()" in source
     assert "cloth.tetherConstraintsEnabled = false;" in source
     assert "cloth.volumeConstraintsEnabled = false;" in source
     assert "solver.invMasses[solverIndex] = 1.0f / particleMass;" in source
@@ -450,11 +448,6 @@ def test_scene_geometry_is_typed_and_fail_closed():
             "right_leg_raise_degrees": 90,
             "left_grasp_position": [0, -0.04, 0],
             "right_grasp_position": [0, 0.04, 0],
-            "opening_area_m2": 0.0048,
-            "opening_convex_hull_area_m2": 0.0050,
-            "opening_convexity_ratio": 0.96,
-            "opening_major_diameter_m": 0.09,
-            "opening_minor_diameter_m": 0.07,
         }
     )
     assert geometry.foot_to_opening_plane_m == pytest.approx(0.1)
@@ -465,10 +458,6 @@ def test_scene_geometry_is_typed_and_fail_closed():
     assert geometry.sock_body_direction == (0.0, -1.0, 0.0)
     assert geometry.sock_body_gravity_alignment == pytest.approx(0.95)
     assert geometry.opening_span_m == pytest.approx(0.08)
-    assert geometry.opening_area_m2 == pytest.approx(0.0048)
-    assert geometry.opening_convexity_ratio == pytest.approx(0.96)
-    assert geometry.opening_major_diameter_m == pytest.approx(0.09)
-    assert geometry.opening_minor_diameter_m == pytest.approx(0.07)
     with pytest.raises(ValueError, match="valid"):
         SceneGeometry.from_mapping({"valid": False})
 
