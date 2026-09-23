@@ -1,0 +1,5 @@
+extends: toe_left_down_convex_scale_085.yaml
+
+obi:
+  expected:
+    stretch_compliance: 0.0001

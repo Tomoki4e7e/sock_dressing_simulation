@@ -97,6 +97,7 @@ def run_demo(
     coverage_by_frame = []
     grasp_quality_by_frame = []
     foot_contact_ids_by_frame = []
+    rigid_collision_qa_by_frame = []
     video_path = episode / "demo.mp4"
     configured_prompts = settings.get("prompts", {})
     if not sock_points:
@@ -304,6 +305,12 @@ def run_demo(
                     )
                     grasp_report = _grasp_frame_report(observation, config)
                     grasp_quality_by_frame.append(grasp_report)
+                    rigid_qa = dict(
+                        observation.get("diagnostics", {}).get(
+                            "robot_human_rigid_collision_qa", {}
+                        )
+                    )
+                    rigid_collision_qa_by_frame.append(rigid_qa)
                     foot_contact_ids_by_frame.append(
                         sorted(
                             {
@@ -347,11 +354,28 @@ def run_demo(
                     frames += 1
                     if (
                         config["rcareworld"].get("profile") == "custom_player"
+                        and bool(
+                            settings.get("abort_on_grasp_qa_failure", True)
+                        )
                         and not grasp_report["ok"]
                     ):
                         raise RuntimeError(
                             "continuous bimanual grasp failed: "
                             + json.dumps(grasp_report, sort_keys=True)
+                        )
+                    maximum_penetration = float(
+                        config.get("dressing_player", {}).get(
+                            "maximum_robot_human_penetration_m", float("inf")
+                        )
+                    )
+                    if (
+                        int(rigid_qa.get("ignored_pair_count", 0)) > 0
+                        or float(rigid_qa.get("maximum_penetration_m", 0.0))
+                        > maximum_penetration
+                    ):
+                        raise RuntimeError(
+                            "robot/human rigid collision QA failed: "
+                            + json.dumps(rigid_qa, sort_keys=True)
                         )
             except (RuntimeError, ValueError) as error:
                 stop_reason = f"fail_closed: {error}"
@@ -368,6 +392,7 @@ def run_demo(
                         "coverage_by_frame": coverage_by_frame,
                         "grasp_quality_by_frame": grasp_quality_by_frame,
                         "foot_contact_ids_by_frame": foot_contact_ids_by_frame,
+                        "rigid_collision_qa_by_frame": rigid_collision_qa_by_frame,
                         "task_success": _task_success(
                             observation,
                             quality_by_frame,
@@ -376,6 +401,7 @@ def run_demo(
                             application=application,
                             grasp_quality=grasp_quality_by_frame,
                             foot_contact_ids_by_frame=foot_contact_ids_by_frame,
+                            rigid_collision_qa_by_frame=rigid_collision_qa_by_frame,
                         ),
                     }
                 )
@@ -531,6 +557,17 @@ def _grasp_frame_report(observation: Mapping, config: Mapping) -> dict:
         "target_to_edge_distances_m": target_to_edge,
         "maximum_edge_error_m": max(errors.values()) if errors else None,
         "opening_span_m": opening_span,
+        "opening_area_m2": geometry.get("opening_area_m2"),
+        "opening_convex_hull_area_m2": geometry.get(
+            "opening_convex_hull_area_m2"
+        ),
+        "opening_convexity_ratio": geometry.get("opening_convexity_ratio"),
+        "opening_major_diameter_m": geometry.get(
+            "opening_major_diameter_m"
+        ),
+        "opening_minor_diameter_m": geometry.get(
+            "opening_minor_diameter_m"
+        ),
         "threshold_m": maximum_error,
         "ok": (
             available
@@ -549,6 +586,7 @@ def _task_success(
     application: Optional[Mapping] = None,
     grasp_quality: Optional[Sequence[Mapping]] = None,
     foot_contact_ids_by_frame: Optional[Sequence[Sequence[int]]] = None,
+    rigid_collision_qa_by_frame: Optional[Sequence[Mapping]] = None,
 ) -> dict:
     diagnostics = observation.get("diagnostics", {})
     verified = [
@@ -601,6 +639,27 @@ def _task_success(
         config.get("dressing_player", {}).get("require_foot_contact", False)
     )
     foot_contact_ok = bool(foot_contact_ids) or not foot_contact_required
+    rigid_collision_qa = list(rigid_collision_qa_by_frame or ())
+    maximum_allowed_penetration = float(
+        config.get("dressing_player", {}).get(
+            "maximum_robot_human_penetration_m", float("inf")
+        )
+    )
+    maximum_penetration = max(
+        (
+            float(item.get("maximum_penetration_m", 0.0))
+            for item in rigid_collision_qa
+        ),
+        default=None,
+    )
+    rigid_collision_ok = bool(rigid_collision_qa) and all(
+        int(item.get("ignored_pair_count", 0)) == 0
+        and float(item.get("maximum_penetration_m", 0.0))
+        <= maximum_allowed_penetration
+        for item in rigid_collision_qa
+    )
+    if config["rcareworld"].get("profile") != "custom_player":
+        rigid_collision_ok = True
     return {
         "success": (
             semantic_ok
@@ -610,6 +669,7 @@ def _task_success(
             and pose_ok
             and stretch_ok
             and foot_contact_ok
+            and rigid_collision_ok
         ),
         "semantic_masks_ok": semantic_ok,
         "verified_grippers": len(verified),
@@ -626,6 +686,9 @@ def _task_success(
         "foot_contact_required": foot_contact_required,
         "foot_contact_ok": foot_contact_ok,
         "foot_contact_collider_ids": foot_contact_ids,
+        "rigid_collision_ok": rigid_collision_ok,
+        "maximum_robot_human_penetration_m": maximum_penetration,
+        "maximum_allowed_robot_human_penetration_m": maximum_allowed_penetration,
         "cloth_qa": stretch,
         "stretch_ok": stretch_ok,
         "note": (

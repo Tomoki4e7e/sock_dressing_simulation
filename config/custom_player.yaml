@@ -34,8 +34,12 @@ scene:
   robot_position: [-0.144, -0.15, 0.88]
   robot_immovable: true
   robot_joint_gravity: false
+  # Initialization remains deterministic; autonomous rollout uses drive targets
+  # so PhysX can resolve gripper/foot contacts instead of teleporting through.
   robot_direct_joint_control: true
-  ignore_robot_human_rigid_collisions: true
+  robot_rollout_direct_joint_control: false
+  ignore_robot_human_rigid_collisions: false
+  ignore_non_gripper_robot_human_rigid_collisions: true
   human_position: [0.06, 1.48, -0.72]
   sock_position: [-0.14, 0.53, 0.68]
   sock_rotation: [0.0, 0.0, 0.0]
@@ -73,6 +77,10 @@ scene:
   initial_pose_contract:
     calibrate_foot_to_sock: true
     enforce: true
+    # Translate the seated human and chair together during calibration, then
+    # stop following the moving cuff for the autonomous dressing rollout.
+    lock_human_and_chair: true
+    maximum_lock_drift_m: 0.002
     straight_right_leg: true
     right_knee_flexion_max_degrees: 2.0
     foot_to_sock_m: 0.10
@@ -102,7 +110,9 @@ obi:
   expected:
     protocol_version: sock-cloth-v1
     obi_available: true
-    stretch_compliance: 0.0
+    # Allow a small amount of axial/circumferential give so gravity and arm
+    # motion are absorbed by the cloth instead of peeling the cuff off the tips.
+    stretch_compliance: 0.00001
     bend_compliance: 0.01
     stretching_scale: 1.0
     maximum_circumferential_stretch: 1.5
@@ -153,6 +163,9 @@ inference:
   reference_action_interpolation: linear
   reference_cartesian_pull_m: 0.02
   maximum_grasp_edge_error_m: 0.12
+  # Preserve the complete video when pins remain attached but the visual edge
+  # metric exceeds its strict success threshold; metadata still reports failure.
+  abort_on_grasp_qa_failure: false
   recording_crop_xywh: [300, 330, 520, 390]
   semantic_mask:
     require_prompt_containment: true
@@ -202,3 +215,4 @@ dressing_player:
   required_grippers: 2
   minimum_coverage_gain: 0.03
   require_foot_contact: true
+  maximum_robot_human_penetration_m: 0.005

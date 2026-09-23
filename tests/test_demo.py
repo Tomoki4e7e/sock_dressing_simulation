@@ -240,6 +240,12 @@ def test_task_success_rejects_any_intermediate_bimanual_grasp_failure(monkeypatc
                 "maximum_edge_error_m": 0.04,
             },
         ],
+        rigid_collision_qa_by_frame=[
+            {
+                "ignored_pair_count": 0,
+                "maximum_penetration_m": 0.0,
+            }
+        ],
     )
 
     assert not report["success"]
@@ -273,6 +279,12 @@ def test_task_success_requires_observed_foot_contact(monkeypatch):
                 "maximum_edge_error_m": 0.01,
             }
         ],
+        "rigid_collision_qa_by_frame": [
+            {
+                "ignored_pair_count": 0,
+                "maximum_penetration_m": 0.0,
+            }
+        ],
     }
 
     missing = _task_success(
@@ -296,3 +308,45 @@ def test_task_success_requires_observed_foot_contact(monkeypatch):
     assert not missing["foot_contact_ok"]
     assert touching["success"]
     assert touching["foot_contact_collider_ids"] == [2104]
+
+
+def test_task_success_rejects_robot_human_penetration(monkeypatch):
+    config = load_config(Path("config/custom_player.yaml"))
+    observation = {
+        "diagnostics": {
+            "grasp_attachments": [
+                {"side": "left", "verified": True},
+                {"side": "right", "verified": True},
+            ]
+        },
+        "cloth": {},
+    }
+    monkeypatch.setattr(
+        SockDressingEnv,
+        "cloth_radius_qa",
+        staticmethod(lambda *args, **kwargs: {"passes": True}),
+    )
+    report = _task_success(
+        observation,
+        [{"ok": True}],
+        [0.0, 0.2],
+        config,
+        application={"initial_pose_contract": {"ok": True}},
+        grasp_quality=[
+            {
+                "ok": True,
+                "attached_grippers": 2,
+                "maximum_edge_error_m": 0.01,
+            }
+        ],
+        foot_contact_ids_by_frame=[[2104]],
+        rigid_collision_qa_by_frame=[
+            {
+                "ignored_pair_count": 0,
+                "maximum_penetration_m": 0.006,
+            }
+        ],
+    )
+
+    assert not report["success"]
+    assert not report["rigid_collision_ok"]

@@ -781,3 +781,60 @@ rest bendもmeshへ追加した。scene geometryと初期pose contractでは、�
   `artifacts/phase4/inside-cuff-real-only-autonomous/domain-audit.json`
   - errorなし、status `warn`
   - 残差: 50 frame（実中央値266）、sock mask重心距離`0.443`
+
+## 初期把持のstretch compliance緩和（2026-09-23）
+
+初期把持時にカフがグリッパー先端から剥がれ落ちる挙動を抑えるため、
+`stretch_compliance`を`0.0`から`0.00001`へ緩和し、Python設定とUnity契約を同期した。
+
+検証結果:
+
+- Development Player再build: pass
+- 10 frame probe:
+  `artifacts/phase4/stretch-compliance-probe/data_sock_sim_smoke/train/phase4_20260923T090906Z`
+  - 左右とも把持維持、releaseなし
+  - 最終拘束誤差: 左`0.00320 m`、右`0.00474 m`
+- 実世界データ学習済みSAMDAMSARNN、seed 0、50 step:
+  `artifacts/phase4/relaxed-stretch-real-only-autonomous/data_sock_sim_smoke/train/phase4_20260923T090954Z`
+  - 全50 frameで両把持維持、releaseなし
+  - 最終拘束誤差: 左`0.000968 m`、右`0.003978 m`
+  - 足接触: pass、coverage gain: `4.22e-7`
+  - 最終stretch proxy: `2.333951`（上限`1.5`）
+  - 初期滑落は解消したが、伸長上限超過および着衣未達のため成功判定はfail
+  - 動画: `demo.mp4`（50 frame）
+
+## つま先中央配置・足衝突・椅子固定（2026-09-23）
+
+初期校正では人体と椅子を同じ補正量で移動し、つま先を左右グリッパー中点へ
+整列した後に追従を停止するlock契約を追加した。robot―human衝突は、初期姿勢と
+干渉する腕・胴体側だけを無視し、左右グリッパーと右脚5領域のPhysX衝突を有効化した。
+自律rolloutは関節位置の直接書き換えではなくdrive targetを使用し、全frameで
+有効衝突pair数、無視pair数、最大侵入量をfail-closed記録する。
+
+stretch complianceの10 frame比較:
+
+- `0`: stretch `2.473894`、coverage gain `0.038998`
+- `1e-5`: stretch `2.192777`、coverage gain `0.053069`
+- `5e-5`: stretch `2.522457`、coverage gain `0.045629`
+- `1e-4`: stretch `2.487305`、coverage gain `0.054131`
+- 全候補で両把持を維持したがstretch上限`1.5`を超過したため、最小値の`1e-5`を採用
+
+検証結果:
+
+- Python regression: `66 passed`
+- Development Player再build: pass
+- live acceptance:
+  `artifacts/unity/live-acceptance-foot-collision-lock.json`
+  - 初期pose、左右把持、つま先中央、人体・椅子lock: pass
+  - グリッパー―右脚衝突: 有効60 pair、無視0 pair、初期最大侵入`0 m`
+  - stretch proxy `2.515132`および意図的slip未発生のため全体はfail
+- 実世界データ学習済みSAMDAMSARNN、seed 0、50 step完全自律試験:
+  `artifacts/phase4/toe-centered-collision-locked-real-only-autonomous-final/data_sock_sim_smoke/train/phase4_20260923T094238Z`
+  - reference action blend: `0.0`
+  - つま先中央横ずれ: `1.25e-7 m`
+  - つま先・椅子変位: ともに`0 m`
+  - 全frameでグリッパー―右脚衝突60 pair有効、無視0 pair
+  - 最大侵入量: `0.001649 m`（上限`0.005 m`）
+  - 両把持、足接触、coverage gain `0.154536`: pass
+  - 最終stretch proxy `2.467773`（上限`1.5`）のため着衣成功判定はfail
+  - 動画: `demo.mp4`（1280x960、5 fps、50 frame、10秒）

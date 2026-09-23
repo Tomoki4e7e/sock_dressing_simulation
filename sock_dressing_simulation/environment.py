@@ -25,6 +25,8 @@ class SockDressingEnv:
         self._grasp_attachment_report = []
         self._camera_mount_report: Dict[str, Any] = {}
         self.sock_cloth = None
+        self._rollout_started = False
+        self._right_toe_offset_report: Optional[Dict[str, Any]] = None
 
     def connect(self) -> "SockDressingEnv":
         if self._env is None:
@@ -253,7 +255,13 @@ class SockDressingEnv:
                     ),
                     bool(pose_contract.get("straight_right_leg", False)),
                 )
-        if scene.get("ignore_robot_human_rigid_collisions", True):
+        if scene.get(
+            "ignore_non_gripper_robot_human_rigid_collisions", False
+        ):
+            self.sock_cloth.ignore_non_gripper_robot_human_rigid_collisions(
+                int(assets["robot_id"])
+            )
+        elif scene.get("ignore_robot_human_rigid_collisions", True):
             self.sock_cloth.ignore_robot_human_rigid_collisions(
                 int(assets["robot_id"])
             )
@@ -773,6 +781,7 @@ class SockDressingEnv:
             pose_settings = self.config["scene"].get("initial_pose_contract", {})
             initial_grasp = []
             grasp_alignment = None
+            pose_prepared_before_grasp = False
             grasp_settings = self.config["scene"].get("grasp_anchors", {})
             if grasp_settings.get("auto_grasp", False):
                 alignment_settings = self.config["scene"].get(
@@ -814,10 +823,39 @@ class SockDressingEnv:
                         .get("visuals", {})
                         .get("task_right_toe_position", scenario.foot_position)
                     )
+                    toe_target = np.asarray(toe_target, dtype=float)
+                    toe_target += np.asarray(
+                        pose_settings.get(
+                            "right_toe_offset_world_m", [0.0, 0.0, 0.0]
+                        ),
+                        dtype=float,
+                    )
                     self.sock_cloth.align_sock_opening_to_grasp_targets(
-                        toe_target
+                        toe_target.tolist()
                     )
                     self._env.step()
+                    if (
+                        native
+                        and scenario.foot_ik_index is None
+                        and pose_settings.get("calibrate_foot_to_sock", False)
+                        and pose_settings.get("right_toe_offset_world_m")
+                        is not None
+                    ):
+                        self._calibrate_foot_to_sock(
+                            None,
+                            float(pose_settings["foot_to_sock_m"]),
+                        )
+                        self.sock_cloth.stop_foot_clearance_tracking()
+                        self._env.step()
+                        self._right_toe_offset_report = (
+                            self._apply_post_calibration_right_toe_offset()
+                        )
+                        final_toe = self._request_scene_geometry()
+                        self.sock_cloth.align_sock_opening_to_grasp_targets(
+                            list(final_toe.right_toe_position)
+                        )
+                        self._env.step()
+                        pose_prepared_before_grasp = True
                 elif not alignment_settings.get("enabled", False):
                     self.sock_cloth.align_grasp_targets_to_opening()
                     self._env.step()
@@ -860,11 +898,29 @@ class SockDressingEnv:
                     float(pose_settings["foot_to_sock_m"])
                 )
                 self._env.step()
-            if native and pose_settings.get("calibrate_foot_to_sock", False):
+            if (
+                native
+                and not pose_prepared_before_grasp
+                and pose_settings.get("calibrate_foot_to_sock", False)
+            ):
                 self._calibrate_foot_to_sock(
                     scenario.foot_ik_index,
                     float(pose_settings["foot_to_sock_m"]),
                 )
+                if scenario.foot_ik_index is None:
+                    self.sock_cloth.stop_foot_clearance_tracking()
+                    self._env.step()
+            if not pose_prepared_before_grasp:
+                self._right_toe_offset_report = (
+                    self._apply_post_calibration_right_toe_offset()
+                )
+            if (
+                native
+                and scenario.foot_ik_index is None
+                and pose_settings.get("lock_human_and_chair", False)
+            ):
+                self.sock_cloth.lock_human_and_chair()
+                self._env.step()
             pose_contract = self._request_initial_pose_contract() if native else {}
             if (
                 pose_contract
@@ -878,6 +934,7 @@ class SockDressingEnv:
                 self.sock_cloth.arm_slip_detection(True)
                 self.sock_cloth.request_configuration()
                 self._env.step()
+            self._rollout_started = True
             return {
                 "initial_command_steps": int(not np.allclose(current, applied)),
                 "settle_steps": scenario.settle_steps,
@@ -894,6 +951,7 @@ class SockDressingEnv:
                 "chair_part_ids": [int(part.id) for part in self.chair],
                 "grasp_attachments": list(self._grasp_attachment_report),
                 "initial_grasp": initial_grasp,
+                "right_toe_offset": self._right_toe_offset_report,
                 "initial_pose_contract": pose_contract,
             }
         self.cloth.SetTransform(
@@ -1042,6 +1100,26 @@ class SockDressingEnv:
                 "scene_geometry": dict(
                     getattr(self.cloth, "data", {}).get("scene_geometry", {})
                 ),
+                "robot_human_rigid_collision_qa": {
+                    "enabled_pair_count": int(
+                        configuration.get(
+                            "robot_human_rigid_enabled_pair_count", 0
+                        )
+                    ),
+                    "ignored_pair_count": int(
+                        configuration.get(
+                            "robot_human_rigid_ignored_pair_count", 0
+                        )
+                    ),
+                    "maximum_penetration_m": float(
+                        configuration.get(
+                            "robot_human_maximum_penetration_m", float("inf")
+                        )
+                    ),
+                },
+                "visual_diagnostics": list(
+                    getattr(self.cloth, "data", {}).get("visual_diagnostics", [])
+                ),
                 "external_torque_source": "joint_force residual proxy",
                 "obi_contract": validate_configuration(
                     configuration, self.config.get("obi", {}).get("expected", {})
@@ -1174,8 +1252,33 @@ class SockDressingEnv:
         minimum_cuff_insertion = float(
             settings.get("minimum_cuff_insertion_depth_m", 0.0)
         )
+        opening_area = float(getattr(geometry, "opening_area_m2", 0.0))
+        opening_hull_area = float(
+            getattr(geometry, "opening_convex_hull_area_m2", opening_area)
+        )
+        opening_convexity = float(
+            getattr(geometry, "opening_convexity_ratio", 0.0)
+        )
+        opening_major = float(
+            getattr(geometry, "opening_major_diameter_m", 0.0)
+        )
+        opening_minor = float(
+            getattr(geometry, "opening_minor_diameter_m", 0.0)
+        )
         distance_error = abs(geometry.foot_to_opening_plane_m - wanted_distance)
         angle_error = abs(geometry.right_leg_raise_degrees - wanted_angle)
+        offset_report = self._right_toe_offset_report
+        offset_ok = offset_report is None or bool(offset_report.get("ok", False))
+        sock_alignment_ok = (
+            geometry.opening_to_toe_alignment >= minimum_toe_alignment
+            and (
+                offset_report is not None
+                or (
+                    distance_error <= distance_tolerance
+                    and geometry.foot_to_opening_lateral_m <= lateral_tolerance
+                )
+            )
+        )
         visual_entries = self.sock_cloth.visual_diagnostics()
         task_pose_visual = next(
             (
@@ -1186,20 +1289,41 @@ class SockDressingEnv:
             {},
         )
         visual_ok = bool(task_pose_visual.get("valid", False))
+        require_lock = bool(settings.get("lock_human_and_chair", False))
+        lock_visual = next(
+            (
+                dict(item)
+                for item in visual_entries
+                if item.get("role") == "human_chair_lock"
+            ),
+            {},
+        )
+        maximum_lock_drift = float(settings.get("maximum_lock_drift_m", 0.002))
+        lock_ok = (
+            not require_lock
+            or (
+                bool(lock_visual.get("valid", False))
+                and bool(lock_visual.get("locked", False))
+                and float(lock_visual.get("right_toe_drift_m", float("inf")))
+                <= maximum_lock_drift
+                and float(lock_visual.get("chair_drift_m", float("inf")))
+                <= maximum_lock_drift
+            )
+        )
         return {
             "ok": (
-                distance_error <= distance_tolerance
-                and geometry.foot_to_opening_lateral_m <= lateral_tolerance
+                sock_alignment_ok
+                and offset_ok
                 and angle_error <= angle_tolerance
                 and geometry.right_knee_flexion_degrees <= maximum_knee_flexion
                 and geometry.sock_body_gravity_alignment
                 >= minimum_gravity_alignment
-                and geometry.opening_to_toe_alignment >= minimum_toe_alignment
                 and geometry.left_cuff_insertion_depth_m
                 >= minimum_cuff_insertion
                 and geometry.right_cuff_insertion_depth_m
                 >= minimum_cuff_insertion
                 and visual_ok
+                and lock_ok
             ),
             "foot_to_sock_m": geometry.foot_to_opening_plane_m,
             "foot_to_sock_target_m": wanted_distance,
@@ -1217,6 +1341,11 @@ class SockDressingEnv:
             "opening_target_normal": list(geometry.opening_target_normal),
             "opening_to_toe_alignment": geometry.opening_to_toe_alignment,
             "opening_to_toe_alignment_min": minimum_toe_alignment,
+            "opening_area_m2": opening_area,
+            "opening_convex_hull_area_m2": opening_hull_area,
+            "opening_convexity_ratio": opening_convexity,
+            "opening_major_diameter_m": opening_major,
+            "opening_minor_diameter_m": opening_minor,
             "left_cuff_insertion_depth_m": geometry.left_cuff_insertion_depth_m,
             "right_cuff_insertion_depth_m": geometry.right_cuff_insertion_depth_m,
             "minimum_cuff_insertion_depth_m": minimum_cuff_insertion,
@@ -1226,8 +1355,12 @@ class SockDressingEnv:
             "right_toe_position": list(geometry.right_toe_position),
             "left_grasp_position": list(geometry.left_grasp_position),
             "right_grasp_position": list(geometry.right_grasp_position),
+            "right_toe_offset": offset_report,
             "human_visual_ok": visual_ok,
             "human_visual_diagnostics": task_pose_visual,
+            "human_chair_lock_ok": lock_ok,
+            "human_chair_lock_diagnostics": lock_visual,
+            "maximum_lock_drift_m": maximum_lock_drift,
         }
 
     def _calibrate_foot_to_sock(
@@ -1255,7 +1388,7 @@ class SockDressingEnv:
                 abs(geometry.foot_to_opening_plane_m - target_distance_m) <= 0.002
                 and geometry.foot_to_opening_lateral_m <= 0.002
             ):
-                return
+                break
             opening = (
                 np.asarray(geometry.left_grasp_position, dtype=float)
                 + np.asarray(geometry.right_grasp_position, dtype=float)
@@ -1268,6 +1401,45 @@ class SockDressingEnv:
             else:
                 self.sock_cloth.translate_human_and_ik((desired - toe).tolist())
             self._env.step()
+    def _apply_post_calibration_right_toe_offset(
+        self,
+    ) -> Optional[Dict[str, Any]]:
+        settings = self.config["scene"].get("initial_pose_contract", {})
+        configured = settings.get("right_toe_offset_world_m")
+        if configured is None:
+            return None
+        offset = np.asarray(configured, dtype=float)
+        if offset.shape != (3,) or not np.all(np.isfinite(offset)):
+            raise ValueError(
+                "right_toe_offset_world_m must contain three finite values"
+            )
+        tolerance = float(settings.get("right_toe_offset_tolerance_m", 0.005))
+        if not np.isfinite(tolerance) or tolerance <= 0:
+            raise ValueError(
+                "right_toe_offset_tolerance_m must be finite and positive"
+            )
+        before = self._request_scene_geometry()
+        baseline = np.asarray(before.right_toe_position, dtype=float)
+        target = baseline + offset
+        self.sock_cloth.set_task_right_toe_position_articulated(target.tolist())
+        self._env.step()
+        after = self._request_scene_geometry()
+        actual = np.asarray(after.right_toe_position, dtype=float)
+        achieved = actual - baseline
+        target_error = float(np.linalg.norm(actual - target))
+        offset_error = float(np.linalg.norm(achieved - offset))
+        return {
+            "ok": target_error <= tolerance and offset_error <= tolerance,
+            "frame": "unity_world",
+            "baseline_position": baseline.tolist(),
+            "requested_offset_m": offset.tolist(),
+            "target_position": target.tolist(),
+            "actual_position": actual.tolist(),
+            "achieved_offset_m": achieved.tolist(),
+            "target_error_m": target_error,
+            "offset_error_m": offset_error,
+            "tolerance_m": tolerance,
+        }
 
     def _observe_custom_player(self) -> Dict[str, Any]:
         self.sock_cloth.request_particles()
@@ -1589,7 +1761,16 @@ class SockDressingEnv:
         if current.ndim != 1 or current.size <= int(mapping.simulator_indices.max()):
             raise RuntimeError("RCareWorld full joint state is unavailable")
         target = mapping.merge_for_simulator(bounded, current)
-        if self.config["scene"].get("robot_direct_joint_control", False):
+        direct_control = bool(
+            self.config["scene"].get("robot_direct_joint_control", False)
+        )
+        if self._rollout_started:
+            direct_control = bool(
+                self.config["scene"].get(
+                    "robot_rollout_direct_joint_control", direct_control
+                )
+            )
+        if direct_control:
             self.robot.SetJointPositionDirectly(target.tolist())
         else:
             self.robot.SetJointPosition(target.tolist())

@@ -107,6 +107,12 @@ class _Cloth:
     def request_configuration(self):
         self.configuration_requested = True
 
+    def stop_foot_clearance_tracking(self):
+        self.clearance_tracking_stopped = True
+
+    def lock_human_and_chair(self):
+        self.human_and_chair_locked = True
+
     def align_human_visual_foot_to_sock(self, distance):
         self.visual_foot_distance = distance
 
@@ -208,16 +214,20 @@ def test_environment_applies_sock_foot_and_grasp_scenario():
     ]
 
 
-def test_custom_foot_calibration_translates_human_and_chair_together():
+def test_custom_foot_calibration_sets_clearance_before_pose_is_locked():
     config = load_config(Path("config/custom_player.yaml"))
     environment = SockDressingEnv(config, backend=_Backend())
 
     class Cloth:
         def __init__(self):
             self.clearance = None
+            self.locked = False
 
         def set_foot_clearance_target(self, distance, chair_id):
             self.clearance = (distance, chair_id)
+
+        def lock_human_and_chair(self):
+            self.locked = True
 
         def request_scene_geometry(self):
             pass
@@ -232,6 +242,45 @@ def test_custom_foot_calibration_translates_human_and_chair_together():
     environment._calibrate_foot_to_sock(None, 0.1)
 
     assert environment.sock_cloth.clearance == (0.1, 2301)
+    assert not environment.sock_cloth.locked
+
+
+def test_post_calibration_toe_offset_articulates_leg_to_world_target():
+    config = load_config(Path("config/custom_player.yaml"))
+    config["scene"]["initial_pose_contract"].update(
+        {
+            "right_toe_offset_world_m": [0.05, -0.05, 0.0],
+            "right_toe_offset_tolerance_m": 0.005,
+        }
+    )
+    environment = SockDressingEnv(config, backend=_Backend())
+
+    class Cloth:
+        def __init__(self):
+            self.positions = [
+                (-0.18, 0.52, 0.59),
+                (-0.13, 0.47, 0.59),
+            ]
+            self.requested_target = None
+
+        def request_scene_geometry(self):
+            pass
+
+        def scene_geometry(self):
+            return SimpleNamespace(right_toe_position=self.positions.pop(0))
+
+        def set_task_right_toe_position_articulated(self, position):
+            self.requested_target = tuple(position)
+
+    environment.sock_cloth = Cloth()
+    report = environment._apply_post_calibration_right_toe_offset()
+
+    np.testing.assert_allclose(
+        environment.sock_cloth.requested_target, [-0.13, 0.47, 0.59]
+    )
+    np.testing.assert_allclose(report["achieved_offset_m"], [0.05, -0.05, 0.0])
+    assert report["frame"] == "unity_world"
+    assert report["ok"]
 
 
 @pytest.mark.parametrize(
@@ -272,7 +321,16 @@ def test_initial_pose_contract_requires_toe_facing_inner_cuff_grasp(
             )
 
         def visual_diagnostics(self):
-            return [{"role": "human_task_pose", "valid": True}]
+            return [
+                {"role": "human_task_pose", "valid": True},
+                {
+                    "role": "human_chair_lock",
+                    "valid": True,
+                    "locked": True,
+                    "right_toe_drift_m": 0.0,
+                    "chair_drift_m": 0.0,
+                },
+            ]
 
     environment.sock_cloth = Cloth()
     report = environment._request_initial_pose_contract()

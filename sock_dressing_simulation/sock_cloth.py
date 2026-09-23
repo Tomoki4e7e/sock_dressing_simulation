@@ -93,6 +93,11 @@ class SceneGeometry:
     right_grasp_local_offset: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     opening_target_normal: Tuple[float, float, float] = (0.0, 0.0, 1.0)
     opening_span_m: float = 0.0
+    opening_area_m2: float = 0.0
+    opening_convex_hull_area_m2: float = 0.0
+    opening_convexity_ratio: float = 0.0
+    opening_major_diameter_m: float = 0.0
+    opening_minor_diameter_m: float = 0.0
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "SceneGeometry":
@@ -146,6 +151,22 @@ class SceneGeometry:
                 ),
             )
         )
+        opening_area = float(value.get("opening_area_m2", 0.0))
+        opening_hull_area = float(
+            value.get("opening_convex_hull_area_m2", opening_area)
+        )
+        opening_convexity = float(
+            value.get(
+                "opening_convexity_ratio",
+                1.0 if opening_hull_area > 0 else 0.0,
+            )
+        )
+        opening_major = float(
+            value.get("opening_major_diameter_m", opening_span)
+        )
+        opening_minor = float(
+            value.get("opening_minor_diameter_m", 0.0)
+        )
         if (
             not np.isfinite(distance)
             or distance < 0
@@ -167,6 +188,16 @@ class SceneGeometry:
             or right_insertion < 0
             or not np.isfinite(opening_span)
             or opening_span < 0
+            or not np.isfinite(opening_area)
+            or opening_area < 0
+            or not np.isfinite(opening_hull_area)
+            or opening_hull_area < 0
+            or not np.isfinite(opening_convexity)
+            or not 0 <= opening_convexity <= 1
+            or not np.isfinite(opening_major)
+            or opening_major < 0
+            or not np.isfinite(opening_minor)
+            or opening_minor < 0
         ):
             raise ValueError("scene distances and angles must be finite")
         return cls(
@@ -181,6 +212,11 @@ class SceneGeometry:
             left_grasp_parent=str(value.get("left_grasp_parent", "")),
             right_grasp_parent=str(value.get("right_grasp_parent", "")),
             opening_span_m=opening_span,
+            opening_area_m2=opening_area,
+            opening_convex_hull_area_m2=opening_hull_area,
+            opening_convexity_ratio=opening_convexity,
+            opening_major_diameter_m=opening_major,
+            opening_minor_diameter_m=opening_minor,
             **vectors,
         )
 
@@ -448,8 +484,25 @@ class SockClothAttr:
             raise ValueError("task right toe position must be a finite 3-vector")
         self._send_data("SetTaskRightToePosition", *vector.tolist())
 
+    def set_task_right_toe_position_articulated(
+        self, position: Sequence[float]
+    ) -> None:
+        vector = np.asarray(position, dtype=float)
+        if vector.shape != (3,) or not np.all(np.isfinite(vector)):
+            raise ValueError("task right toe position must be a finite 3-vector")
+        self._send_data(
+            "SetTaskRightToePositionArticulated", *vector.tolist()
+        )
+
     def ignore_robot_human_rigid_collisions(self, robot_id: int) -> None:
         self._send_data("IgnoreRobotHumanRigidCollisions", int(robot_id))
+
+    def ignore_non_gripper_robot_human_rigid_collisions(
+        self, robot_id: int
+    ) -> None:
+        self._send_data(
+            "IgnoreNonGripperRobotHumanRigidCollisions", int(robot_id)
+        )
 
     def align_human_visual_foot_to_sock(self, distance_m: float) -> None:
         distance = float(distance_m)
@@ -476,6 +529,12 @@ class SockClothAttr:
         if not np.isfinite(distance) or distance <= 0:
             raise ValueError("foot clearance target must be finite and positive")
         self._send_data("SetFootClearanceTarget", distance, int(chair_id))
+
+    def stop_foot_clearance_tracking(self) -> None:
+        self._send_data("StopFootClearanceTracking")
+
+    def lock_human_and_chair(self) -> None:
+        self._send_data("LockHumanAndChair")
 
     def arm_slip_detection(self, armed: bool = True) -> None:
         self._send_data("ArmSlipDetection", bool(armed))
@@ -540,6 +599,9 @@ class SockClothAttr:
 
     def request_contacts(self) -> None:
         self._send_data("GetClothContacts")
+
+    def request_robot_human_rigid_collision_qa(self, robot_id: int) -> None:
+        self._send_data("GetRobotHumanRigidCollisionQA", int(robot_id))
 
     def contacts(self) -> Tuple[ClothContact, ...]:
         return tuple(

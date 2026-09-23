@@ -1,0 +1,5 @@
+extends: toe_left_down_convex_scale_085_comp_1e4.yaml
+
+obi:
+  expected:
+    bend_compliance: 0.005

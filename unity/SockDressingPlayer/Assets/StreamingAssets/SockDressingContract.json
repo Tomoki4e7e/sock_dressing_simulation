@@ -19,7 +19,7 @@
     "floor": 2302
   },
   "obi": {
-    "stretch_compliance": 0.0,
+    "stretch_compliance": 0.00001,
     "bend_compliance": 0.01,
     "stretching_scale": 1.0,
     "maximum_circumferential_stretch": 1.5,
