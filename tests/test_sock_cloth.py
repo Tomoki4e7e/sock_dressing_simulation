@@ -76,25 +76,71 @@ def test_custom_player_obeys_canonical_sock_physics_contract():
     assert config["obi"]["timestep_s"] == contract["timestep_s"]
     assert config["obi"]["substeps"] == contract["substeps"]
     assert config["obi"]["solver_iterations"] == contract["solver_iterations"]
-    assert expected["grasp_linear_compliance"] == 0.00005
+    assert expected["grasp_linear_compliance"] == pytest.approx(0.00005)
     assert expected["grasp_rotational_compliance"] == 1000000.0
-    assert expected["grasp_break_threshold"] == 20.0
-    assert expected["slip_constraint_error_m"] == 0.20
+    assert expected["grasp_break_threshold"] == pytest.approx(20.0)
+    assert expected["slip_constraint_error_m"] == pytest.approx(0.20)
     assert expected["slip_opening_span_m"] == 0.11
     assert expected["slip_consecutive_steps"] == 2
-    assert expected["maximum_grasp_particles_per_side"] == 2
+    assert expected["maximum_grasp_particles_per_side"] == 4
+    assert expected["grasp_thickness_half_width_m"] == pytest.approx(0.02)
+    assert not expected["tether_constraints"]
+    assert expected["tether_compliance"] == 0.0
+    assert expected["tether_scale"] == 1.0
 
 
 def test_sock_opening_alignment_writes_solver_local_particle_positions():
     source = Path(
         "RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs"
     ).read_text()
+    alignment = source[
+        source.index("public void AlignSockOpeningToGraspTargets"):
+        source.index("public void SetGraspTargetPosition")
+    ]
 
-    assert "solver.transform.InverseTransformPoint(aligned)" in source
-    assert "Vector3.ProjectOnPlane(" in source
-    assert "Physics.gravity" in source
-    assert "Quaternion.AngleAxis(" in source
-    assert "CaptureResetStateIfReady(true)" in source
+    assert "GetParticleEndpoints(openingParticles" in alignment
+    assert "GetParticleEndpoints(cuffGraspParticles" not in alignment
+    assert "openingAxisScale = targetOpeningSpan / sourceOpeningSpan" in alignment
+    assert "openingCrossAxisScale" in alignment
+    assert "rectangleBoundary" in alignment
+    assert "CaptureStructuralRestLengths();" in alignment
+    assert "openingStretchWeight" in alignment
+    assert "SnapNearestOpeningParticle(" in alignment
+    assert "alignedLeftOpeningCorners" in source
+    assert "alignedRightOpeningCorners" in source
+    assert "left.transform.TransformPoint(" in alignment
+    assert "right.transform.TransformPoint(" in alignment
+    assert "solver.transform.InverseTransformPoint(aligned)" in alignment
+    assert "Vector3.ProjectOnPlane(" in alignment
+    assert "Physics.gravity" not in alignment
+    assert "Quaternion.AngleAxis(" in alignment
+    assert "Quaternion.LookRotation(" in alignment
+    assert "left.transform.rotation = targetFrameRotation;" in alignment
+    assert "right.transform.rotation = targetFrameRotation;" in alignment
+    assert "graspOrientationLocked = true;" in alignment
+    assert "targetMidpoint - toeTarget" in alignment
+    assert alignment.index("left.transform.rotation = targetFrameRotation;") < (
+        alignment.index("SnapNearestOpeningParticle(")
+    )
+    assert "CaptureResetStateIfReady(true)" in alignment
+    assert "AlignSockOpeningToGraspTargetsAndGrasp" in source
+    assert 'Grasp("left", leftTargetId, maxDistance);' in source
+    assert 'Grasp("right", rightTargetId, maxDistance);' in source
+
+
+def test_custom_player_keeps_grasp_targets_at_frames_and_enforces_edge_match():
+    config = load_config(Path("config/custom_player.yaml"))
+
+    anchors = config["scene"]["grasp_anchors"]
+    contract = config["scene"]["initial_pose_contract"]
+    assert anchors["maximum_anchor_span_m"] is None
+    assert all(anchor["local_position"] == [0.0, 0.0, 0.0] for anchor in anchors["anchors"])
+    assert contract["minimum_cuff_insertion_depth_m"] == 0.0
+    assert contract["maximum_opening_edge_error_m"] == pytest.approx(0.01)
+    assert contract["required_grasp_particles_per_side"] == 4
+    assert config["obi"]["expected"]["grasp_thickness_half_width_m"] == pytest.approx(
+        0.02
+    )
 
 
 def test_sock_geometry_reports_particle_derived_hanging_direction():
@@ -105,6 +151,7 @@ def test_sock_geometry_reports_particle_derived_hanging_direction():
 
     assert "Vector3 sockBodyDirection = ClothCenter() - openingCenter;" in source
     assert "Vector3 openingNormal = OpeningNormal();" in source
+    assert "Vector3 pinnedNormal = Vector3.Cross(" in source
     assert "normal += Vector3.Cross(current, next);" in source
     assert '"opening_target_center", openingTargetCenter' in source
     assert '"opening_target_normal", openingTargetNormal' in source
@@ -138,16 +185,51 @@ def test_grasp_pins_small_inner_cuff_patches_and_leaves_rim_dynamic():
 
     assert ".Take(maximumGraspParticlesPerSide)" in source
     assert "graspRotationalCompliance" in source
+    assert "float.PositiveInfinity" in source
     assert '"non_cuff_grasp_particle_count"' in source
-    assert "int[] selected = openingParticles" in source
-    assert "targetMidpoint - toeTarget" in source
-    assert "minimum + cuffInsertionDepth" in source
+    assert "int[] selected = selectedValues.ToArray();" in source
+    assert "HashSet<long> structuralEdges" in source
+    assert "adjacentToPinned" in source
+    assert ".ThenBy(value => value.index)" in source
+    assert "Array.IndexOf(alignedCorners, actorIndex)" in source
+    assert "new Vector3(-graspThicknessHalfWidth, 0, 0)" in source
+    assert "new Vector3(graspThicknessHalfWidth, 0, 0)" in source
+    assert "triangle[0].index" in source
+    assert "counts.Where(item => item.Value == 1)" in source
+    assert "RestDistancesFromOpening" in source
+    assert "closest + neighbor.Value" in source
+    assert "distance - cuffInsertionDepth" in source
     assert '"cuff_insertion_depth_m", cuffInsertionDepth' in source
-    assert "cloth.tetherConstraintsEnabled = false;" in source
+    assert "cloth.tetherConstraintsEnabled = tetherEnabled;" in source
+    assert "cloth.tetherCompliance = tetherCompliance;" in source
+    assert "cloth.tetherScale = tetherScale;" in source
+    assert "LimitStructuralStretch();" in source
+    assert source.index("LimitStructuralStretch();", source.index("public void GetParticles")) > 0
+    assert "solver.positions[cloth.GetParticleRuntimeIndex(i)]" in source
+    assert "EnforceGraspParticlePositions();" in source
+    assert "EnforceGraspTargetOrientations();" in source
+    assert "if (span > slipOpeningSpan)" in source
+    assert "grasp.target.TransformPoint(grasp.localOffsets[i])" in source
+    assert "ApplyGraspCenterTranslation();" in source
+    assert "rest * maximumStructuralStretch" in source
+    assert '"aligned_grasp_initialization"' in source
+    assert "StructuralRestLength(" in source
+    assert "if (pinned.Count == 0)" in source
+    limiter = source[
+        source.index("private void LimitStructuralStretch"):
+        source.index("private void EnforceGraspParticlePositions")
+    ]
+    assert "openingParticles.Contains(edge.x)" not in limiter
+    assert "solver.prevPositions[firstSolver]" in limiter
+    assert "solver.prevPositions[secondSolver]" in limiter
     assert "cloth.volumeConstraintsEnabled = false;" in source
     assert "solver.invMasses[solverIndex] = 1.0f / particleMass;" in source
     assert "leftOpeningEdge = GraspParticleCenter(grasps[\"left\"]);" not in source
     assert "rightOpeningEdge = GraspParticleCenter(grasps[\"right\"]);" not in source
+    assert "alignedLeftOpeningCorners" in source
+    assert "alignedRightOpeningCorners" in source
+    assert '"left_grasp_patch_span_m", leftGraspPatchSpan' in source
+    assert '"right_grasp_patch_span_m", rightGraspPatchSpan' in source
     assert '"opening_span_m", openingSpan' in source
     assert "Release(movingSide, \"over_tension\")" not in source
 
@@ -214,6 +296,19 @@ def test_canonical_human_pose_contains_terminal_bones():
     assert "AssetDatabase.CreateAsset(pose, CanonicalHumanPosePath);" in build_source
 
 
+def test_human_chair_lock_restores_world_anchors_and_reports_drift():
+    source = Path(
+        "RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs"
+    ).read_text()
+
+    assert "EnforceHumanChairLock();" in source
+    assert "bodyRoot.position = lockedHumanRootPosition;" in source
+    assert "visualRightHip = lockedVisualRightHip;" in source
+    assert "chair.transform.position = lockedChairPosition;" in source
+    assert '"human_root_drift_m"' in source
+    assert '"human_anchor_drift_m"' in source
+
+
 def test_human_task_pose_rejects_nonfinite_plantarflexion():
     cloth = SockClothAttr(FakeEnvironment(), 1200)
     with pytest.raises(ValueError, match="plantarflexion"):
@@ -262,11 +357,15 @@ def test_sock_cloth_commands_match_unity_contract():
         slip_consecutive_steps=2,
         maximum_particles_per_side=2,
         cuff_insertion_depth_m=0.03,
+        grasp_thickness_half_width_m=0.02,
     )
     cloth.set_grasp_targets(2201, 2202)
     cloth.align_grasp_targets_to_opening()
     cloth.clamp_grasp_target_span(0.115)
     cloth.align_sock_opening_to_grasp_targets([0.0, 0.5, 0.6])
+    cloth.align_sock_opening_to_grasp_targets_and_grasp(
+        [0.0, 0.5, 0.6], 0.03
+    )
     cloth.ignore_robot_human_rigid_collisions(1100)
     cloth.ignore_non_gripper_robot_human_rigid_collisions(1100)
     cloth.configure_right_leg_colliders(2000)
@@ -281,7 +380,7 @@ def test_sock_cloth_commands_match_unity_contract():
     cloth.set_task_right_toe_position_articulated([0.1, 0.5, 0.8])
     cloth.set_foot_clearance_target(0.1, 2301)
     cloth.stop_foot_clearance_tracking()
-    cloth.lock_human_and_chair()
+    cloth.lock_human_and_chair(2301)
     cloth.arm_slip_detection()
     cloth.configure_mask_proxy_cameras()
     cloth.request_configuration()
@@ -313,6 +412,11 @@ def test_sock_cloth_commands_match_unity_contract():
             0.95,
             8,
             20,
+            True,
+            0.0,
+            1.0,
+            1.5,
+            8,
         ),
         (
             1200,
@@ -325,11 +429,20 @@ def test_sock_cloth_commands_match_unity_contract():
             2,
             2,
             0.03,
+            0.02,
         ),
         (1200, "SetGraspTargets", 2201, 2202),
         (1200, "AlignGraspTargetsToOpening"),
         (1200, "ClampGraspTargetSpan", 0.115),
         (1200, "AlignSockOpeningToGraspTargets", 0.0, 0.5, 0.6),
+        (
+            1200,
+            "AlignSockOpeningToGraspTargetsAndGrasp",
+            0.0,
+            0.5,
+            0.6,
+            0.03,
+        ),
         (1200, "IgnoreRobotHumanRigidCollisions", 1100),
         (1200, "IgnoreNonGripperRobotHumanRigidCollisions", 1100),
         (1200, "ConfigureRightLegColliders", 2000),
@@ -354,7 +467,7 @@ def test_sock_cloth_commands_match_unity_contract():
         (1200, "SetTaskRightToePositionArticulated", 0.1, 0.5, 0.8),
         (1200, "SetFootClearanceTarget", 0.1, 2301),
         (1200, "StopFootClearanceTracking"),
-        (1200, "LockHumanAndChair"),
+        (1200, "LockHumanAndChair", 2301),
         (1200, "ArmSlipDetection", True),
         (1200, "ConfigureMaskProxyCameras", 31),
         (1200, "GetClothConfiguration"),
@@ -448,6 +561,10 @@ def test_scene_geometry_is_typed_and_fail_closed():
             "right_leg_raise_degrees": 90,
             "left_grasp_position": [0, -0.04, 0],
             "right_grasp_position": [0, 0.04, 0],
+            "left_grasp_thickness_axis": [0, 0, 1],
+            "right_grasp_thickness_axis": [0, 0, 1],
+            "left_grasp_inward_axis": [1, 0, 0],
+            "right_grasp_inward_axis": [1, 0, 0],
         }
     )
     assert geometry.foot_to_opening_plane_m == pytest.approx(0.1)
@@ -458,6 +575,8 @@ def test_scene_geometry_is_typed_and_fail_closed():
     assert geometry.sock_body_direction == (0.0, -1.0, 0.0)
     assert geometry.sock_body_gravity_alignment == pytest.approx(0.95)
     assert geometry.opening_span_m == pytest.approx(0.08)
+    assert geometry.left_grasp_thickness_axis == (0.0, 0.0, 1.0)
+    assert geometry.right_grasp_inward_axis == (1.0, 0.0, 0.0)
     with pytest.raises(ValueError, match="valid"):
         SceneGeometry.from_mapping({"valid": False})
 
@@ -474,6 +593,7 @@ def test_grasp_configuration_rejects_invalid_thresholds():
             slip_consecutive_steps=3,
             maximum_particles_per_side=2,
             cuff_insertion_depth_m=0.03,
+            grasp_thickness_half_width_m=0.02,
         )
 
 

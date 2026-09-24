@@ -173,6 +173,7 @@ def generate_sock_obj(
     radius: float = 0.04,
     radial_segments: int = 32,
     length_segments: int = 24,
+    closed_toe: bool = False,
     bend_start: float = 0.0,
     bend_length: float = 0.0,
     bend_degrees: float = 0.0,
@@ -232,6 +233,20 @@ def generate_sock_obj(
             c = (row + 1) * radial_segments + column + 1
             d = (row + 1) * radial_segments + nxt + 1
             faces.extend(((a, c, b), (b, c, d)))
+    if closed_toe:
+        last_ring_start = length_segments * radial_segments
+        toe_center = tuple(
+            sum(vertices[last_ring_start + column][axis] for column in range(radial_segments))
+            / radial_segments
+            for axis in range(3)
+        )
+        vertices.append(toe_center)
+        center = len(vertices)
+        for column in range(radial_segments):
+            nxt = (column + 1) % radial_segments
+            a = last_ring_start + column + 1
+            b = last_ring_start + nxt + 1
+            faces.append((a, b, center))
     path.parent.mkdir(parents=True, exist_ok=True)
     material_path = path.with_suffix(".mtl")
     material_path.write_text(
@@ -239,7 +254,8 @@ def generate_sock_obj(
         encoding="ascii",
     )
     lines = [
-        "# Open triangulated tubular sock cloth mesh",
+        "# Triangulated sock cloth mesh with open cuff"
+        + (" and closed toe" if closed_toe else ""),
         f"mtllib {material_path.name}",
         "o sock",
         "g sock",

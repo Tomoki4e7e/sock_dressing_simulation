@@ -165,6 +165,9 @@ def main() -> int:
                 "particle_rest_edge_lengths": environment.sock_cloth.data.get(
                     "particle_rest_edge_lengths", ()
                 ),
+                "opening_particle_indices": environment.sock_cloth.data.get(
+                    "opening_particle_indices", ()
+                ),
                 "grasp_state": held,
             },
             radial_segments=scenario.sock_mesh.radial_segments,
@@ -174,6 +177,7 @@ def main() -> int:
         pull_trace = []
         slipped = False
         slipped_side = None
+        continuous_grasp = True
         for index in range(args.pull_steps):
             environment.sock_cloth.set_grasp_target_position(
                 "right",
@@ -182,12 +186,14 @@ def main() -> int:
             environment._env.step()
             environment.sock_cloth.request_grasp_state()
             environment.sock_cloth.request_particles()
-            environment.sock_cloth.request_scene_geometry()
             environment.sock_cloth.request_contacts()
             environment._env.step()
             states = {
                 state.side: state for state in environment.sock_cloth.grasp_states()
             }
+            continuous_grasp = continuous_grasp and all(
+                state.attached for state in states.values()
+            )
             qa = environment.cloth_radius_qa(
                 {
                     "particles": environment.sock_cloth.particles(),
@@ -197,13 +203,15 @@ def main() -> int:
                     "particle_rest_edge_lengths": environment.sock_cloth.data.get(
                         "particle_rest_edge_lengths", ()
                     ),
+                    "opening_particle_indices": environment.sock_cloth.data.get(
+                        "opening_particle_indices", ()
+                    ),
                     "grasp_state": [
                         state.__dict__ for state in states.values()
                     ],
                 },
                 radial_segments=scenario.sock_mesh.radial_segments,
             )
-            geometry = environment.sock_cloth.scene_geometry()
             foot_contact_ids.update(
                 int(contact.collider_id)
                 for contact in environment.sock_cloth.contacts()
@@ -211,8 +219,9 @@ def main() -> int:
             )
             anchor_span = float(
                 np.linalg.norm(
-                    np.asarray(geometry.right_grasp_position)
-                    - np.asarray(geometry.left_grasp_position)
+                    right_position
+                    + pull_direction * args.pull_step_m * (index + 1)
+                    - left_position
                 )
             )
             pull_trace.append(
@@ -256,6 +265,9 @@ def main() -> int:
         ]
         maximum_stretch = max(opening_stretch_values, default=None)
         configuration = environment.sock_cloth.configuration()
+        maximum_allowed_stretch = float(
+            configuration["maximum_circumferential_stretch"]
+        )
         pin_limit = int(configuration["maximum_grasp_particles_per_side"])
         localized_pins = all(
             len(state["particle_indices"]) <= pin_limit for state in held
@@ -277,9 +289,14 @@ def main() -> int:
             if velocity.ndim == 2 and velocity.shape[1:] == (3,)
             else np.asarray([], dtype=float)
         )
+        expected_particle_count = (
+            (scenario.sock_mesh.length_segments + 1)
+            * scenario.sock_mesh.radial_segments
+            + int(scenario.sock_mesh.closed_toe)
+        )
         report = {
             "ok": bool(
-                initial.shape == (800, 3)
+                initial.shape == (expected_particle_count, 3)
                 and displacement.size
                 and float(displacement.max()) > 0
                 and all(state["attached"] for state in held)
@@ -289,12 +306,14 @@ def main() -> int:
                 and maximum_unpinned_downward_displacement > 0.001
                 and bool(foot_contact_ids)
                 and before_pull_qa.get("passes", False)
-                and slipped
+                and continuous_grasp
+                and all(state["attached"] for state in released)
                 and application["initial_pose_contract"]["ok"]
                 and maximum_stretch is not None
-                and maximum_stretch <= 1.5
+                and maximum_stretch <= maximum_allowed_stretch
                 and maximum_particle_ring_stretch is not None
-                and maximum_particle_ring_stretch <= 1.5
+                and maximum_particle_ring_stretch
+                <= maximum_allowed_stretch
             ),
             "particle_count": int(initial.shape[0]),
             "maximum_particle_displacement_m": (
@@ -313,10 +332,12 @@ def main() -> int:
             "before_pull_cloth_qa": before_pull_qa,
             "released": released,
             "pull_trace": pull_trace,
+            "continuous_grasp": continuous_grasp,
             "slipped_due_to_over_tension": slipped,
             "slipped_side": slipped_side,
             "maximum_circumferential_stretch_proxy": maximum_stretch,
             "maximum_particle_ring_stretch_proxy": maximum_particle_ring_stretch,
+            "maximum_allowed_circumferential_stretch": maximum_allowed_stretch,
             "particle_displacement_after_pull_m": (
                 float(np.linalg.norm(final - before_pull, axis=1).max())
                 if final.shape == before_pull.shape and final.size

@@ -66,6 +66,21 @@ class _Backend:
         return _Anchor(id)
 
 
+def _safe_cloth_data():
+    return {
+        "particles": [
+            [0.0, 0.0, 0.0],
+            [0.01, 0.0, 0.0],
+            [0.0, 0.01, 0.0],
+            [0.01, 0.01, 0.0],
+        ],
+        "particle_edges": [[0, 1], [0, 2], [1, 3], [2, 3]],
+        "particle_rest_edge_lengths": [0.01, 0.01, 0.01, 0.01],
+        "opening_particle_indices": [0, 1, 2, 3],
+        "grasp_state": [],
+    }
+
+
 class _Robot:
     def __init__(self):
         self.id = 1100
@@ -110,7 +125,7 @@ class _Cloth:
     def stop_foot_clearance_tracking(self):
         self.clearance_tracking_stopped = True
 
-    def lock_human_and_chair(self):
+    def lock_human_and_chair(self, chair_id=-1):
         self.human_and_chair_locked = True
 
     def align_human_visual_foot_to_sock(self, distance):
@@ -226,7 +241,7 @@ def test_custom_foot_calibration_sets_clearance_before_pose_is_locked():
         def set_foot_clearance_target(self, distance, chair_id):
             self.clearance = (distance, chair_id)
 
-        def lock_human_and_chair(self):
+        def lock_human_and_chair(self, chair_id=-1):
             self.locked = True
 
         def request_scene_geometry(self):
@@ -284,21 +299,46 @@ def test_post_calibration_toe_offset_articulates_leg_to_world_target():
 
 
 @pytest.mark.parametrize(
-    ("toe_alignment", "left_depth", "expected"),
-    [(0.95, 0.025, True), (0.5, 0.025, False), (0.95, 0.005, False)],
+    ("toe_alignment", "left_depth", "offset_report", "expected"),
+    [
+        (0.95, 0.0, None, True),
+        (0.5, 0.0, None, False),
+        (0.5, 0.0, {"ok": True}, False),
+    ],
 )
-def test_initial_pose_contract_requires_toe_facing_inner_cuff_grasp(
-    toe_alignment, left_depth, expected
+def test_initial_pose_contract_requires_toe_facing_opening_edge_grasp(
+    toe_alignment, left_depth, offset_report, expected
 ):
     config = load_config(Path("config/custom_player.yaml"))
     environment = SockDressingEnv(config, backend=_Backend())
 
     class Cloth:
+        data = _safe_cloth_data()
+
         def request_scene_geometry(self):
+            pass
+
+        def request_grasp_state(self):
+            pass
+
+        def request_particles(self):
+            pass
+
+        def request_configuration(self):
             pass
 
         def request_visual_diagnostics(self, chair_id):
             assert chair_id == 2301
+
+        def grasp_states(self):
+            return (
+                SimpleNamespace(
+                    side="left", attached=True, particle_indices=(1, 2, 5, 6)
+                ),
+                SimpleNamespace(
+                    side="right", attached=True, particle_indices=(3, 4, 7, 8)
+                ),
+            )
 
         def scene_geometry(self):
             return SimpleNamespace(
@@ -318,6 +358,20 @@ def test_initial_pose_contract_requires_toe_facing_inner_cuff_grasp(
                 right_toe_position=(0.0, 0.0, -0.1),
                 left_grasp_position=(-0.04, 0.0, 0.03),
                 right_grasp_position=(0.04, 0.0, 0.03),
+                left_opening_edge=(-0.04, 0.0, 0.03),
+                right_opening_edge=(0.04, 0.0, 0.03),
+                left_grasp_corner_negative=(-0.04, -0.02, 0.03),
+                left_grasp_corner_positive=(-0.04, 0.02, 0.03),
+                right_grasp_corner_negative=(0.04, -0.02, 0.03),
+                right_grasp_corner_positive=(0.04, 0.02, 0.03),
+                left_grasp_patch_span_m=0.04,
+                right_grasp_patch_span_m=0.04,
+                maximum_grasp_corner_error_m=0.0,
+                grasp_thickness_axis_alignment=1.0,
+                left_grasp_thickness_axis=(0.0, 1.0, 0.0),
+                right_grasp_thickness_axis=(0.0, 1.0, 0.0),
+                left_grasp_inward_axis=(0.0, 0.0, 1.0),
+                right_grasp_inward_axis=(0.0, 0.0, 1.0),
             )
 
         def visual_diagnostics(self):
@@ -329,6 +383,116 @@ def test_initial_pose_contract_requires_toe_facing_inner_cuff_grasp(
                     "locked": True,
                     "right_toe_drift_m": 0.0,
                     "chair_drift_m": 0.0,
+                    "human_root_drift_m": 0.0,
+                    "human_anchor_drift_m": 0.0,
+                },
+            ]
+
+    environment.sock_cloth = Cloth()
+    environment._right_toe_offset_report = offset_report
+    report = environment._request_initial_pose_contract()
+
+    assert report["ok"] is expected
+    assert report["opening_to_toe_alignment"] == pytest.approx(toe_alignment)
+    assert report["left_cuff_insertion_depth_m"] == pytest.approx(left_depth)
+    assert report["opening_edges_at_grippers"]
+    assert report["bimanual_grasp_attached"]
+    assert report["grasp_particle_indices"] == {
+        "left": [1, 2, 5, 6],
+        "right": [3, 4, 7, 8],
+    }
+    assert report["left_grasp_inward_axis"] == [0.0, 0.0, 1.0]
+
+
+@pytest.mark.parametrize(
+    ("right_edge", "right_attached", "expected"),
+    [
+        ((0.04, 0.0, 0.03), True, True),
+        ((0.06, 0.0, 0.03), True, False),
+        ((0.04, 0.0, 0.03), False, False),
+    ],
+)
+def test_initial_pose_contract_requires_edges_at_attached_grippers(
+    right_edge, right_attached, expected
+):
+    config = load_config(Path("config/custom_player.yaml"))
+    environment = SockDressingEnv(config, backend=_Backend())
+
+    class Cloth:
+        data = _safe_cloth_data()
+
+        def request_scene_geometry(self):
+            pass
+
+        def request_grasp_state(self):
+            pass
+
+        def request_particles(self):
+            pass
+
+        def request_configuration(self):
+            pass
+
+        def request_visual_diagnostics(self, chair_id):
+            pass
+
+        def grasp_states(self):
+            return (
+                SimpleNamespace(
+                    side="left", attached=True, particle_indices=(1, 2, 5, 6)
+                ),
+                SimpleNamespace(
+                    side="right",
+                    attached=right_attached,
+                    particle_indices=(3, 4, 7, 8) if right_attached else (),
+                ),
+            )
+
+        def scene_geometry(self):
+            return SimpleNamespace(
+                foot_to_opening_plane_m=0.1,
+                foot_to_opening_lateral_m=0.0,
+                right_leg_raise_degrees=90.0,
+                right_knee_flexion_degrees=0.0,
+                sock_body_gravity_alignment=0.0,
+                opening_to_toe_alignment=0.95,
+                left_cuff_insertion_depth_m=0.0,
+                right_cuff_insertion_depth_m=0.0,
+                opening_center=(0.0, 0.0, 0.0),
+                opening_normal=(0.0, 0.0, 1.0),
+                opening_outward_normal=(0.0, 0.0, -1.0),
+                opening_target_normal=(0.0, 0.0, 1.0),
+                sock_body_direction=(0.0, -1.0, 0.0),
+                right_toe_position=(0.0, 0.0, -0.1),
+                left_grasp_position=(-0.04, 0.0, 0.03),
+                right_grasp_position=(0.04, 0.0, 0.03),
+                left_opening_edge=(-0.04, 0.0, 0.03),
+                right_opening_edge=right_edge,
+                left_grasp_corner_negative=(-0.04, -0.02, 0.03),
+                left_grasp_corner_positive=(-0.04, 0.02, 0.03),
+                right_grasp_corner_negative=(0.04, -0.02, 0.03),
+                right_grasp_corner_positive=(0.04, 0.02, 0.03),
+                left_grasp_patch_span_m=0.04,
+                right_grasp_patch_span_m=0.04,
+                maximum_grasp_corner_error_m=0.0,
+                grasp_thickness_axis_alignment=1.0,
+                left_grasp_thickness_axis=(0.0, 1.0, 0.0),
+                right_grasp_thickness_axis=(0.0, 1.0, 0.0),
+                left_grasp_inward_axis=(0.0, 0.0, 1.0),
+                right_grasp_inward_axis=(0.0, 0.0, 1.0),
+            )
+
+        def visual_diagnostics(self):
+            return [
+                {"role": "human_task_pose", "valid": True},
+                {
+                    "role": "human_chair_lock",
+                    "valid": True,
+                    "locked": True,
+                    "right_toe_drift_m": 0.0,
+                    "chair_drift_m": 0.0,
+                    "human_root_drift_m": 0.0,
+                    "human_anchor_drift_m": 0.0,
                 },
             ]
 
@@ -336,8 +500,8 @@ def test_initial_pose_contract_requires_toe_facing_inner_cuff_grasp(
     report = environment._request_initial_pose_contract()
 
     assert report["ok"] is expected
-    assert report["opening_to_toe_alignment"] == pytest.approx(toe_alignment)
-    assert report["left_cuff_insertion_depth_m"] == pytest.approx(left_depth)
+    assert report["opening_edges_at_grippers"] is (expected or not right_attached)
+    assert report["bimanual_grasp_attached"] is right_attached
 
 
 def test_custom_environment_starts_with_verified_bimanual_grasp(monkeypatch):
@@ -351,19 +515,53 @@ def test_custom_environment_starts_with_verified_bimanual_grasp(monkeypatch):
     calls = []
     monkeypatch.setattr(
         environment.sock_cloth,
-        "align_sock_opening_to_grasp_targets",
-        lambda toe_target: (
-            calls.append(("align_sock", tuple(toe_target)))
+        "align_sock_opening_to_grasp_targets_and_grasp",
+        lambda toe_target, distance: (
+            calls.append(("align_and_grasp", tuple(toe_target), distance))
             or setattr(environment.cloth, "sock_was_aligned_to_grippers", True)
         ),
+        raising=False,
     )
-
-    def fake_grasp(side, distance):
-        calls.append(("grasp", side, distance))
-        return {"side": side, "attached": True, "particle_indices": [1, 2]}
-
-    monkeypatch.setattr(environment, "grasp", fake_grasp)
+    monkeypatch.setattr(
+        environment.sock_cloth, "request_grasp_state", lambda: None, raising=False
+    )
+    monkeypatch.setattr(
+        environment.sock_cloth,
+        "grasp_states",
+        lambda: tuple(
+            SimpleNamespace(
+                side=side,
+                attached=True,
+                particle_indices=(1, 2, 5, 6),
+                constraint_error=0.0,
+                peak_constraint_error=0.0,
+                over_threshold_steps=0,
+                release_reason="",
+            )
+            for side in ("left", "right")
+        ),
+        raising=False,
+    )
     monkeypatch.setattr(environment, "_calibrate_foot_to_sock", lambda *args: None)
+    monkeypatch.setattr(
+        environment,
+        "_request_grasp_target_positions",
+        lambda: (
+            np.asarray([-0.10, 0.0, 0.0]),
+            np.asarray([0.10, 0.0, 0.0]),
+        ),
+    )
+    monkeypatch.setattr(
+        environment,
+        "move_grippers_to_targets",
+        lambda left, right: {"ok": True, "left": left, "right": right},
+    )
+    final_toe = tuple(config["scene"]["visuals"]["task_right_toe_position"])
+    monkeypatch.setattr(
+        environment,
+        "_request_scene_geometry",
+        lambda: SimpleNamespace(right_toe_position=final_toe),
+    )
     monkeypatch.setattr(
         environment,
         "_request_initial_pose_contract",
@@ -377,21 +575,18 @@ def test_custom_environment_starts_with_verified_bimanual_grasp(monkeypatch):
     assert environment.cloth.was_reset
     assert not hasattr(environment.cloth, "was_aligned")
     assert environment.cloth.sock_was_aligned_to_grippers
-    assert environment.cloth.maximum_grasp_span == pytest.approx(
-        config["scene"]["grasp_anchors"]["maximum_anchor_span_m"]
-    )
+    assert not hasattr(environment.cloth, "maximum_grasp_span")
     assert environment.cloth.slip_detection_armed
     assert getattr(environment.cloth, "visual_foot_distance", None) is None
     assert calls == [
         (
-            "align_sock",
-            tuple(config["scene"]["visuals"]["task_right_toe_position"]),
+            "align_and_grasp",
+            final_toe,
+            config["scene"]["grasp_anchors"]["max_distance_m"],
         ),
-        ("grasp", "left", config["scene"]["grasp_anchors"]["max_distance_m"]),
-        ("grasp", "right", config["scene"]["grasp_anchors"]["max_distance_m"]),
     ]
     assert all(item["attached"] for item in report["initial_grasp"])
-    assert report["grasp_alignment"] is None
+    assert report["grasp_alignment"]["ok"]
     assert report["initial_pose_contract"]["ok"]
 
 
@@ -418,15 +613,15 @@ def test_bimanual_cartesian_alignment_updates_both_arm_chains(monkeypatch):
         driven.append(angle.copy())
         return angle.copy()
 
-    def geometry():
-        return SimpleNamespace(
-            left_grasp_position=np.array([angle[0], 0.0, 0.0]),
-            right_grasp_position=np.array([angle[9], 0.0, 0.0]),
+    def grasp_positions():
+        return (
+            np.array([angle[0], 0.0, 0.0]),
+            np.array([angle[9], 0.0, 0.0]),
         )
 
     monkeypatch.setattr(environment, "robot_signals", robot_signals)
     monkeypatch.setattr(environment, "_drive_joint_target", drive)
-    monkeypatch.setattr(environment, "_request_scene_geometry", geometry)
+    monkeypatch.setattr(environment, "_request_grasp_target_positions", grasp_positions)
 
     report = environment.move_grippers_to_targets(
         [0.05, 0.0, 0.0], [0.05, 0.0, 0.0]
@@ -491,6 +686,42 @@ def test_cloth_radius_qa_prefers_obi_topology_over_particle_array_order():
     assert report["passes"]
     assert report["circumferential_stretch_proxy"] == pytest.approx(1.0)
     assert report["method"] == "Obi topology structural edge stretch"
+
+
+def test_cloth_radius_qa_reports_body_pin_edge_classes():
+    report = SockDressingEnv.cloth_radius_qa(
+        {
+            "particles": [[0, 0, 0], [0.01, 0, 0], [0.024, 0, 0], [0.04, 0, 0]],
+            "particle_edges": [[0, 1], [1, 2], [2, 3]],
+            "particle_rest_edge_lengths": [0.01, 0.01, 0.01],
+            "grasp_state": [
+                {
+                    "attached": True,
+                    "particle_indices": [2, 3],
+                }
+            ],
+        },
+        maximum_circumferential_stretch=1.5,
+    )
+
+    assert report["edge_classes"]["body_body"]["maximum_stretch"] == pytest.approx(1.0)
+    assert report["edge_classes"]["pin_body"]["maximum_stretch"] == pytest.approx(1.4)
+    assert report["edge_classes"]["pin_pin"]["maximum_stretch"] == pytest.approx(1.6)
+    assert not report["passes"]
+
+
+def test_topology_stretch_uses_rest_ratio_not_legacy_absolute_radius():
+    report = SockDressingEnv.cloth_radius_qa(
+        {
+            "particles": [[0, 0, 0], [0.08, 0, 0], [0, 0.01, 0]],
+            "particle_edges": [[0, 1]],
+            "particle_rest_edge_lengths": [0.08],
+        },
+        maximum_circumferential_stretch=1.5,
+    )
+
+    assert report["passes"]
+    assert report["maximum_current_edge_m"] == pytest.approx(0.08)
 
 
 def test_synthetic_episode_passes_feature_visualization_and_audit(tmp_path):

@@ -289,6 +289,13 @@ class SockDressingEnv:
             damping=float(expected["damping"]),
             substeps=int(expected["substeps"]),
             solver_iterations=int(expected["solver_iterations"]),
+            tether_constraints=bool(expected["tether_constraints"]),
+            tether_compliance=float(expected["tether_compliance"]),
+            tether_scale=float(expected["tether_scale"]),
+            maximum_circumferential_stretch=float(
+                expected["maximum_circumferential_stretch"]
+            ),
+            strain_limit_iterations=int(expected["strain_limit_iterations"]),
         )
         self.sock_cloth.configure_grasp(
             linear_compliance=float(expected["grasp_linear_compliance"]),
@@ -301,6 +308,9 @@ class SockDressingEnv:
                 expected["maximum_grasp_particles_per_side"]
             ),
             cuff_insertion_depth_m=float(expected["cuff_insertion_depth_m"]),
+            grasp_thickness_half_width_m=float(
+                expected["grasp_thickness_half_width_m"]
+            ),
         )
         self.sock_cloth.request_configuration()
         self.sock_cloth.request_registered_colliders()
@@ -518,6 +528,21 @@ class SockDressingEnv:
         self._env.step()
         return self.sock_cloth.scene_geometry()
 
+    def _request_grasp_target_positions(self) -> tuple[np.ndarray, np.ndarray]:
+        self.sock_cloth.request_scene_geometry()
+        self._env.step()
+        geometry = self.sock_cloth.data.get("scene_geometry", {})
+        left = np.asarray(geometry.get("left_grasp_position", ()), dtype=float)
+        right = np.asarray(geometry.get("right_grasp_position", ()), dtype=float)
+        if (
+            left.shape != (3,)
+            or right.shape != (3,)
+            or not np.all(np.isfinite(left))
+            or not np.all(np.isfinite(right))
+        ):
+            raise RuntimeError("Player did not return finite grasp target positions")
+        return left, right
+
     def frame_recording_camera_on_opening(
         self,
         distance_m: float,
@@ -623,10 +648,10 @@ class SockDressingEnv:
             raise ValueError("gripper targets must be finite world 3-vectors")
         trace = []
         for iteration in range(maximum_iterations + 1):
-            geometry = self._request_scene_geometry()
+            left_position, right_position = self._request_grasp_target_positions()
             actual = {
-                "left": np.asarray(geometry.left_grasp_position, dtype=float),
-                "right": np.asarray(geometry.right_grasp_position, dtype=float),
+                "left": left_position,
+                "right": right_position,
             }
             errors = {
                 side: float(np.linalg.norm(targets[side] - actual[side]))
@@ -650,13 +675,8 @@ class SockDressingEnv:
                 jacobian = np.zeros((3, len(indices)), dtype=float)
                 for column, joint_index in enumerate(indices):
                     restored = self._drive_joint_target(baseline)
-                    baseline_geometry = self._request_scene_geometry()
-                    baseline_position = np.asarray(
-                        getattr(
-                            baseline_geometry, f"{side}_grasp_position"
-                        ),
-                        dtype=float,
-                    )
+                    baseline_positions = self._request_grasp_target_positions()
+                    baseline_position = baseline_positions[0 if side == "left" else 1]
                     probe = baseline.copy()
                     direction = (
                         1.0
@@ -666,10 +686,8 @@ class SockDressingEnv:
                     )
                     probe[joint_index] += direction * epsilon
                     reached = self._drive_joint_target(probe)
-                    moved = self._request_scene_geometry()
-                    moved_position = np.asarray(
-                        getattr(moved, f"{side}_grasp_position"), dtype=float
-                    )
+                    moved_positions = self._request_grasp_target_positions()
+                    moved_position = moved_positions[0 if side == "left" else 1]
                     joint_delta = reached[joint_index] - restored[joint_index]
                     if abs(joint_delta) < 1e-6:
                         self._drive_joint_target(baseline)
@@ -678,10 +696,8 @@ class SockDressingEnv:
                         moved_position - baseline_position
                     ) / joint_delta
                 self._drive_joint_target(baseline)
-                side_geometry = self._request_scene_geometry()
-                side_actual = np.asarray(
-                    getattr(side_geometry, f"{side}_grasp_position"), dtype=float
-                )
+                side_positions = self._request_grasp_target_positions()
+                side_actual = side_positions[0 if side == "left" else 1]
                 error = targets[side] - side_actual
                 normal = jacobian @ jacobian.T + damping * np.eye(3)
                 delta = jacobian.T @ np.linalg.solve(normal, error)
@@ -696,15 +712,12 @@ class SockDressingEnv:
                 for side, indices in side_indices.items():
                     candidate[indices] += deltas[side] * scale
                 reached = self._drive_joint_target(candidate)
-                measured = self._request_scene_geometry()
+                measured = self._request_grasp_target_positions()
                 candidate_errors = {
                     side: float(
                         np.linalg.norm(
                             targets[side]
-                            - np.asarray(
-                                getattr(measured, f"{side}_grasp_position"),
-                                dtype=float,
-                            )
+                            - measured[0 if side == "left" else 1]
                         )
                     )
                     for side in side_indices
@@ -782,6 +795,7 @@ class SockDressingEnv:
             initial_grasp = []
             grasp_alignment = None
             grasp_settings = self.config["scene"].get("grasp_anchors", {})
+            grasp_distance = float(grasp_settings.get("max_distance_m", 0.03))
             if grasp_settings.get("auto_grasp", False):
                 alignment_settings = self.config["scene"].get(
                     "grasp_alignment", {}
@@ -798,10 +812,8 @@ class SockDressingEnv:
                     target_span = float(
                         alignment_settings.get("target_span_m", 0.09)
                     )
-                    geometry = self._request_scene_geometry()
-                    left = np.asarray(geometry.left_grasp_position, dtype=float)
-                    right = np.asarray(geometry.right_grasp_position, dtype=float)
-                    center = np.asarray(geometry.opening_center, dtype=float)
+                    left, right = self._request_grasp_target_positions()
+                    center = 0.5 * (left + right)
                     axis = right - left
                     span = float(np.linalg.norm(axis))
                     if span <= 1e-8 or target_span <= 0:
@@ -816,35 +828,20 @@ class SockDressingEnv:
                             "real gripper frames could not reach safe opening span: "
                             f"{grasp_alignment}"
                         )
-                if grasp_settings.get("align_sock_to_grippers", False):
-                    toe_target = (
-                        self.config["scene"]
-                        .get("visuals", {})
-                        .get("task_right_toe_position", scenario.foot_position)
-                    )
-                    self.sock_cloth.align_sock_opening_to_grasp_targets(
-                        toe_target
-                    )
-                    self._env.step()
-                elif not alignment_settings.get("enabled", False):
+                    # Settling re-applies `applied`; retain the aligned arm pose
+                    # instead of restoring the original wide bimanual span.
+                    applied = self.robot_signals()["angle"].copy()
+                if (
+                    not grasp_settings.get("align_sock_to_grippers", False)
+                    and not alignment_settings.get("enabled", False)
+                ):
                     self.sock_cloth.align_grasp_targets_to_opening()
                     self._env.step()
-                distance = float(grasp_settings.get("max_distance_m", 0.03))
-                initial_grasp = [
-                    self.grasp("left", distance),
-                    self.grasp("right", distance),
-                ]
-                if not all(item["attached"] for item in initial_grasp):
-                    raise RuntimeError(
-                        f"initial bimanual sock grasp failed: {initial_grasp}"
-                    )
-                by_side = {item["side"]: item for item in initial_grasp}
-                for item in self._grasp_attachment_report:
-                    state = by_side.get(item["side"], {})
-                    item["verified"] = bool(state.get("attached", False))
-                    item["particle_indices"] = list(
-                        state.get("particle_indices", ())
-                    )
+                if not grasp_settings.get("align_sock_to_grippers", False):
+                    initial_grasp = [
+                        self.grasp("left", grasp_distance),
+                        self.grasp("right", grasp_distance),
+                    ]
             for _ in range(scenario.settle_steps):
                 if self.config["scene"].get(
                     "robot_direct_joint_control", False
@@ -883,12 +880,81 @@ class SockDressingEnv:
                 self._apply_post_calibration_right_toe_offset()
             )
             if (
+                grasp_settings.get("auto_grasp", False)
+                and grasp_settings.get("align_sock_to_grippers", False)
+            ):
+                final_geometry = self._request_scene_geometry()
+                self.sock_cloth.align_sock_opening_to_grasp_targets_and_grasp(
+                    list(final_geometry.right_toe_position),
+                    grasp_distance,
+                )
+                self.sock_cloth.request_grasp_state()
+                self._env.step()
+                states = {
+                    state.side: state
+                    for state in self.sock_cloth.grasp_states()
+                }
+                initial_grasp = [
+                    {
+                        "side": state.side,
+                        "attached": state.attached,
+                        "particle_indices": list(state.particle_indices),
+                        "constraint_error": state.constraint_error,
+                        "peak_constraint_error": state.peak_constraint_error,
+                        "over_threshold_steps": state.over_threshold_steps,
+                        "release_reason": state.release_reason,
+                    }
+                    for side in ("left", "right")
+                    for state in (states[side],)
+                ]
+            # Rotating the opening frame changes the plane used by foot
+            # clearance. Recalibrate once against that final plane, then freeze
+            # the human/chair pose for the rollout. Translation along the new
+            # normal preserves the toe-facing grasp orientation.
+            if (
                 native
-                and scenario.foot_ik_index is None
+                and pose_settings.get("calibrate_foot_to_sock", False)
+                and grasp_settings.get("align_sock_to_grippers", False)
+            ):
+                if scenario.foot_ik_index is None:
+                    self._calibrate_foot_to_sock(
+                        None,
+                        float(pose_settings["foot_to_sock_m"]),
+                        3,
+                    )
+                    self.sock_cloth.stop_foot_clearance_tracking()
+                    self._env.step()
+                else:
+                    self._calibrate_foot_to_sock(
+                        scenario.foot_ik_index,
+                        float(pose_settings["foot_to_sock_m"]),
+                    )
+            if (
+                native
                 and pose_settings.get("lock_human_and_chair", False)
             ):
-                self.sock_cloth.lock_human_and_chair()
+                self.sock_cloth.lock_human_and_chair(
+                    int(
+                        self.config["scene"]
+                        .get("stable_ids", {})
+                        .get("chair", -1)
+                    )
+                )
                 self._env.step()
+            if initial_grasp and not all(
+                item["attached"] for item in initial_grasp
+            ):
+                raise RuntimeError(
+                    f"initial bimanual sock grasp failed: {initial_grasp}"
+                )
+            if initial_grasp:
+                by_side = {item["side"]: item for item in initial_grasp}
+                for item in self._grasp_attachment_report:
+                    state = by_side.get(item["side"], {})
+                    item["verified"] = bool(state.get("attached", False))
+                    item["particle_indices"] = list(
+                        state.get("particle_indices", ())
+                    )
             pose_contract = self._request_initial_pose_contract() if native else {}
             if (
                 pose_contract
@@ -1157,6 +1223,9 @@ class SockDressingEnv:
         self.sock_cloth.request_registered_colliders()
         self.sock_cloth.request_grasp_state()
         self.sock_cloth.request_scene_geometry()
+        self.sock_cloth.request_visual_diagnostics(
+            int(self.config["scene"].get("stable_ids", {}).get("chair", -1))
+        )
         self.sock_cloth.request_contacts()
         if hasattr(self.robot, "GetJointInverseDynamicsForce"):
             self.robot.GetJointInverseDynamicsForce()
@@ -1177,6 +1246,41 @@ class SockDressingEnv:
                 if int(item.get("collider_id", -1)) >= 0
             }
         )
+        visual_diagnostics = list(cloth.get("visual_diagnostics", []))
+        lock_report = next(
+            (
+                dict(item)
+                for item in visual_diagnostics
+                if item.get("role") == "human_chair_lock"
+            ),
+            None,
+        )
+        pose_settings = self.config["scene"].get("initial_pose_contract", {})
+        if pose_settings.get("lock_human_and_chair", False):
+            maximum_drift = float(
+                pose_settings.get("maximum_lock_drift_m", 0.002)
+            )
+            measured = (
+                "right_toe_drift_m",
+                "chair_drift_m",
+                "human_root_drift_m",
+                "human_anchor_drift_m",
+            )
+            if (
+                lock_report is None
+                or not bool(lock_report.get("valid", False))
+                or any(
+                    not np.isfinite(float(lock_report.get(name, float("inf"))))
+                    or float(lock_report.get(name, float("inf"))) > maximum_drift
+                    for name in measured
+                )
+            ):
+                raise RuntimeError(
+                    "human/chair rollout lock drift exceeded contract: "
+                    f"{lock_report}"
+                )
+        diagnostics = self.diagnostics()
+        diagnostics["human_chair_lock_qa"] = lock_report
         observation = {
             "robot": robot_data,
             "human": dict(getattr(self.human, "data", {}) or {}),
@@ -1185,7 +1289,7 @@ class SockDressingEnv:
             "recording_camera": recording,
             "contact_force": contacts,
             "collision_pairs": collision_pairs,
-            "diagnostics": self.diagnostics(),
+            "diagnostics": diagnostics,
         }
         observation.update(self.robot_signals(robot_data))
         return observation
@@ -1195,6 +1299,9 @@ class SockDressingEnv:
         if not settings:
             return {}
         self.sock_cloth.request_scene_geometry()
+        self.sock_cloth.request_grasp_state()
+        self.sock_cloth.request_particles()
+        self.sock_cloth.request_configuration()
         self.sock_cloth.request_visual_diagnostics(
             int(self.config["scene"].get("stable_ids", {}).get("chair", -1))
         )
@@ -1220,17 +1327,136 @@ class SockDressingEnv:
         minimum_cuff_insertion = float(
             settings.get("minimum_cuff_insertion_depth_m", 0.0)
         )
+        maximum_opening_span = float(
+            settings.get("maximum_opening_span_m", 0.12)
+        )
+        maximum_cloth_bounds_span = float(
+            settings.get("maximum_cloth_bounds_span_m", 0.35)
+        )
+        opening_span = float(
+            getattr(
+                geometry,
+                "opening_span_m",
+                np.linalg.norm(
+                    np.asarray(geometry.right_opening_edge, dtype=float)
+                    - np.asarray(geometry.left_opening_edge, dtype=float)
+                ),
+            )
+        )
+        maximum_stretch = float(
+            self.config["obi"]["expected"].get(
+                "maximum_circumferential_stretch", 1.5
+            )
+        )
+        cloth_qa = self.cloth_radius_qa(
+            dict(self.sock_cloth.data),
+            radial_segments=int(
+                self.config["scenario"]["sock"]["radial_segments"]
+            ),
+            maximum_circumferential_stretch=maximum_stretch,
+        )
+        bounds = cloth_qa.get("bounds_world", {})
+        bounds_minimum = np.asarray(bounds.get("minimum", ()), dtype=float)
+        bounds_maximum = np.asarray(bounds.get("maximum", ()), dtype=float)
+        bounds_span = (
+            bounds_maximum - bounds_minimum
+            if bounds_minimum.shape == (3,)
+            and bounds_maximum.shape == (3,)
+            else np.full(3, np.inf)
+        )
+        initial_cloth_ok = (
+            bool(cloth_qa.get("passes", False))
+            and opening_span <= maximum_opening_span
+            and bool(np.all(bounds_span <= maximum_cloth_bounds_span))
+        )
+        configured_opening_edge_error = settings.get(
+            "maximum_opening_edge_error_m"
+        )
+        maximum_opening_edge_error = (
+            float(configured_opening_edge_error)
+            if configured_opening_edge_error is not None
+            else float("inf")
+        )
+        if maximum_opening_edge_error <= 0:
+            raise ValueError(
+                "maximum_opening_edge_error_m must be positive when configured"
+            )
+        left_opening_edge_error = float(
+            np.linalg.norm(
+                np.asarray(geometry.left_opening_edge, dtype=float)
+                - np.asarray(geometry.left_grasp_position, dtype=float)
+            )
+        )
+        right_opening_edge_error = float(
+            np.linalg.norm(
+                np.asarray(geometry.right_opening_edge, dtype=float)
+                - np.asarray(geometry.right_grasp_position, dtype=float)
+            )
+        )
+        opening_edges_at_grippers = (
+            left_opening_edge_error <= maximum_opening_edge_error
+            and right_opening_edge_error <= maximum_opening_edge_error
+        )
+        grasp_states = {
+            state.side: state for state in self.sock_cloth.grasp_states()
+        }
+        bimanual_grasp_attached = all(
+            side in grasp_states and grasp_states[side].attached
+            for side in ("left", "right")
+        )
+        required_particles_per_side = int(
+            settings.get("required_grasp_particles_per_side", 2)
+        )
+        grasp_particle_counts = {
+            side: len(grasp_states[side].particle_indices)
+            if side in grasp_states
+            else 0
+            for side in ("left", "right")
+        }
+        grasp_particle_indices = {
+            side: list(grasp_states[side].particle_indices)
+            if side in grasp_states
+            else []
+            for side in ("left", "right")
+        }
+        four_point_grasp_attached = all(
+            grasp_particle_counts[side] == required_particles_per_side
+            for side in ("left", "right")
+        )
+        target_patch_span = 2.0 * float(
+            self.config["obi"]["expected"]["grasp_thickness_half_width_m"]
+        )
+        patch_span_tolerance = float(
+            settings.get("grasp_patch_span_tolerance_m", 0.006)
+        )
+        maximum_grasp_corner_error = float(
+            settings.get("maximum_grasp_corner_error_m", 0.006)
+        )
+        minimum_thickness_alignment = float(
+            settings.get("minimum_grasp_thickness_axis_alignment", 0.95)
+        )
+        rectangular_opening_ok = (
+            abs(geometry.left_grasp_patch_span_m - target_patch_span)
+            <= patch_span_tolerance
+            and abs(geometry.right_grasp_patch_span_m - target_patch_span)
+            <= patch_span_tolerance
+            and geometry.maximum_grasp_corner_error_m
+            <= maximum_grasp_corner_error
+            and geometry.grasp_thickness_axis_alignment
+            >= minimum_thickness_alignment
+        )
         distance_error = abs(geometry.foot_to_opening_plane_m - wanted_distance)
         angle_error = abs(geometry.right_leg_raise_degrees - wanted_angle)
         offset_report = self._right_toe_offset_report
         offset_ok = offset_report is None or bool(offset_report.get("ok", False))
         sock_alignment_ok = (
-            True
-            if offset_report is not None
-            else (
-                distance_error <= distance_tolerance
-                and geometry.foot_to_opening_lateral_m <= lateral_tolerance
-                and geometry.opening_to_toe_alignment >= minimum_toe_alignment
+            geometry.opening_to_toe_alignment >= minimum_toe_alignment
+            and (
+                offset_report is not None
+                or (
+                    distance_error <= distance_tolerance
+                    and geometry.foot_to_opening_lateral_m <= lateral_tolerance
+                )
             )
         )
         visual_entries = self.sock_cloth.visual_diagnostics()
@@ -1262,6 +1488,10 @@ class SockDressingEnv:
                 <= maximum_lock_drift
                 and float(lock_visual.get("chair_drift_m", float("inf")))
                 <= maximum_lock_drift
+                and float(lock_visual.get("human_root_drift_m", float("inf")))
+                <= maximum_lock_drift
+                and float(lock_visual.get("human_anchor_drift_m", float("inf")))
+                <= maximum_lock_drift
             )
         )
         return {
@@ -1276,6 +1506,11 @@ class SockDressingEnv:
                 >= minimum_cuff_insertion
                 and geometry.right_cuff_insertion_depth_m
                 >= minimum_cuff_insertion
+                and opening_edges_at_grippers
+                and bimanual_grasp_attached
+                and four_point_grasp_attached
+                and rectangular_opening_ok
+                and initial_cloth_ok
                 and visual_ok
                 and lock_ok
             ),
@@ -1295,6 +1530,12 @@ class SockDressingEnv:
             "opening_target_normal": list(geometry.opening_target_normal),
             "opening_to_toe_alignment": geometry.opening_to_toe_alignment,
             "opening_to_toe_alignment_min": minimum_toe_alignment,
+            "opening_span_m": opening_span,
+            "maximum_opening_span_m": maximum_opening_span,
+            "cloth_bounds_span_m": bounds_span.tolist(),
+            "maximum_cloth_bounds_span_m": maximum_cloth_bounds_span,
+            "initial_cloth_qa": cloth_qa,
+            "initial_cloth_ok": initial_cloth_ok,
             "left_cuff_insertion_depth_m": geometry.left_cuff_insertion_depth_m,
             "right_cuff_insertion_depth_m": geometry.right_cuff_insertion_depth_m,
             "minimum_cuff_insertion_depth_m": minimum_cuff_insertion,
@@ -1304,6 +1545,56 @@ class SockDressingEnv:
             "right_toe_position": list(geometry.right_toe_position),
             "left_grasp_position": list(geometry.left_grasp_position),
             "right_grasp_position": list(geometry.right_grasp_position),
+            "left_opening_edge": list(geometry.left_opening_edge),
+            "right_opening_edge": list(geometry.right_opening_edge),
+            "left_opening_edge_error_m": left_opening_edge_error,
+            "right_opening_edge_error_m": right_opening_edge_error,
+            "maximum_opening_edge_error_m": (
+                maximum_opening_edge_error
+                if configured_opening_edge_error is not None
+                else None
+            ),
+            "opening_edges_at_grippers": opening_edges_at_grippers,
+            "bimanual_grasp_attached": bimanual_grasp_attached,
+            "grasp_particle_counts": grasp_particle_counts,
+            "grasp_particle_indices": grasp_particle_indices,
+            "required_grasp_particles_per_side": required_particles_per_side,
+            "four_point_grasp_attached": four_point_grasp_attached,
+            "left_grasp_thickness_axis": list(
+                geometry.left_grasp_thickness_axis
+            ),
+            "right_grasp_thickness_axis": list(
+                geometry.right_grasp_thickness_axis
+            ),
+            "left_grasp_inward_axis": list(geometry.left_grasp_inward_axis),
+            "right_grasp_inward_axis": list(geometry.right_grasp_inward_axis),
+            "left_grasp_corner_negative": list(
+                geometry.left_grasp_corner_negative
+            ),
+            "left_grasp_corner_positive": list(
+                geometry.left_grasp_corner_positive
+            ),
+            "right_grasp_corner_negative": list(
+                geometry.right_grasp_corner_negative
+            ),
+            "right_grasp_corner_positive": list(
+                geometry.right_grasp_corner_positive
+            ),
+            "left_grasp_patch_span_m": geometry.left_grasp_patch_span_m,
+            "right_grasp_patch_span_m": geometry.right_grasp_patch_span_m,
+            "target_grasp_patch_span_m": target_patch_span,
+            "grasp_patch_span_tolerance_m": patch_span_tolerance,
+            "maximum_grasp_corner_error_m": (
+                geometry.maximum_grasp_corner_error_m
+            ),
+            "maximum_grasp_corner_error_limit_m": maximum_grasp_corner_error,
+            "grasp_thickness_axis_alignment": (
+                geometry.grasp_thickness_axis_alignment
+            ),
+            "minimum_grasp_thickness_axis_alignment": (
+                minimum_thickness_alignment
+            ),
+            "rectangular_opening_ok": rectangular_opening_ok,
             "right_toe_offset": offset_report,
             "human_visual_ok": visual_ok,
             "human_visual_diagnostics": task_pose_visual,
@@ -1498,7 +1789,24 @@ class SockDressingEnv:
     def cloth_radius_qa(
         cloth: Mapping[str, Any],
         radial_segments: Optional[int] = None,
+        maximum_circumferential_stretch: Optional[float] = None,
     ) -> Dict[str, Any]:
+        if maximum_circumferential_stretch is None:
+            from .scenario import SOCK_MAX_CIRCUMFERENTIAL_STRETCH
+
+            maximum_circumferential_stretch = (
+                SOCK_MAX_CIRCUMFERENTIAL_STRETCH
+            )
+        maximum_circumferential_stretch = float(
+            maximum_circumferential_stretch
+        )
+        if (
+            not np.isfinite(maximum_circumferential_stretch)
+            or maximum_circumferential_stretch <= 0
+        ):
+            raise ValueError(
+                "maximum_circumferential_stretch must be finite and positive"
+            )
         particles = np.asarray(cloth.get("particles", []), dtype=float)
         if particles.ndim != 2 or particles.shape[0] < 3 or particles.shape[1] != 3:
             return {"available": False, "passes": False}
@@ -1523,17 +1831,10 @@ class SockDressingEnv:
                 if bool(state.get("attached", False))
                 for index in state.get("particle_indices", ())
             }
-            if pinned_particles:
-                body_edge_mask = np.asarray(
-                    [
-                        int(edge[0]) not in pinned_particles
-                        and int(edge[1]) not in pinned_particles
-                        for edge in edges
-                    ],
-                    dtype=bool,
-                )
-                edges = edges[body_edge_mask]
-                rest_lengths = rest_lengths[body_edge_mask]
+            opening_particles = {
+                int(index)
+                for index in cloth.get("opening_particle_indices", ())
+            }
             edge_lengths = np.linalg.norm(
                 particles[edges[:, 0]] - particles[edges[:, 1]],
                 axis=1,
@@ -1543,13 +1844,53 @@ class SockDressingEnv:
             stretch = float(edge_stretches[maximum_stretch_index])
             maximum = float(edge_lengths.max())
             method = "Obi topology structural edge stretch"
+            pinned_counts = np.asarray(
+                [
+                    int(int(edge[0]) in pinned_particles)
+                    + int(int(edge[1]) in pinned_particles)
+                    for edge in edges
+                ],
+                dtype=int,
+            )
+            edge_classes = {}
+            for name, count in (
+                ("body_body", 0),
+                ("pin_body", 1),
+                ("pin_pin", 2),
+            ):
+                mask = pinned_counts == count
+                if not np.any(mask):
+                    edge_classes[name] = {
+                        "edge_count": 0,
+                        "maximum_stretch": None,
+                        "maximum_stretch_edge": None,
+                        "maximum_stretch_current_edge_m": None,
+                        "maximum_stretch_rest_edge_m": None,
+                    }
+                    continue
+                class_indices = np.flatnonzero(mask)
+                local_index = int(np.argmax(edge_stretches[mask]))
+                edge_index = int(class_indices[local_index])
+                edge_classes[name] = {
+                    "edge_count": int(mask.sum()),
+                    "maximum_stretch": float(edge_stretches[edge_index]),
+                    "maximum_stretch_edge": edges[edge_index].tolist(),
+                    "maximum_stretch_current_edge_m": float(
+                        edge_lengths[edge_index]
+                    ),
+                    "maximum_stretch_rest_edge_m": float(
+                        rest_lengths[edge_index]
+                    ),
+                }
             diagnostics = {
                 "minimum_rest_edge_m": float(rest_lengths.min()),
                 "maximum_rest_edge_m": float(rest_lengths.max()),
                 "minimum_current_edge_m": float(edge_lengths.min()),
                 "maximum_current_edge_m": maximum,
                 "maximum_stretch_edge": edges[maximum_stretch_index].tolist(),
-                "excluded_pinned_particle_count": len(pinned_particles),
+                "pinned_particle_count": len(pinned_particles),
+                "opening_particle_count": len(opening_particles),
+                "edge_classes": edge_classes,
             }
         elif (
             radial_segments is not None
@@ -1586,7 +1927,16 @@ class SockDressingEnv:
             },
             "maximum_radius_m": maximum,
             "circumferential_stretch_proxy": stretch,
-            "passes": maximum <= 0.06 and stretch <= 1.5,
+            "passes": (
+                (
+                    method == "Obi topology structural edge stretch"
+                    or maximum <= 0.06
+                )
+                and stretch <= maximum_circumferential_stretch
+            ),
+            "maximum_circumferential_stretch": (
+                maximum_circumferential_stretch
+            ),
             "method": method,
             **diagnostics,
         }

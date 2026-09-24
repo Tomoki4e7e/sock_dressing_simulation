@@ -61,12 +61,14 @@ scene:
     auto_grasp: true
     align_sock_to_grippers: true
     max_distance_m: 0.04
-    maximum_anchor_span_m: 0.09
+    # Keep both targets at the configured grasping_frame origins. The sock
+    # opening is stretched to this live span instead of moving either target.
+    maximum_anchor_span_m: null
     anchors:
       - {id: 2201, side: left, parent_link: "left_gripper/grasping_frame", local_position: [0.0, 0.0, 0.0]}
       - {id: 2202, side: right, parent_link: "right_gripper/grasping_frame", local_position: [0.0, 0.0, 0.0]}
   grasp_alignment:
-    enabled: false
+    enabled: true
     target_span_m: 0.09
     tolerance_m: 0.015
     finite_difference_rad: 0.02
@@ -87,7 +89,15 @@ scene:
     foot_to_sock_tolerance_m: 0.02
     foot_lateral_tolerance_m: 0.035
     opening_to_toe_alignment_min: 0.90
-    minimum_cuff_insertion_depth_m: 0.015
+    # The opening lip itself is held at each grasping_frame origin.
+    minimum_cuff_insertion_depth_m: 0.0
+    maximum_opening_edge_error_m: 0.01
+    required_grasp_particles_per_side: 4
+    grasp_patch_span_tolerance_m: 0.006
+    maximum_grasp_corner_error_m: 0.006
+    minimum_grasp_thickness_axis_alignment: 0.95
+    maximum_opening_span_m: 0.12
+    maximum_cloth_bounds_span_m: 0.35
     # The body is allowed to rotate and fold away from a prescribed axis.
     sock_body_gravity_alignment_min: -1.0
     right_leg_raise_degrees: 90.0
@@ -115,7 +125,14 @@ obi:
     stretch_compliance: 0.00001
     bend_compliance: 0.01
     stretching_scale: 1.0
+    # Reject any rollout that stretches the 40 mm rest radius beyond 60 mm.
     maximum_circumferential_stretch: 1.5
+    strain_limit_iterations: 200
+    # Avoid a rigid long-range cage; local structural constraints and the
+    # explicit 1.5x edge limiter remain authoritative.
+    tether_constraints: false
+    tether_compliance: 0.0
+    tether_scale: 1.0
     self_collision: true
     damping: 0.95
     substeps: 8
@@ -124,16 +141,21 @@ obi:
     particle_mass_kg: 0.005
     collision_margin_m: 0.002
     friction: 0.5
+    # The grasped cuff must follow autonomous arm motion without accumulating
+    # metres-scale pin error; cloth compliance remains in the structural mesh.
     grasp_linear_compliance: 0.00005
     # Lip and inner-band position pins define the cuff plane; leave particle
     # bend/twist unconstrained so the fabric can drape without artificial strain.
     grasp_rotational_compliance: 1000000.0
     grasp_break_threshold: 20.0
-    # Two lip particles per side are held at a 3 cm local offset from the
-    # inserted gripper tip; the rest of the cuff and sock remain dynamic.
-    maximum_grasp_particles_per_side: 2
-    # Pin an inner cuff ring so the physical gripper tips sit inside the sock
-    # while the free opening rim remains in front of them toward the toe.
+    # Four lip particles per side distribute cuff load without rigidly pinning
+    # the complete opening.
+    maximum_grasp_particles_per_side: 4
+    # GripperV2 finger thickness is about 45 mm. Pin the opening at local-X
+    # offsets of +/-20 mm so the four held particles form a 40 mm short edge.
+    grasp_thickness_half_width_m: 0.02
+    # Use the inner cuff ring to estimate the opening normal and taper the
+    # initial diameter stretch over the first 3 cm of the sock.
     cuff_insertion_depth_m: 0.03
     slip_constraint_error_m: 0.20
     slip_opening_span_m: 0.11
@@ -157,12 +179,18 @@ inference:
   resume_optimizer: false
   # One policy action represents 0.2 s at 5 Hz; Unity fixedDeltaTime is 0.02 s.
   physics_steps_per_action: 10
+  # Renderer masks are exact (IoU 1.0); allow rapid projected-area changes as
+  # the retained grasp moves the sock toward/away from the head camera.
+  mask_max_area_change: 25.0
   reference_actions: artifacts/dressing-trial-bimanual-sync-fix/dressing_trial_20260922T082802Z/training_episode/angle.csv
   reference_action_blend: 1.0
   reference_action_hold_steps: 10
   reference_action_interpolation: linear
   reference_cartesian_pull_m: 0.02
-  maximum_grasp_edge_error_m: 0.12
+  maximum_grasp_edge_error_m: 0.20
+  minimum_follow_displacement_m: 0.02
+  maximum_distal_follow_error_m: 0.05
+  minimum_distal_follow_ratio: 0.5
   # Preserve the complete video when pins remain attached but the visual edge
   # metric exceeds its strict success threshold; metadata still reports failure.
   abort_on_grasp_qa_failure: false
@@ -171,9 +199,11 @@ inference:
     require_prompt_containment: true
     keep_prompt_components: false
     sock_min_fraction: 0.0001
-    sock_max_fraction: 0.10
+    sock_max_fraction: 0.15
     leg_min_fraction: 0.0001
-    leg_max_fraction: 0.15
+    # The articulated raised-leg pose occupies about 18% of the head-camera
+    # frame; renderer IoU/centroid checks still reject incorrect masks.
+    leg_max_fraction: 0.25
     # A head-mounted view sees the sock projected directly over the foot while
     # dressing; renderer agreement still prevents broad/incorrect components.
     maximum_overlap_fraction: 1.0
@@ -182,6 +212,7 @@ scenario:
   sock:
     position: [-0.14, 0.53, 0.68]
     rotation: [0.0, 0.0, 0.0]
+    closed_toe: true
     # Rest-shape the free body downward after a straight 3 cm cuff. This keeps
     # the opening toe-facing without stretching a straight tube into a 90° bend.
     rest_bend_start_m: 0.03

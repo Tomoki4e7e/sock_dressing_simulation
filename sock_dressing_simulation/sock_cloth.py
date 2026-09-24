@@ -92,7 +92,19 @@ class SceneGeometry:
     left_grasp_local_offset: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     right_grasp_local_offset: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     opening_target_normal: Tuple[float, float, float] = (0.0, 0.0, 1.0)
+    left_grasp_thickness_axis: Tuple[float, float, float] = (1.0, 0.0, 0.0)
+    right_grasp_thickness_axis: Tuple[float, float, float] = (1.0, 0.0, 0.0)
+    left_grasp_inward_axis: Tuple[float, float, float] = (0.0, 0.0, 1.0)
+    right_grasp_inward_axis: Tuple[float, float, float] = (0.0, 0.0, 1.0)
     opening_span_m: float = 0.0
+    left_grasp_corner_negative: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    left_grasp_corner_positive: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    right_grasp_corner_negative: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    right_grasp_corner_positive: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    left_grasp_patch_span_m: float = 0.0
+    right_grasp_patch_span_m: float = 0.0
+    maximum_grasp_corner_error_m: float = 0.0
+    grasp_thickness_axis_alignment: float = 0.0
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "SceneGeometry":
@@ -111,6 +123,14 @@ class SceneGeometry:
             "left_grasp_local_offset",
             "right_grasp_local_offset",
             "opening_target_normal",
+            "left_grasp_thickness_axis",
+            "right_grasp_thickness_axis",
+            "left_grasp_inward_axis",
+            "right_grasp_inward_axis",
+            "left_grasp_corner_negative",
+            "left_grasp_corner_positive",
+            "right_grasp_corner_negative",
+            "right_grasp_corner_positive",
         )
         vectors = {}
         for name in vector_names:
@@ -119,11 +139,27 @@ class SceneGeometry:
                 "left_opening_edge": "left_grasp_position",
                 "right_opening_edge": "right_grasp_position",
                 "opening_target_normal": "opening_normal",
+                "left_grasp_thickness_axis": None,
+                "right_grasp_thickness_axis": None,
+                "left_grasp_inward_axis": "opening_target_normal",
+                "right_grasp_inward_axis": "opening_target_normal",
+                "left_grasp_corner_negative": "left_grasp_position",
+                "left_grasp_corner_positive": "left_grasp_position",
+                "right_grasp_corner_negative": "right_grasp_position",
+                "right_grasp_corner_positive": "right_grasp_position",
             }.get(name)
             fallback = (
                 value.get(fallback_name, ())
                 if fallback_name
-                else ((0.0, 0.0, 0.0) if name.endswith("_local_offset") else ())
+                else (
+                    (1.0, 0.0, 0.0)
+                    if name.endswith("_thickness_axis")
+                    else (
+                        (0.0, 0.0, 0.0)
+                        if name.endswith("_local_offset")
+                        else ()
+                    )
+                )
             )
             vector = tuple(float(item) for item in value.get(name, fallback))
             if len(vector) != 3 or not np.all(np.isfinite(vector)):
@@ -146,6 +182,14 @@ class SceneGeometry:
                 ),
             )
         )
+        left_patch_span = float(value.get("left_grasp_patch_span_m", 0.0))
+        right_patch_span = float(value.get("right_grasp_patch_span_m", 0.0))
+        maximum_corner_error = float(
+            value.get("maximum_grasp_corner_error_m", 0.0)
+        )
+        thickness_alignment = float(
+            value.get("grasp_thickness_axis_alignment", 0.0)
+        )
         if (
             not np.isfinite(distance)
             or distance < 0
@@ -167,6 +211,15 @@ class SceneGeometry:
             or right_insertion < 0
             or not np.isfinite(opening_span)
             or opening_span < 0
+            or not np.isfinite(left_patch_span)
+            or left_patch_span < 0
+            or not np.isfinite(right_patch_span)
+            or right_patch_span < 0
+            or not np.isfinite(maximum_corner_error)
+            or maximum_corner_error < 0
+            or not np.isfinite(thickness_alignment)
+            or thickness_alignment < 0
+            or thickness_alignment > 1
         ):
             raise ValueError("scene distances and angles must be finite")
         return cls(
@@ -181,6 +234,10 @@ class SceneGeometry:
             left_grasp_parent=str(value.get("left_grasp_parent", "")),
             right_grasp_parent=str(value.get("right_grasp_parent", "")),
             opening_span_m=opening_span,
+            left_grasp_patch_span_m=left_patch_span,
+            right_grasp_patch_span_m=right_patch_span,
+            maximum_grasp_corner_error_m=maximum_corner_error,
+            grasp_thickness_axis_alignment=thickness_alignment,
             **vectors,
         )
 
@@ -298,6 +355,11 @@ class SockClothAttr:
         damping: float,
         substeps: int,
         solver_iterations: int,
+        tether_constraints: bool = True,
+        tether_compliance: float = 0.0,
+        tether_scale: float = 1.0,
+        maximum_circumferential_stretch: float = 1.5,
+        strain_limit_iterations: int = 8,
     ) -> None:
         self._send_data(
             "ConfigureSock",
@@ -312,6 +374,11 @@ class SockClothAttr:
             float(damping),
             int(substeps),
             int(solver_iterations),
+            bool(tether_constraints),
+            float(tether_compliance),
+            float(tether_scale),
+            float(maximum_circumferential_stretch),
+            int(strain_limit_iterations),
         )
 
     def configure_grasp(
@@ -325,6 +392,7 @@ class SockClothAttr:
         slip_consecutive_steps: int,
         maximum_particles_per_side: int,
         cuff_insertion_depth_m: float,
+        grasp_thickness_half_width_m: float,
     ) -> None:
         values = np.asarray(
             [
@@ -334,6 +402,7 @@ class SockClothAttr:
                 slip_constraint_error_m,
                 slip_opening_span_m,
                 cuff_insertion_depth_m,
+                grasp_thickness_half_width_m,
             ],
             dtype=float,
         )
@@ -345,8 +414,9 @@ class SockClothAttr:
             or slip_constraint_error_m <= 0
             or slip_opening_span_m <= 0
             or cuff_insertion_depth_m <= 0
+            or grasp_thickness_half_width_m <= 0
             or int(slip_consecutive_steps) < 1
-            or int(maximum_particles_per_side) < 1
+            or int(maximum_particles_per_side) < 2
         ):
             raise ValueError("invalid grasp/slip configuration")
         self._send_data(
@@ -359,6 +429,7 @@ class SockClothAttr:
             int(slip_consecutive_steps),
             int(maximum_particles_per_side),
             float(cuff_insertion_depth_m),
+            float(grasp_thickness_half_width_m),
         )
 
     def set_grasp_targets(self, left_id: int, right_id: int) -> None:
@@ -380,6 +451,21 @@ class SockClothAttr:
         if target.shape != (3,) or not np.all(np.isfinite(target)):
             raise ValueError("right toe target must be a finite 3-vector")
         self._send_data("AlignSockOpeningToGraspTargets", *target.tolist())
+
+    def align_sock_opening_to_grasp_targets_and_grasp(
+        self, toe_target: Sequence[float], max_distance_m: float
+    ) -> None:
+        target = np.asarray(toe_target, dtype=float)
+        distance = float(max_distance_m)
+        if target.shape != (3,) or not np.all(np.isfinite(target)):
+            raise ValueError("right toe target must be a finite 3-vector")
+        if not np.isfinite(distance) or distance <= 0:
+            raise ValueError("max_distance_m must be finite and positive")
+        self._send_data(
+            "AlignSockOpeningToGraspTargetsAndGrasp",
+            *target.tolist(),
+            distance,
+        )
 
     def set_grasp_target_position(
         self, side: str, position: Sequence[float]
@@ -497,8 +583,8 @@ class SockClothAttr:
     def stop_foot_clearance_tracking(self) -> None:
         self._send_data("StopFootClearanceTracking")
 
-    def lock_human_and_chair(self) -> None:
-        self._send_data("LockHumanAndChair")
+    def lock_human_and_chair(self, chair_id: int = -1) -> None:
+        self._send_data("LockHumanAndChair", int(chair_id))
 
     def arm_slip_detection(self, armed: bool = True) -> None:
         self._send_data("ArmSlipDetection", bool(armed))

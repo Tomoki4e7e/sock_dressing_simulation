@@ -55,6 +55,7 @@ def _prepare(config, scenario=None):
         radius=scenario.sock_mesh.radius_m,
         radial_segments=scenario.sock_mesh.radial_segments,
         length_segments=scenario.sock_mesh.length_segments,
+        closed_toe=scenario.sock_mesh.closed_toe,
         bend_start=scenario.sock_mesh.rest_bend_start_m,
         bend_length=scenario.sock_mesh.rest_bend_length_m,
         bend_degrees=scenario.sock_mesh.rest_bend_degrees,

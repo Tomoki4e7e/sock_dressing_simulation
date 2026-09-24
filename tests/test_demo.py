@@ -3,9 +3,12 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from sock_dressing_simulation.config import load_config
 from sock_dressing_simulation.demo import (
+    _cloth_following_state,
+    _cloth_frame_report,
     _grasp_frame_report,
     _reference_action_at_frame,
     _task_success,
@@ -205,6 +208,74 @@ def test_grasp_frame_report_uses_pin_error_when_target_has_local_offset():
     assert report["target_to_edge_distances_m"]["left"] == 0.09
 
 
+def test_cloth_frame_report_rejects_distal_end_that_does_not_follow_grasps():
+    config = load_config(Path("config/custom_player.yaml"))
+    config["scenario"]["sock"]["radial_segments"] = 4
+    opening = np.asarray(
+        [[-0.04, 0, 0], [0, 0.04, 0], [0.04, 0, 0], [0, -0.04, 0]]
+    )
+    toe = opening + np.asarray([0, 0, 0.30])
+    particles = np.vstack([opening, toe, [[0, 0, 0.30]]])
+    edges = np.asarray([[index, (index + 1) % 4] for index in range(4)])
+    rest = np.linalg.norm(
+        particles[edges[:, 0]] - particles[edges[:, 1]], axis=1
+    )
+
+    def observation(grasp_offset, toe_offset, *, foot_contact=False):
+        moved = particles.copy()
+        moved[:4] += grasp_offset
+        moved[-5:] += toe_offset
+        return {
+            "cloth": {
+                "particles": moved.tolist(),
+                "particle_edges": edges.tolist(),
+                "particle_rest_edge_lengths": rest.tolist(),
+            },
+            "diagnostics": {
+                "scene_geometry": {
+                        "left_grasp_position": (
+                            np.asarray([-0.04, 0, 0]) + grasp_offset
+                        ).tolist(),
+                        "right_grasp_position": (
+                            np.asarray([0.04, 0, 0]) + grasp_offset
+                        ).tolist(),
+                }
+            },
+            "contact_force": (
+                [{"collider_id": 2104}] if foot_contact else []
+            ),
+        }
+
+    baseline_observation = observation(np.zeros(3), np.zeros(3))
+    baseline = _cloth_following_state(baseline_observation, config)
+    following = _cloth_frame_report(
+        observation(np.asarray([0.10, 0, 0]), np.asarray([0.09, 0, 0])),
+        config,
+        baseline,
+    )
+    collapsed = _cloth_frame_report(
+        observation(np.asarray([0.10, 0, 0]), np.zeros(3)),
+        config,
+        baseline,
+    )
+    anchored_on_foot = _cloth_frame_report(
+        observation(
+            np.asarray([0.10, 0, 0]),
+            np.zeros(3),
+            foot_contact=True,
+        ),
+        config,
+        baseline,
+    )
+
+    assert following["following_ok"]
+    assert following["distal_follow_ratio"] == pytest.approx(0.9)
+    assert not collapsed["following_ok"]
+    assert collapsed["distal_follow_ratio"] == 0.0
+    assert anchored_on_foot["following_ok"]
+    assert anchored_on_foot["foot_contact_allows_distal_anchoring"]
+
+
 def test_task_success_rejects_any_intermediate_bimanual_grasp_failure(monkeypatch):
     config = load_config(Path("config/custom_player.yaml"))
     observation = {
@@ -277,12 +348,34 @@ def test_task_success_requires_observed_foot_contact(monkeypatch):
                 "ok": True,
                 "attached_grippers": 2,
                 "maximum_edge_error_m": 0.01,
+                "opening_span_m": 0.08,
+            }
+        ],
+        "cloth_quality": [
+            {
+                "stretch": {
+                    "passes": True,
+                    "bounds_world": {
+                        "minimum": [0.0, 0.0, 0.0],
+                        "maximum": [0.1, 0.1, 0.2],
+                    },
+                },
+                "following_ok": True,
             }
         ],
         "rigid_collision_qa_by_frame": [
             {
                 "ignored_pair_count": 0,
                 "maximum_penetration_m": 0.0,
+            }
+        ],
+        "human_chair_lock_qa_by_frame": [
+            {
+                "valid": True,
+                "right_toe_drift_m": 0.0,
+                "chair_drift_m": 0.0,
+                "human_root_drift_m": 0.0,
+                "human_anchor_drift_m": 0.0,
             }
         ],
     }
@@ -308,6 +401,27 @@ def test_task_success_requires_observed_foot_contact(monkeypatch):
     assert not missing["foot_contact_ok"]
     assert touching["success"]
     assert touching["foot_contact_collider_ids"] == [2104]
+
+    wide_opening = _task_success(
+        observation,
+        [{"ok": True}],
+        [0.0, 0.2],
+        config,
+        foot_contact_ids_by_frame=[[2104]],
+        **{
+            **kwargs,
+            "grasp_quality": [
+                {
+                    "ok": True,
+                    "attached_grippers": 2,
+                    "maximum_edge_error_m": 0.01,
+                    "opening_span_m": 0.13,
+                }
+            ],
+        },
+    )
+    assert not wide_opening["success"]
+    assert not wide_opening["continuous_opening_span_ok"]
 
 
 def test_task_success_rejects_robot_human_penetration(monkeypatch):

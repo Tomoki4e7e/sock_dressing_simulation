@@ -85,6 +85,7 @@ def test_production_sock_topology_matches_phase4_contract(tmp_path):
         radius=float(sock["radius_m"]),
         radial_segments=int(sock["radial_segments"]),
         length_segments=int(sock["length_segments"]),
+        closed_toe=bool(sock["closed_toe"]),
         bend_start=float(sock["rest_bend_start_m"]),
         bend_length=float(sock["rest_bend_length_m"]),
         bend_degrees=float(sock["rest_bend_degrees"]),
@@ -97,13 +98,14 @@ def test_production_sock_topology_matches_phase4_contract(tmp_path):
         ]
     )
 
-    assert vertices == 800
-    assert triangles == 1536
-    assert points.shape == (800, 3)
+    assert vertices == 801
+    assert triangles == 1568
+    assert points.shape == (801, 3)
     assert np.count_nonzero(np.isclose(points[:, 2], points[:, 2].min())) == 32
     assert points[:32, 2] == pytest.approx(np.zeros(32))
-    assert points[-32:, 1].mean() < -0.1
-    assert points[-32:, 2].mean() > float(sock["rest_bend_start_m"])
+    assert points[-33:-1, 1].mean() < -0.1
+    assert points[-33:-1, 2].mean() > float(sock["rest_bend_start_m"])
+    np.testing.assert_allclose(points[-1], points[-33:-1].mean(axis=0), atol=1e-8)
 
 
 def test_package_meshes_are_vendored_and_rewritten(tmp_path):
