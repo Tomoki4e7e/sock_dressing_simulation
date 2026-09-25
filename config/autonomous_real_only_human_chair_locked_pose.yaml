@@ -1,0 +1,15 @@
+extends: autonomous_real_only_toe_left_down.yaml
+
+# Restore the measured locked world pose from
+# phase4_20260924T090119Z/human-chair-locked-real-only-autonomous.
+scene:
+  initial_pose_contract:
+    # Keep the requested historical world coordinates even when the current
+    # enlarged opening no longer satisfies the old foot-to-sock alignment.
+    enforce: false
+    locked_pose_tolerance_m: 0.002
+    locked_pose_baseline:
+      human_root_position: [0.0599999987, 1.4800000191, -0.7200000286]
+      chair_position: [-0.0712867528, 0.5095953941, -0.3411580324]
+      human_anchor_position: [-0.0712867528, 0.7595953345, -0.3411580324]
+      right_toe_position: [-0.1310119629, 0.5210645795, 0.6446849108]

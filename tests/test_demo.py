@@ -45,6 +45,7 @@ class _Environment:
             "torque": np.zeros(18),
             "external_torque": np.zeros(18),
             "diagnostics": {},
+            "dressing_qa": _passing_dressing_qa(),
         }
 
     def command(self, command, previous):
@@ -85,6 +86,23 @@ class _Policy:
 
     def step(self, **kwargs):
         return {"action": np.full(18, 100.0)}
+
+
+def _passing_dressing_qa(**overrides):
+    value = {
+        "valid": True,
+        "surface_containment_ratio": 0.95,
+        "sections": [
+            {"name": name, "valid": True, "containment_ratio": 0.875}
+            for name in ("toes", "forefoot", "heel", "ankle")
+        ],
+        "cuff_progress_toward_ankle_m": 0.03,
+        "maximum_cuff_reverse_step_m": 0.0,
+        "cuff_beyond_distal_toe_m": 0.0,
+        "maximum_cloth_foot_penetration_m": 0.001,
+    }
+    value.update(overrides)
+    return value
 
 
 def test_demo_records_bounded_closed_loop_actions(tmp_path):
@@ -378,6 +396,7 @@ def test_task_success_requires_observed_foot_contact(monkeypatch):
                 "human_anchor_drift_m": 0.0,
             }
         ],
+        "dressing_quality": [_passing_dressing_qa() for _ in range(3)],
     }
 
     missing = _task_success(
@@ -422,6 +441,97 @@ def test_task_success_requires_observed_foot_contact(monkeypatch):
     )
     assert not wide_opening["success"]
     assert not wide_opening["continuous_opening_span_ok"]
+
+
+@pytest.mark.parametrize(
+    ("override", "failed_gate"),
+    [
+        (
+            {"surface_containment_ratio": 0.89},
+            "final_surface_containment_ok",
+        ),
+        (
+            {
+                "sections": [
+                    {
+                        "name": "toes",
+                        "valid": True,
+                        "containment_ratio": 0.79,
+                    }
+                ]
+            },
+            "final_section_containment_ok",
+        ),
+        (
+            {"maximum_cuff_reverse_step_m": 0.003},
+            "cuff_progress_ok",
+        ),
+        (
+            {"cuff_beyond_distal_toe_m": 0.003},
+            "cuff_progress_ok",
+        ),
+        (
+            {"maximum_cloth_foot_penetration_m": 0.003},
+            "cloth_foot_penetration_ok",
+        ),
+    ],
+)
+def test_task_success_rejects_invalid_final_dressing_state(
+    monkeypatch, override, failed_gate
+):
+    config = load_config(Path("config/custom_player.yaml"))
+    config["scene"]["initial_pose_contract"]["lock_human_and_chair"] = False
+    observation = {
+        "diagnostics": {
+            "grasp_attachments": [
+                {"side": "left", "verified": True},
+                {"side": "right", "verified": True},
+            ]
+        },
+        "cloth": {},
+    }
+    monkeypatch.setattr(
+        SockDressingEnv,
+        "cloth_radius_qa",
+        staticmethod(lambda *args, **kwargs: {"passes": True}),
+    )
+    frames = [_passing_dressing_qa() for _ in range(3)]
+    frames[-1] = _passing_dressing_qa(**override)
+    report = _task_success(
+        observation,
+        [{"ok": True}],
+        [0.0, 0.2],
+        config,
+        application={"initial_pose_contract": {"ok": True}},
+        grasp_quality=[
+            {
+                "ok": True,
+                "attached_grippers": 2,
+                "maximum_edge_error_m": 0.01,
+                "opening_span_m": 0.08,
+            }
+        ],
+        cloth_quality=[
+            {
+                "stretch": {
+                    "passes": True,
+                    "bounds_world": {
+                        "minimum": [0.0, 0.0, 0.0],
+                        "maximum": [0.1, 0.1, 0.2],
+                    },
+                },
+                "following_ok": True,
+            }
+        ],
+        dressing_quality=frames,
+        foot_contact_ids_by_frame=[[2104]],
+        rigid_collision_qa_by_frame=[
+            {"ignored_pair_count": 0, "maximum_penetration_m": 0.0}
+        ],
+    )
+
+    assert not report["success"]
+    assert not report[failed_gate]
 
 
 def test_task_success_rejects_robot_human_penetration(monkeypatch):

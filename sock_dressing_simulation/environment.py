@@ -27,6 +27,8 @@ class SockDressingEnv:
         self.sock_cloth = None
         self._rollout_started = False
         self._right_toe_offset_report: Optional[Dict[str, Any]] = None
+        self._human_chair_translation_report: Optional[Dict[str, Any]] = None
+        self._effective_locked_pose_baseline: Optional[Dict[str, Any]] = None
 
     def connect(self) -> "SockDressingEnv":
         if self._env is None:
@@ -883,11 +885,16 @@ class SockDressingEnv:
                 grasp_settings.get("auto_grasp", False)
                 and grasp_settings.get("align_sock_to_grippers", False)
             ):
-                final_geometry = self._request_scene_geometry()
-                self.sock_cloth.align_sock_opening_to_grasp_targets_and_grasp(
-                    list(final_geometry.right_toe_position),
-                    grasp_distance,
-                )
+                if grasp_settings.get("align_sock_to_gripper_plate", False):
+                    self.sock_cloth.align_sock_opening_to_grasp_plate_and_grasp(
+                        grasp_distance
+                    )
+                else:
+                    final_geometry = self._request_scene_geometry()
+                    self.sock_cloth.align_sock_opening_to_grasp_targets_and_grasp(
+                        list(final_geometry.right_toe_position),
+                        grasp_distance,
+                    )
                 self.sock_cloth.request_grasp_state()
                 self._env.step()
                 states = {
@@ -915,6 +922,7 @@ class SockDressingEnv:
                 native
                 and pose_settings.get("calibrate_foot_to_sock", False)
                 and grasp_settings.get("align_sock_to_grippers", False)
+                and pose_settings.get("vertical_toe_drop_m") is None
             ):
                 if scenario.foot_ik_index is None:
                     self._calibrate_foot_to_sock(
@@ -929,6 +937,36 @@ class SockDressingEnv:
                         scenario.foot_ik_index,
                         float(pose_settings["foot_to_sock_m"]),
                     )
+            locked_pose_baseline = pose_settings.get("locked_pose_baseline")
+            if native and locked_pose_baseline:
+                effective_baseline = {
+                    name: list(value)
+                    for name, value in locked_pose_baseline.items()
+                }
+                if pose_settings.get("vertical_toe_drop_m") is not None:
+                    final_geometry = self._request_scene_geometry()
+                    (
+                        effective_baseline,
+                        self._human_chair_translation_report,
+                    ) = self._translate_locked_pose_to_opening_normal(
+                        locked_pose_baseline,
+                        final_geometry,
+                    )
+                self._effective_locked_pose_baseline = effective_baseline
+                chair_id = int(
+                    self.config["scene"]
+                    .get("stable_ids", {})
+                    .get("chair", -1)
+                )
+                self.sock_cloth.restore_human_chair_world_pose(
+                    effective_baseline["human_root_position"],
+                    effective_baseline["chair_position"],
+                    effective_baseline["human_anchor_position"],
+                    effective_baseline["right_toe_position"],
+                    chair_id,
+                )
+                if not pose_settings.get("lock_human_and_chair", False):
+                    self._env.step()
             if (
                 native
                 and pose_settings.get("lock_human_and_chair", False)
@@ -941,6 +979,37 @@ class SockDressingEnv:
                     )
                 )
                 self._env.step()
+            if self._human_chair_translation_report is not None:
+                geometry = self._request_scene_geometry()
+                actual = np.asarray(geometry.right_toe_position, dtype=float)
+                target = np.asarray(
+                    self._human_chair_translation_report[
+                        "target_right_toe_position"
+                    ],
+                    dtype=float,
+                )
+                tolerance = float(
+                    pose_settings.get("vertical_toe_drop_tolerance_m", 0.005)
+                )
+                target_error = float(np.linalg.norm(actual - target))
+                self._human_chair_translation_report.update(
+                    {
+                        "actual_right_toe_position": actual.tolist(),
+                        "target_error_m": target_error,
+                        "opening_to_toe_alignment": (
+                            geometry.opening_to_toe_alignment
+                        ),
+                        "ok": (
+                            target_error <= tolerance
+                            and geometry.opening_to_toe_alignment
+                            >= float(
+                                pose_settings.get(
+                                    "opening_to_toe_alignment_min", 0.9
+                                )
+                            )
+                        ),
+                    }
+                )
             if initial_grasp and not all(
                 item["attached"] for item in initial_grasp
             ):
@@ -986,6 +1055,9 @@ class SockDressingEnv:
                 "grasp_attachments": list(self._grasp_attachment_report),
                 "initial_grasp": initial_grasp,
                 "right_toe_offset": self._right_toe_offset_report,
+                "human_chair_translation": (
+                    self._human_chair_translation_report
+                ),
                 "initial_pose_contract": pose_contract,
             }
         self.cloth.SetTransform(
@@ -1223,6 +1295,7 @@ class SockDressingEnv:
         self.sock_cloth.request_registered_colliders()
         self.sock_cloth.request_grasp_state()
         self.sock_cloth.request_scene_geometry()
+        self.sock_cloth.request_dressing_qa()
         self.sock_cloth.request_visual_diagnostics(
             int(self.config["scene"].get("stable_ids", {}).get("chair", -1))
         )
@@ -1288,6 +1361,7 @@ class SockDressingEnv:
             "camera": camera,
             "recording_camera": recording,
             "contact_force": contacts,
+            "dressing_qa": dict(cloth.get("dressing_qa", {})),
             "collision_pairs": collision_pairs,
             "diagnostics": diagnostics,
         }
@@ -1445,14 +1519,57 @@ class SockDressingEnv:
             and geometry.grasp_thickness_axis_alignment
             >= minimum_thickness_alignment
         )
+        target_opening_rectangle_area = (
+            float(
+                self.config["scene"]
+                .get("grasp_alignment", {})
+                .get("target_span_m", opening_span)
+            )
+            * target_patch_span
+        )
+        measured_opening_rectangle_area = opening_span * (
+            geometry.left_grasp_patch_span_m
+            + geometry.right_grasp_patch_span_m
+        ) * 0.5
+        expected_human_position = settings.get("expected_human_position")
+        expected_chair_position = settings.get("expected_chair_position")
+        configured_human_position = self.config["scene"].get("human_position")
+        chair_parts = self.config["scene"].get("chair", {}).get("parts", ())
+        configured_chair_position = (
+            chair_parts[0].get("position") if chair_parts else None
+        )
+        configured_pose_baseline_ok = (
+            expected_human_position is None
+            or np.allclose(
+                np.asarray(configured_human_position, dtype=float),
+                np.asarray(expected_human_position, dtype=float),
+                rtol=0,
+                atol=1e-9,
+            )
+        ) and (
+            expected_chair_position is None
+            or np.allclose(
+                np.asarray(configured_chair_position, dtype=float),
+                np.asarray(expected_chair_position, dtype=float),
+                rtol=0,
+                atol=1e-9,
+            )
+        )
         distance_error = abs(geometry.foot_to_opening_plane_m - wanted_distance)
         angle_error = abs(geometry.right_leg_raise_degrees - wanted_angle)
         offset_report = self._right_toe_offset_report
-        offset_ok = offset_report is None or bool(offset_report.get("ok", False))
+        translation_report = self._human_chair_translation_report
+        offset_ok = (
+            offset_report is None or bool(offset_report.get("ok", False))
+        ) and (
+            translation_report is None
+            or bool(translation_report.get("ok", False))
+        )
         sock_alignment_ok = (
             geometry.opening_to_toe_alignment >= minimum_toe_alignment
             and (
                 offset_report is not None
+                or translation_report is not None
                 or (
                     distance_error <= distance_tolerance
                     and geometry.foot_to_opening_lateral_m <= lateral_tolerance
@@ -1494,6 +1611,43 @@ class SockDressingEnv:
                 <= maximum_lock_drift
             )
         )
+        locked_pose_baseline = (
+            self._effective_locked_pose_baseline
+            or settings.get("locked_pose_baseline")
+        )
+        locked_pose_tolerance = float(
+            settings.get("locked_pose_tolerance_m", 0.002)
+        )
+        locked_pose_errors = {}
+        if locked_pose_baseline:
+            for expected_name, measured_name in (
+                ("human_root_position", "human_root_position"),
+                ("chair_position", "chair_position"),
+                ("human_anchor_position", "human_anchor_position"),
+                ("right_toe_position", "right_toe_position"),
+            ):
+                expected_value = np.asarray(
+                    locked_pose_baseline.get(expected_name, ()), dtype=float
+                )
+                measured_value = np.asarray(
+                    lock_visual.get(measured_name, ()), dtype=float
+                )
+                locked_pose_errors[expected_name] = (
+                    float(np.linalg.norm(measured_value - expected_value))
+                    if expected_value.shape == (3,)
+                    and measured_value.shape == (3,)
+                    else float("inf")
+                )
+        locked_pose_baseline_ok = (
+            not locked_pose_baseline
+            or (
+                bool(lock_visual.get("valid", False))
+                and all(
+                    np.isfinite(value) and value <= locked_pose_tolerance
+                    for value in locked_pose_errors.values()
+                )
+            )
+        )
         return {
             "ok": (
                 sock_alignment_ok
@@ -1513,6 +1667,8 @@ class SockDressingEnv:
                 and initial_cloth_ok
                 and visual_ok
                 and lock_ok
+                and configured_pose_baseline_ok
+                and locked_pose_baseline_ok
             ),
             "foot_to_sock_m": geometry.foot_to_opening_plane_m,
             "foot_to_sock_target_m": wanted_distance,
@@ -1595,12 +1751,26 @@ class SockDressingEnv:
                 minimum_thickness_alignment
             ),
             "rectangular_opening_ok": rectangular_opening_ok,
+            "target_opening_rectangle_area_m2": target_opening_rectangle_area,
+            "measured_opening_rectangle_area_m2": (
+                measured_opening_rectangle_area
+            ),
+            "configured_pose_baseline_ok": configured_pose_baseline_ok,
+            "expected_human_position": expected_human_position,
+            "configured_human_position": configured_human_position,
+            "expected_chair_position": expected_chair_position,
+            "configured_chair_position": configured_chair_position,
             "right_toe_offset": offset_report,
+            "human_chair_translation": translation_report,
             "human_visual_ok": visual_ok,
             "human_visual_diagnostics": task_pose_visual,
             "human_chair_lock_ok": lock_ok,
             "human_chair_lock_diagnostics": lock_visual,
             "maximum_lock_drift_m": maximum_lock_drift,
+            "locked_pose_baseline": locked_pose_baseline,
+            "locked_pose_tolerance_m": locked_pose_tolerance,
+            "locked_pose_errors_m": locked_pose_errors,
+            "locked_pose_baseline_ok": locked_pose_baseline_ok,
         }
 
     def _calibrate_foot_to_sock(
@@ -1681,6 +1851,89 @@ class SockDressingEnv:
             "tolerance_m": tolerance,
         }
 
+    def _translate_locked_pose_to_opening_normal(
+        self,
+        locked_pose_baseline: Mapping[str, Any],
+        geometry: Any,
+    ) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        settings = self.config["scene"].get("initial_pose_contract", {})
+        drop = float(settings["vertical_toe_drop_m"])
+        tolerance = float(
+            settings.get("vertical_toe_drop_tolerance_m", 0.005)
+        )
+        if not np.isfinite(drop) or drop <= 0:
+            raise ValueError(
+                "vertical_toe_drop_m must be finite and positive"
+            )
+        if not np.isfinite(tolerance) or tolerance <= 0:
+            raise ValueError(
+                "vertical_toe_drop_tolerance_m must be finite and positive"
+            )
+        center = 0.5 * (
+            np.asarray(geometry.left_grasp_position, dtype=float)
+            + np.asarray(geometry.right_grasp_position, dtype=float)
+        )
+        inward = np.asarray(geometry.opening_target_normal, dtype=float)
+        baseline_toe = np.asarray(
+            locked_pose_baseline["right_toe_position"], dtype=float
+        )
+        if (
+            center.shape != (3,)
+            or inward.shape != (3,)
+            or baseline_toe.shape != (3,)
+            or not np.all(np.isfinite(center))
+            or not np.all(np.isfinite(inward))
+            or not np.all(np.isfinite(baseline_toe))
+        ):
+            raise ValueError(
+                "opening geometry and locked right toe must be finite 3-vectors"
+            )
+        normal_length = float(np.linalg.norm(inward))
+        if normal_length <= 1e-8:
+            raise ValueError("opening target normal is degenerate")
+        outward = -inward / normal_length
+        if outward[1] >= -1e-3:
+            raise RuntimeError(
+                "gripper plate outward normal does not point world-down"
+            )
+        target_y = float(baseline_toe[1] - drop)
+        distance = (target_y - center[1]) / outward[1]
+        if not np.isfinite(distance) or distance <= 0:
+            raise RuntimeError(
+                "lowered right toe is not on the downward opening ray: "
+                f"center={center.tolist()}, outward={outward.tolist()}, "
+                f"target_y={target_y}, distance={distance}"
+            )
+        target_toe = center + outward * distance
+        delta = target_toe - baseline_toe
+        translated: Dict[str, Any] = {}
+        for name in (
+            "human_root_position",
+            "chair_position",
+            "human_anchor_position",
+            "right_toe_position",
+        ):
+            value = np.asarray(locked_pose_baseline[name], dtype=float)
+            if value.shape != (3,) or not np.all(np.isfinite(value)):
+                raise ValueError(
+                    f"locked_pose_baseline.{name} must be a finite 3-vector"
+                )
+            translated[name] = (value + delta).tolist()
+        return translated, {
+            "ok": False,
+            "frame": "unity_world",
+            "baseline_right_toe_position": baseline_toe.tolist(),
+            "opening_target_center": center.tolist(),
+            "opening_inward_normal": (inward / normal_length).tolist(),
+            "opening_outward_normal": outward.tolist(),
+            "requested_vertical_drop_m": drop,
+            "target_right_toe_position": target_toe.tolist(),
+            "translation_m": delta.tolist(),
+            "distance_along_outward_normal_m": float(distance),
+            "tolerance_m": tolerance,
+            "translated_locked_pose_baseline": translated,
+        }
+
     def _observe_custom_player(self) -> Dict[str, Any]:
         self.sock_cloth.request_particles()
         self.sock_cloth.request_particle_velocities()
@@ -1689,6 +1942,7 @@ class SockDressingEnv:
         self.sock_cloth.request_grasp_state()
         self.sock_cloth.request_contacts()
         self.sock_cloth.request_coverage()
+        self.sock_cloth.request_dressing_qa()
         if hasattr(self.robot, "GetJointInverseDynamicsForce"):
             self.robot.GetJointInverseDynamicsForce()
         self._env.step()
@@ -1708,6 +1962,7 @@ class SockDressingEnv:
             "camera": self._capture_custom_camera(cloth),
             "recording_camera": None,
             "contact_force": contacts,
+            "dressing_qa": dict(cloth.get("dressing_qa", {})),
             "collision_pairs": collision_pairs,
             "diagnostics": self.diagnostics(),
         }

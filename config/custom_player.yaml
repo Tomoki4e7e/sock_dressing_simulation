@@ -69,7 +69,7 @@ scene:
       - {id: 2202, side: right, parent_link: "right_gripper/grasping_frame", local_position: [0.0, 0.0, 0.0]}
   grasp_alignment:
     enabled: true
-    target_span_m: 0.09
+    target_span_m: 0.105
     tolerance_m: 0.015
     finite_difference_rad: 0.02
     damping: 0.002
@@ -102,6 +102,8 @@ scene:
     sock_body_gravity_alignment_min: -1.0
     right_leg_raise_degrees: 90.0
     right_leg_raise_tolerance_degrees: 16.0
+    expected_human_position: [0.06, 1.48, -0.72]
+    expected_chair_position: [0.0, 0.48, -0.18]
   stable_ids:
     sock: 1200
     robot: 1100
@@ -152,8 +154,8 @@ obi:
     # the complete opening.
     maximum_grasp_particles_per_side: 4
     # GripperV2 finger thickness is about 45 mm. Pin the opening at local-X
-    # offsets of +/-20 mm so the four held particles form a 40 mm short edge.
-    grasp_thickness_half_width_m: 0.02
+    # offsets of +/-22 mm so the four held particles form a 44 mm short edge.
+    grasp_thickness_half_width_m: 0.022
     # Use the inner cuff ring to estimate the opening normal and taper the
     # initial diameter stretch over the first 3 cm of the sock.
     cuff_insertion_depth_m: 0.03
@@ -247,3 +249,11 @@ dressing_player:
   minimum_coverage_gain: 0.03
   require_foot_contact: true
   maximum_robot_human_penetration_m: 0.005
+  minimum_final_surface_containment: 0.90
+  minimum_final_section_containment: 0.80
+  final_coverage_hold_frames: 3
+  minimum_cuff_progress_toward_ankle_m: 0.0
+  maximum_cuff_reverse_m: 0.002
+  maximum_cuff_beyond_distal_toe_m: 0.002
+  maximum_cloth_foot_penetration_m: 0.002
+  abort_on_cloth_foot_qa_failure: false

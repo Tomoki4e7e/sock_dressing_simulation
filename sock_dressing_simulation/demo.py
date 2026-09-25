@@ -97,9 +97,11 @@ def run_demo(
     coverage_by_frame = []
     grasp_quality_by_frame = []
     cloth_quality_by_frame = []
+    dressing_quality_by_frame = []
     foot_contact_ids_by_frame = []
     rigid_collision_qa_by_frame = []
     human_chair_lock_qa_by_frame = []
+    final_task_success = {}
     video_path = episode / "demo.mp4"
     configured_prompts = settings.get("prompts", {})
     if not sock_points:
@@ -235,6 +237,7 @@ def run_demo(
             applied_writer = csv.writer(applied_file)
             try:
                 renderer_masks = _renderer_masks(observation["camera"])
+                last_renderer_masks = renderer_masks
                 initialize_kwargs = {
                     "sock_points": sock_points,
                     "leg_points": leg_points,
@@ -294,6 +297,14 @@ def run_demo(
                             )
                     observation = environment.observe()
                     renderer_masks = _renderer_masks(observation["camera"])
+                    if renderer_masks is not None:
+                        last_renderer_masks = renderer_masks
+                    elif (
+                        settings.get("use_renderer_masks", False)
+                        and settings.get("hold_last_renderer_masks", False)
+                        and last_renderer_masks is not None
+                    ):
+                        renderer_masks = last_renderer_masks
                     perceived = (
                         perception.track(
                             observation["camera"]["rgb"],
@@ -315,6 +326,8 @@ def run_demo(
                             cloth_following_baseline,
                         )
                     )
+                    dressing_report = dict(observation.get("dressing_qa", {}) or {})
+                    dressing_quality_by_frame.append(dressing_report)
                     rigid_qa = dict(
                         observation.get("diagnostics", {}).get(
                             "robot_human_rigid_collision_qa", {}
@@ -386,8 +399,16 @@ def run_demo(
                             "maximum_robot_human_penetration_m", float("inf")
                         )
                     )
+                    allow_ignored_rigid_pairs = bool(
+                        config.get("dressing_player", {}).get(
+                            "allow_ignored_robot_human_collision_pairs", False
+                        )
+                    )
                     if (
-                        int(rigid_qa.get("ignored_pair_count", 0)) > 0
+                        (
+                            int(rigid_qa.get("ignored_pair_count", 0)) > 0
+                            and not allow_ignored_rigid_pairs
+                        )
                         or float(rigid_qa.get("maximum_penetration_m", 0.0))
                         > maximum_penetration
                     ):
@@ -395,12 +416,51 @@ def run_demo(
                             "robot/human rigid collision QA failed: "
                             + json.dumps(rigid_qa, sort_keys=True)
                         )
+                    maximum_cloth_foot_penetration = float(
+                        config.get("dressing_player", {}).get(
+                            "maximum_cloth_foot_penetration_m", float("inf")
+                        )
+                    )
+                    if (
+                        bool(
+                            config.get("dressing_player", {}).get(
+                                "abort_on_cloth_foot_qa_failure", False
+                            )
+                        )
+                        and (
+                            not bool(dressing_report.get("valid", False))
+                            or float(
+                                dressing_report.get(
+                                    "maximum_cloth_foot_penetration_m",
+                                    float("inf"),
+                                )
+                            )
+                            > maximum_cloth_foot_penetration
+                        )
+                    ):
+                        raise RuntimeError(
+                            "cloth/foot dressing QA failed: "
+                            + json.dumps(dressing_report, sort_keys=True)
+                        )
             except (RuntimeError, ValueError) as error:
                 stop_reason = f"fail_closed: {error}"
             finally:
                 predicted_file.close()
                 applied_file.close()
                 video.release()
+                final_task_success = _task_success(
+                    observation,
+                    quality_by_frame,
+                    coverage_by_frame,
+                    config,
+                    application=application,
+                    grasp_quality=grasp_quality_by_frame,
+                    cloth_quality=cloth_quality_by_frame,
+                    dressing_quality=dressing_quality_by_frame,
+                    foot_contact_ids_by_frame=foot_contact_ids_by_frame,
+                    rigid_collision_qa_by_frame=rigid_collision_qa_by_frame,
+                    human_chair_lock_qa_by_frame=human_chair_lock_qa_by_frame,
+                )
                 writer.update_metadata(
                     {
                         "stop_reason": stop_reason,
@@ -410,25 +470,13 @@ def run_demo(
                         "coverage_by_frame": coverage_by_frame,
                         "grasp_quality_by_frame": grasp_quality_by_frame,
                         "cloth_quality_by_frame": cloth_quality_by_frame,
+                        "dressing_quality_by_frame": dressing_quality_by_frame,
                         "foot_contact_ids_by_frame": foot_contact_ids_by_frame,
                         "rigid_collision_qa_by_frame": rigid_collision_qa_by_frame,
                         "human_chair_lock_qa_by_frame": (
                             human_chair_lock_qa_by_frame
                         ),
-                        "task_success": _task_success(
-                            observation,
-                            quality_by_frame,
-                            coverage_by_frame,
-                            config,
-                            application=application,
-                            grasp_quality=grasp_quality_by_frame,
-                            cloth_quality=cloth_quality_by_frame,
-                            foot_contact_ids_by_frame=foot_contact_ids_by_frame,
-                            rigid_collision_qa_by_frame=rigid_collision_qa_by_frame,
-                            human_chair_lock_qa_by_frame=(
-                                human_chair_lock_qa_by_frame
-                            ),
-                        ),
+                        "task_success": final_task_success,
                     }
                 )
     manifest = output_root / "dataset_phase4.yaml"
@@ -449,6 +497,7 @@ def run_demo(
     )
     return {
         "ok": stop_reason == "max_steps" and frames == steps,
+        "task_success": bool(final_task_success.get("success", False)),
         "episode": str(episode),
         "manifest": str(manifest),
         "video": str(video_path),
@@ -716,6 +765,7 @@ def _task_success(
     application: Optional[Mapping] = None,
     grasp_quality: Optional[Sequence[Mapping]] = None,
     cloth_quality: Optional[Sequence[Mapping]] = None,
+    dressing_quality: Optional[Sequence[Mapping]] = None,
     foot_contact_ids_by_frame: Optional[Sequence[Sequence[int]]] = None,
     rigid_collision_qa_by_frame: Optional[Sequence[Mapping]] = None,
     human_chair_lock_qa_by_frame: Optional[Sequence[Mapping]] = None,
@@ -857,13 +907,96 @@ def _task_success(
         default=None,
     )
     rigid_collision_ok = bool(rigid_collision_qa) and all(
-        int(item.get("ignored_pair_count", 0)) == 0
+        (
+            int(item.get("ignored_pair_count", 0)) == 0
+            or bool(
+                config.get("dressing_player", {}).get(
+                    "allow_ignored_robot_human_collision_pairs", False
+                )
+            )
+        )
         and float(item.get("maximum_penetration_m", 0.0))
         <= maximum_allowed_penetration
         for item in rigid_collision_qa
     )
     if config["rcareworld"].get("profile") != "custom_player":
         rigid_collision_ok = True
+    dressing_settings = config.get("dressing_player", {})
+    dressing_quality = list(dressing_quality or ())
+    hold_frames = max(
+        1, int(dressing_settings.get("final_coverage_hold_frames", 3))
+    )
+    final_dressing_frames = dressing_quality[-hold_frames:]
+    minimum_surface_containment = float(
+        dressing_settings.get("minimum_final_surface_containment", 0.90)
+    )
+    minimum_section_containment = float(
+        dressing_settings.get("minimum_final_section_containment", 0.80)
+    )
+    minimum_cuff_progress = float(
+        dressing_settings.get("minimum_cuff_progress_toward_ankle_m", 0.0)
+    )
+    maximum_cuff_reverse = float(
+        dressing_settings.get("maximum_cuff_reverse_m", 0.002)
+    )
+    maximum_cuff_beyond_toe = float(
+        dressing_settings.get("maximum_cuff_beyond_distal_toe_m", 0.002)
+    )
+    maximum_cloth_foot_penetration = float(
+        dressing_settings.get("maximum_cloth_foot_penetration_m", 0.002)
+    )
+    dressing_observations_ok = bool(dressing_quality) and all(
+        bool(item.get("valid", False)) for item in dressing_quality
+    )
+    final_surface_containment_ok = (
+        len(final_dressing_frames) == hold_frames
+        and all(
+            float(item.get("surface_containment_ratio", -1.0))
+            >= minimum_surface_containment
+            for item in final_dressing_frames
+        )
+    )
+    final_section_containment_ok = (
+        len(final_dressing_frames) == hold_frames
+        and all(
+            bool(item.get("sections"))
+            and all(
+                bool(section.get("valid", False))
+                and float(section.get("containment_ratio", -1.0))
+                >= minimum_section_containment
+                for section in item.get("sections", ())
+            )
+            for item in final_dressing_frames
+        )
+    )
+    cuff_progress_ok = bool(dressing_quality) and (
+        float(
+            dressing_quality[-1].get(
+                "cuff_progress_toward_ankle_m", float("-inf")
+            )
+        )
+        >= minimum_cuff_progress
+        and all(
+            float(item.get("maximum_cuff_reverse_step_m", float("inf")))
+            <= maximum_cuff_reverse
+            and float(item.get("cuff_beyond_distal_toe_m", float("inf")))
+            <= maximum_cuff_beyond_toe
+            for item in dressing_quality
+        )
+    )
+    cloth_foot_penetration_ok = bool(dressing_quality) and all(
+        float(
+            item.get("maximum_cloth_foot_penetration_m", float("inf"))
+        )
+        <= maximum_cloth_foot_penetration
+        for item in dressing_quality
+    )
+    if config["rcareworld"].get("profile") != "custom_player":
+        dressing_observations_ok = True
+        final_surface_containment_ok = True
+        final_section_containment_ok = True
+        cuff_progress_ok = True
+        cloth_foot_penetration_ok = True
     lock_qa = list(human_chair_lock_qa_by_frame or ())
     maximum_lock_drift = float(
         config["scene"]
@@ -889,22 +1022,31 @@ def _task_success(
         "lock_human_and_chair", False
     ):
         human_chair_lock_ok = True
+    success_gates = {
+        "semantic_masks_ok": semantic_ok,
+        "verified_grippers_ok": len(verified) >= required,
+        "continuous_grasp_ok": continuous_grasp_ok,
+        "continuous_opening_span_ok": continuous_opening_span_ok,
+        "continuous_bounds_ok": continuous_bounds_ok,
+        "coverage_gain_ok": coverage_ok,
+        "initial_pose_ok": pose_ok,
+        "final_stretch_ok": stretch_ok,
+        "continuous_stretch_ok": continuous_stretch_ok,
+        "distal_follow_ok": distal_follow_ok,
+        "foot_contact_ok": foot_contact_ok,
+        "rigid_collision_ok": rigid_collision_ok,
+        "dressing_observations_ok": dressing_observations_ok,
+        "final_surface_containment_ok": final_surface_containment_ok,
+        "final_section_containment_ok": final_section_containment_ok,
+        "cuff_progress_ok": cuff_progress_ok,
+        "cloth_foot_penetration_ok": cloth_foot_penetration_ok,
+        "human_chair_lock_ok": human_chair_lock_ok,
+    }
     return {
-        "success": (
-            semantic_ok
-            and len(verified) >= required
-            and continuous_grasp_ok
-            and continuous_opening_span_ok
-            and continuous_bounds_ok
-            and coverage_ok
-            and pose_ok
-            and stretch_ok
-            and continuous_stretch_ok
-            and distal_follow_ok
-            and foot_contact_ok
-            and rigid_collision_ok
-            and human_chair_lock_ok
-        ),
+        "success": all(success_gates.values()),
+        "failed_gates": [
+            name for name, passed in success_gates.items() if not passed
+        ],
         "semantic_masks_ok": semantic_ok,
         "verified_grippers": len(verified),
         "required_grippers": required,
@@ -935,6 +1077,57 @@ def _task_success(
         "rigid_collision_ok": rigid_collision_ok,
         "maximum_robot_human_penetration_m": maximum_penetration,
         "maximum_allowed_robot_human_penetration_m": maximum_allowed_penetration,
+        "dressing_observations_ok": dressing_observations_ok,
+        "final_coverage_hold_frames": hold_frames,
+        "final_surface_containment_ratio": (
+            float(final_dressing_frames[-1].get("surface_containment_ratio"))
+            if final_dressing_frames
+            and final_dressing_frames[-1].get("surface_containment_ratio")
+            is not None
+            else None
+        ),
+        "minimum_final_surface_containment": minimum_surface_containment,
+        "final_surface_containment_ok": final_surface_containment_ok,
+        "final_section_containment_ok": final_section_containment_ok,
+        "minimum_final_section_containment": minimum_section_containment,
+        "cuff_progress_toward_ankle_m": (
+            float(
+                dressing_quality[-1].get("cuff_progress_toward_ankle_m")
+            )
+            if dressing_quality
+            and dressing_quality[-1].get("cuff_progress_toward_ankle_m")
+            is not None
+            else None
+        ),
+        "minimum_cuff_progress_toward_ankle_m": minimum_cuff_progress,
+        "maximum_cuff_reverse_m": max(
+            (
+                float(item.get("maximum_cuff_reverse_step_m", 0.0))
+                for item in dressing_quality
+            ),
+            default=None,
+        ),
+        "maximum_allowed_cuff_reverse_m": maximum_cuff_reverse,
+        "maximum_cuff_beyond_distal_toe_m": max(
+            (
+                float(item.get("cuff_beyond_distal_toe_m", 0.0))
+                for item in dressing_quality
+            ),
+            default=None,
+        ),
+        "maximum_allowed_cuff_beyond_distal_toe_m": maximum_cuff_beyond_toe,
+        "cuff_progress_ok": cuff_progress_ok,
+        "maximum_cloth_foot_penetration_m": max(
+            (
+                float(item.get("maximum_cloth_foot_penetration_m", 0.0))
+                for item in dressing_quality
+            ),
+            default=None,
+        ),
+        "maximum_allowed_cloth_foot_penetration_m": (
+            maximum_cloth_foot_penetration
+        ),
+        "cloth_foot_penetration_ok": cloth_foot_penetration_ok,
         "human_chair_lock_ok": human_chair_lock_ok,
         "maximum_allowed_lock_drift_m": maximum_lock_drift,
         "maximum_human_chair_lock_drift_m": max(

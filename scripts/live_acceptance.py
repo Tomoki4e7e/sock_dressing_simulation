@@ -98,6 +98,10 @@ def main() -> int:
         opening_position = np.asarray(
             initial_contract["opening_center"], dtype=float
         )
+        if config["scene"].get("grasp_anchors", {}).get(
+            "align_sock_to_gripper_plate", False
+        ):
+            opening_position = 0.5 * (left_position + right_position)
         toe_position = np.asarray(
             initial_contract["right_toe_position"], dtype=float
         )
@@ -127,6 +131,7 @@ def main() -> int:
             environment._env.step()
             environment.sock_cloth.request_contacts()
             environment.sock_cloth.request_grasp_state()
+            environment.sock_cloth.request_dressing_qa()
             environment._env.step()
             states = {
                 state.side: state for state in environment.sock_cloth.grasp_states()
@@ -147,6 +152,9 @@ def main() -> int:
                         int(state.attached) for state in states.values()
                     ),
                     "foot_contact_ids": frame_foot_ids,
+                    "dressing_qa": dict(
+                        environment.sock_cloth.data.get("dressing_qa", {})
+                    ),
                 }
             )
         insertion_offset = (
@@ -187,6 +195,7 @@ def main() -> int:
             environment.sock_cloth.request_grasp_state()
             environment.sock_cloth.request_particles()
             environment.sock_cloth.request_contacts()
+            environment.sock_cloth.request_dressing_qa()
             environment._env.step()
             states = {
                 state.side: state for state in environment.sock_cloth.grasp_states()
@@ -235,6 +244,9 @@ def main() -> int:
                     "opening_span_stretch_proxy": (
                         anchor_span / (2.0 * scenario.sock_mesh.radius_m)
                     ),
+                    "dressing_qa": dict(
+                        environment.sock_cloth.data.get("dressing_qa", {})
+                    ),
                 }
             )
             released_by_tension = [
@@ -249,6 +261,7 @@ def main() -> int:
 
         final, velocity = particle_snapshot(environment)
         environment.sock_cloth.request_contacts()
+        environment.sock_cloth.request_dressing_qa()
         environment._env.step()
         released = [
             state.__dict__ for state in environment.sock_cloth.grasp_states()
@@ -277,6 +290,23 @@ def main() -> int:
             >= float(initial_contract["minimum_cuff_insertion_depth_m"])
             and float(initial_contract["right_cuff_insertion_depth_m"])
             >= float(initial_contract["minimum_cuff_insertion_depth_m"])
+        )
+        dressing_trace = [
+            item["dressing_qa"] for item in insertion_trace + pull_trace
+        ]
+        dressing_qa_finite = bool(dressing_trace) and all(
+            bool(item.get("valid", False))
+            and np.isfinite(
+                float(item.get("surface_containment_ratio", np.nan))
+            )
+            and np.isfinite(
+                float(
+                    item.get(
+                        "maximum_cloth_foot_penetration_m", np.nan
+                    )
+                )
+            )
+            for item in dressing_trace
         )
 
         displacement = (
@@ -314,6 +344,7 @@ def main() -> int:
                 and maximum_particle_ring_stretch is not None
                 and maximum_particle_ring_stretch
                 <= maximum_allowed_stretch
+                and dressing_qa_finite
             ),
             "particle_count": int(initial.shape[0]),
             "maximum_particle_displacement_m": (
@@ -348,6 +379,10 @@ def main() -> int:
                 {int(contact.collider_id) for contact in contacts}
             ),
             "foot_contact_collider_ids": sorted(foot_contact_ids),
+            "dressing_qa_finite": dressing_qa_finite,
+            "final_dressing_qa": dict(
+                environment.sock_cloth.data.get("dressing_qa", {})
+            ),
             "grasp_max_distance_m": float(args.grasp_distance),
             "insertion_lift_m": float(args.insertion_lift_m),
             "configuration": configuration,

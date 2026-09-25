@@ -221,7 +221,20 @@ class SceneGeometry:
             or thickness_alignment < 0
             or thickness_alignment > 1
         ):
-            raise ValueError("scene distances and angles must be finite")
+            raise ValueError(
+                "scene distances and angles are invalid: "
+                f"distance={distance}, lateral={lateral}, angle={angle}, "
+                f"knee_flexion={knee_flexion}, "
+                f"gravity_alignment={gravity_alignment}, "
+                f"toe_alignment={toe_alignment}, "
+                f"left_insertion={left_insertion}, "
+                f"right_insertion={right_insertion}, "
+                f"opening_span={opening_span}, "
+                f"left_patch_span={left_patch_span}, "
+                f"right_patch_span={right_patch_span}, "
+                f"maximum_corner_error={maximum_corner_error}, "
+                f"thickness_alignment={thickness_alignment}"
+            )
         return cls(
             foot_to_opening_plane_m=distance,
             foot_to_opening_lateral_m=lateral,
@@ -270,6 +283,60 @@ class ClothContact:
             normal=normal,
             penetration_m=float(value["penetration_m"]),
             force_proxy=float(value["force_proxy"]),
+        )
+
+
+@dataclass(frozen=True)
+class DressingQA:
+    valid: bool
+    simulation_frame: int
+    surface_containment_ratio: float
+    sections: Tuple[Mapping[str, Any], ...]
+    cuff_progress_toward_ankle_m: float
+    maximum_cuff_reverse_step_m: float
+    cuff_beyond_distal_toe_m: float
+    foot_contact_count: int
+    maximum_cloth_foot_penetration_m: float
+    maximum_cloth_foot_force_proxy: float
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "DressingQA":
+        required = (
+            "surface_containment_ratio",
+            "cuff_progress_toward_ankle_m",
+            "maximum_cuff_reverse_step_m",
+            "cuff_beyond_distal_toe_m",
+            "maximum_cloth_foot_penetration_m",
+            "maximum_cloth_foot_force_proxy",
+        )
+        scalars = np.asarray([value[name] for name in required], dtype=float)
+        sections = tuple(dict(item) for item in value.get("sections", ()))
+        section_values = np.asarray(
+            [item.get("containment_ratio", np.nan) for item in sections],
+            dtype=float,
+        )
+        if (
+            not np.all(np.isfinite(scalars))
+            or not sections
+            or not np.all(np.isfinite(section_values))
+            or np.any(section_values < 0)
+            or np.any(section_values > 1)
+            or scalars[0] < 0
+            or scalars[0] > 1
+            or np.any(scalars[2:] < 0)
+        ):
+            raise ValueError("dressing QA values must be finite and in range")
+        return cls(
+            valid=bool(value.get("valid", False)),
+            simulation_frame=int(value.get("simulation_frame", -1)),
+            surface_containment_ratio=float(scalars[0]),
+            sections=sections,
+            cuff_progress_toward_ankle_m=float(scalars[1]),
+            maximum_cuff_reverse_step_m=float(scalars[2]),
+            cuff_beyond_distal_toe_m=float(scalars[3]),
+            foot_contact_count=int(value.get("foot_contact_count", 0)),
+            maximum_cloth_foot_penetration_m=float(scalars[4]),
+            maximum_cloth_foot_force_proxy=float(scalars[5]),
         )
 
 
@@ -467,6 +534,14 @@ class SockClothAttr:
             distance,
         )
 
+    def align_sock_opening_to_grasp_plate_and_grasp(
+        self, max_distance_m: float
+    ) -> None:
+        distance = float(max_distance_m)
+        if not np.isfinite(distance) or distance <= 0:
+            raise ValueError("max_distance_m must be finite and positive")
+        self._send_data("AlignSockOpeningToGraspPlateAndGrasp", distance)
+
     def set_grasp_target_position(
         self, side: str, position: Sequence[float]
     ) -> None:
@@ -583,6 +658,36 @@ class SockClothAttr:
     def stop_foot_clearance_tracking(self) -> None:
         self._send_data("StopFootClearanceTracking")
 
+    def restore_human_chair_world_pose(
+        self,
+        human_root_position: Sequence[float],
+        chair_position: Sequence[float],
+        human_anchor_position: Sequence[float],
+        right_toe_position: Sequence[float],
+        chair_id: int = -1,
+    ) -> None:
+        vectors = [
+            np.asarray(value, dtype=float)
+            for value in (
+                human_root_position,
+                chair_position,
+                human_anchor_position,
+                right_toe_position,
+            )
+        ]
+        if any(
+            value.shape != (3,) or not np.all(np.isfinite(value))
+            for value in vectors
+        ):
+            raise ValueError(
+                "restored human/chair pose requires four finite 3-vectors"
+            )
+        self._send_data(
+            "RestoreHumanChairWorldPose",
+            *(item for value in vectors for item in value.tolist()),
+            int(chair_id),
+        )
+
     def lock_human_and_chair(self, chair_id: int = -1) -> None:
         self._send_data("LockHumanAndChair", int(chair_id))
 
@@ -621,6 +726,12 @@ class SockClothAttr:
 
     def request_scene_geometry(self) -> None:
         self._send_data("GetSceneGeometry")
+
+    def request_dressing_qa(self) -> None:
+        self._send_data("GetDressingQA")
+
+    def dressing_qa(self) -> DressingQA:
+        return DressingQA.from_mapping(self.data.get("dressing_qa", {}))
 
     def request_visual_diagnostics(self, chair_id: int = -1) -> None:
         self._send_data("GetVisualDiagnostics", int(chair_id))

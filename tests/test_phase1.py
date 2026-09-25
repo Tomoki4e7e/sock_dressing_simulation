@@ -298,6 +298,41 @@ def test_post_calibration_toe_offset_articulates_leg_to_world_target():
     assert report["ok"]
 
 
+def test_locked_human_and_chair_translate_to_lowered_opening_normal():
+    config = load_config(
+        Path("config/autonomous_real_only_downward_plate_human_chair.yaml")
+    )
+    environment = SockDressingEnv(config, backend=_Backend())
+    baseline = config["scene"]["initial_pose_contract"]["locked_pose_baseline"]
+    geometry = SimpleNamespace(
+        left_grasp_position=(-0.19, 0.50, 0.70),
+        right_grasp_position=(-0.09, 0.50, 0.70),
+        opening_target_normal=(0.0, 1.0, 0.0),
+    )
+
+    translated, report = environment._translate_locked_pose_to_opening_normal(
+        baseline, geometry
+    )
+
+    baseline_toe = np.asarray(baseline["right_toe_position"], dtype=float)
+    target_toe = np.asarray(translated["right_toe_position"], dtype=float)
+    delta = target_toe - baseline_toe
+    assert target_toe[1] == pytest.approx(baseline_toe[1] - 0.05)
+    np.testing.assert_allclose(target_toe, [-0.14, target_toe[1], 0.70])
+    for name in (
+        "human_root_position",
+        "chair_position",
+        "human_anchor_position",
+        "right_toe_position",
+    ):
+        np.testing.assert_allclose(
+            np.asarray(translated[name]) - np.asarray(baseline[name]),
+            delta,
+        )
+    assert report["opening_outward_normal"] == [0.0, -1.0, 0.0]
+    assert report["requested_vertical_drop_m"] == pytest.approx(0.05)
+
+
 @pytest.mark.parametrize(
     ("toe_alignment", "left_depth", "offset_report", "expected"),
     [

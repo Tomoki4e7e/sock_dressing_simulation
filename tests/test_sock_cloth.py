@@ -8,6 +8,7 @@ from sock_dressing_simulation.quality import assess_observation_quality
 from sock_dressing_simulation.sock_cloth import (
     PROTOCOL_VERSION,
     ClothContact,
+    DressingQA,
     GraspState,
     SceneGeometry,
     SockClothAttr,
@@ -83,10 +84,85 @@ def test_custom_player_obeys_canonical_sock_physics_contract():
     assert expected["slip_opening_span_m"] == 0.11
     assert expected["slip_consecutive_steps"] == 2
     assert expected["maximum_grasp_particles_per_side"] == 4
-    assert expected["grasp_thickness_half_width_m"] == pytest.approx(0.02)
+    assert expected["grasp_thickness_half_width_m"] == pytest.approx(0.022)
     assert not expected["tether_constraints"]
     assert expected["tether_compliance"] == 0.0
     assert expected["tether_scale"] == 1.0
+
+
+def test_strict_autonomous_profile_restores_straight_leg_pose_baseline():
+    config = load_config(
+        Path("config/autonomous_real_only_strict_dressing.yaml")
+    )
+    scene = config["scene"]
+    pose = scene["initial_pose_contract"]
+
+    assert scene["human_position"] == [0.06, 1.48, -0.72]
+    assert scene["chair"]["parts"][0]["position"] == [0.0, 0.48, -0.18]
+    assert pose["straight_right_leg"]
+    assert pose["right_knee_flexion_max_degrees"] == pytest.approx(2.0)
+    assert pose["right_leg_raise_degrees"] == pytest.approx(90.0)
+    assert "right_toe_offset_world_m" not in pose
+    assert config["scenario"]["foot"]["plantarflexion_degrees"] == pytest.approx(
+        30.0
+    )
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+    assert config["inference"]["reference_actions"] is None
+
+
+def test_human_chair_locked_profile_restores_recorded_world_coordinates():
+    config = load_config(
+        Path("config/autonomous_real_only_human_chair_locked_pose.yaml")
+    )
+    pose = config["scene"]["initial_pose_contract"]
+    baseline = pose["locked_pose_baseline"]
+
+    assert baseline["human_root_position"] == pytest.approx(
+        [0.0599999987, 1.4800000191, -0.7200000286]
+    )
+    assert baseline["chair_position"] == pytest.approx(
+        [-0.0712867528, 0.5095953941, -0.3411580324]
+    )
+    assert baseline["human_anchor_position"] == pytest.approx(
+        [-0.0712867528, 0.7595953345, -0.3411580324]
+    )
+    assert baseline["right_toe_position"] == pytest.approx(
+        [-0.1310119629, 0.5210645795, 0.6446849108]
+    )
+    assert pose["right_toe_offset_world_m"] == [0.05, -0.05, 0.0]
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+
+
+def test_downward_plate_profile_enables_autonomous_geometry_contract():
+    config = load_config(
+        Path("config/autonomous_real_only_downward_plate_human_chair.yaml")
+    )
+    pose = config["scene"]["initial_pose_contract"]
+
+    assert config["scene"]["grasp_anchors"]["align_sock_to_gripper_plate"]
+    assert pose["right_toe_offset_world_m"] is None
+    assert pose["vertical_toe_drop_m"] == pytest.approx(0.05)
+    assert pose["enforce"]
+    assert config["inference"]["reference_actions"] is None
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+
+
+def test_restore_human_chair_world_pose_sends_recorded_vectors():
+    environment = FakeEnvironment()
+    cloth = SockClothAttr(environment, 1200)
+
+    cloth.restore_human_chair_world_pose(
+        [0.06, 1.48, -0.72],
+        [-0.071, 0.510, -0.341],
+        [-0.071, 0.760, -0.341],
+        [-0.131, 0.521, 0.645],
+        2301,
+    )
+
+    message = environment.messages[-1]
+    assert message[:2] == (1200, "RestoreHumanChairWorldPose")
+    assert message[-1] == 2301
+    assert len(message) == 15
 
 
 def test_sock_opening_alignment_writes_solver_local_particle_positions():
@@ -124,6 +200,9 @@ def test_sock_opening_alignment_writes_solver_local_particle_positions():
     )
     assert "CaptureResetStateIfReady(true)" in alignment
     assert "AlignSockOpeningToGraspTargetsAndGrasp" in source
+    assert "AlignSockOpeningToGraspPlateAndGrasp" in source
+    assert "Vector3.Cross(openingAxis, shortAxis)" in source
+    assert "if (inwardNormal.y < 0)" in source
     assert 'Grasp("left", leftTargetId, maxDistance);' in source
     assert 'Grasp("right", rightTargetId, maxDistance);' in source
 
@@ -139,8 +218,52 @@ def test_custom_player_keeps_grasp_targets_at_frames_and_enforces_edge_match():
     assert contract["maximum_opening_edge_error_m"] == pytest.approx(0.01)
     assert contract["required_grasp_particles_per_side"] == 4
     assert config["obi"]["expected"]["grasp_thickness_half_width_m"] == pytest.approx(
-        0.02
+        0.022
     )
+    assert config["scene"]["grasp_alignment"]["target_span_m"] == pytest.approx(
+        0.105
+    )
+    assert 0.105 * (2 * 0.022) == pytest.approx(0.00462)
+
+
+def test_custom_player_reports_geometric_dressing_qa():
+    source = Path(
+        "RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs"
+    ).read_text()
+
+    assert "public void GetDressingQA()" in source
+    assert "FootSurfaceSamples" in source
+    assert "PointInsideSock" in source
+    assert "RayIntersectsTriangle" in source
+    assert '"surface_containment_ratio"' in source
+    assert '"cuff_progress_toward_ankle_m"' in source
+    assert '"maximum_cloth_foot_penetration_m"' in source
+
+
+def test_dressing_qa_requires_finite_cross_section_observations():
+    value = {
+        "valid": True,
+        "simulation_frame": 12,
+        "surface_containment_ratio": 0.95,
+        "sections": [
+            {"name": "toes", "valid": True, "containment_ratio": 0.875}
+        ],
+        "cuff_progress_toward_ankle_m": 0.03,
+        "maximum_cuff_reverse_step_m": 0.001,
+        "cuff_beyond_distal_toe_m": 0.0,
+        "foot_contact_count": 4,
+        "maximum_cloth_foot_penetration_m": 0.001,
+        "maximum_cloth_foot_force_proxy": 0.2,
+    }
+
+    report = DressingQA.from_mapping(value)
+
+    assert report.valid
+    assert report.surface_containment_ratio == pytest.approx(0.95)
+    with pytest.raises(ValueError):
+        DressingQA.from_mapping(
+            {**value, "surface_containment_ratio": float("nan")}
+        )
 
 
 def test_sock_geometry_reports_particle_derived_hanging_direction():
@@ -366,6 +489,7 @@ def test_sock_cloth_commands_match_unity_contract():
     cloth.align_sock_opening_to_grasp_targets_and_grasp(
         [0.0, 0.5, 0.6], 0.03
     )
+    cloth.align_sock_opening_to_grasp_plate_and_grasp(0.03)
     cloth.ignore_robot_human_rigid_collisions(1100)
     cloth.ignore_non_gripper_robot_human_rigid_collisions(1100)
     cloth.configure_right_leg_colliders(2000)
@@ -443,6 +567,7 @@ def test_sock_cloth_commands_match_unity_contract():
             0.6,
             0.03,
         ),
+        (1200, "AlignSockOpeningToGraspPlateAndGrasp", 0.03),
         (1200, "IgnoreRobotHumanRigidCollisions", 1100),
         (1200, "IgnoreNonGripperRobotHumanRigidCollisions", 1100),
         (1200, "ConfigureRightLegColliders", 2000),

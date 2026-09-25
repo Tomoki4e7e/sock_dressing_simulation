@@ -1,0 +1,39 @@
+extends: autonomous_real_only_human_chair_locked_pose.yaml
+
+scene:
+  # The toe is intentionally placed on the plate-normal centerline, only
+  # 34.8 mm below the opening. Disable rigid robot/avatar contact so that this
+  # requested pose does not push the initial gripper frames apart; cloth-foot
+  # and cloth-gripper Obi contacts remain active.
+  ignore_robot_human_rigid_collisions: true
+  ignore_non_gripper_robot_human_rigid_collisions: false
+  grasp_anchors:
+    align_sock_to_gripper_plate: true
+  initial_pose_contract:
+    enforce: true
+    # The complete seated human/chair baseline is translated by one shared
+    # vector. Its right toe is 5 cm below the latest locked experiment and lies
+    # on the opening's downward-facing plate-normal ray.
+    right_toe_offset_world_m: null
+    vertical_toe_drop_m: 0.05
+    vertical_toe_drop_tolerance_m: 0.005
+    # The exact normal-line placement requires more articulation than the
+    # previous left/down toe-offset experiment.
+    right_knee_flexion_max_degrees: 60.0
+    maximum_grasp_corner_error_m: 0.007
+
+obi:
+  expected:
+    # Keep all four particles at the rectangular jaw targets while the human
+    # and chair are translated into the opening-normal line.
+    grasp_linear_compliance: 0.0
+
+inference:
+  # Renderer masks can leave the fixed crop after an autonomous action in this
+  # translated pose. Retain the last valid authoritative masks rather than
+  # replacing them with unconstrained full-frame SAM output.
+  use_renderer_masks: true
+  hold_last_renderer_masks: true
+
+dressing_player:
+  allow_ignored_robot_human_collision_pairs: true
