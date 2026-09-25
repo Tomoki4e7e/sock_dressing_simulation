@@ -110,6 +110,28 @@ def test_strict_autonomous_profile_restores_straight_leg_pose_baseline():
     assert config["inference"]["reference_actions"] is None
 
 
+def test_wide_cuff_small_foot_profile_uses_requested_geometry():
+    config = load_config(
+        Path(
+            "config/"
+            "autonomous_real_only_straight_neutral_wide_cuff_small_foot.yaml"
+        )
+    )
+
+    assert config["obi"]["expected"][
+        "grasp_thickness_half_width_m"
+    ] == pytest.approx(0.035)
+    assert config["scene"][
+        "right_foot_collider_cross_section_scale"
+    ] == pytest.approx(0.8)
+    assert config["scenario"]["foot"][
+        "plantarflexion_degrees"
+    ] == pytest.approx(0.0)
+    assert config["scene"]["initial_pose_contract"]["straight_right_leg"]
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+    assert config["inference"]["reference_actions"] is None
+
+
 def test_human_chair_locked_profile_restores_recorded_world_coordinates():
     config = load_config(
         Path("config/autonomous_real_only_human_chair_locked_pose.yaml")
@@ -367,6 +389,8 @@ def test_right_leg_colliders_follow_actual_bones():
     assert "Transform toes = bones.RightToes ?? foot;" in source
     assert "item.SetParent(bone, false);" in source
     assert "toe + new Vector3(0, 0, -0.15f)" not in source
+    assert "configuredFootColliderCrossSectionScale" in source
+    assert "ScaleFootCrossSection" in source
 
 
 def test_human_task_pose_preserves_rig_bone_lengths():
@@ -492,7 +516,7 @@ def test_sock_cloth_commands_match_unity_contract():
     cloth.align_sock_opening_to_grasp_plate_and_grasp(0.03)
     cloth.ignore_robot_human_rigid_collisions(1100)
     cloth.ignore_non_gripper_robot_human_rigid_collisions(1100)
-    cloth.configure_right_leg_colliders(2000)
+    cloth.configure_right_leg_colliders(2000, 0.8)
     cloth.translate_human_and_ik([0.1, 0.0, -0.2])
     cloth.freeze_human_right_toe_at([0.0, 0.5, 0.6])
     cloth.configure_human_task_pose(
@@ -570,7 +594,7 @@ def test_sock_cloth_commands_match_unity_contract():
         (1200, "AlignSockOpeningToGraspPlateAndGrasp", 0.03),
         (1200, "IgnoreRobotHumanRigidCollisions", 1100),
         (1200, "IgnoreNonGripperRobotHumanRigidCollisions", 1100),
-        (1200, "ConfigureRightLegColliders", 2000),
+        (1200, "ConfigureRightLegColliders", 2000, 0.8),
         (1200, "TranslateHumanAndIK", 0.1, 0.0, -0.2),
         (1200, "FreezeHumanRightToeAt", 0.0, 0.5, 0.6),
         (
@@ -720,6 +744,14 @@ def test_grasp_configuration_rejects_invalid_thresholds():
             cuff_insertion_depth_m=0.03,
             grasp_thickness_half_width_m=0.02,
         )
+
+
+@pytest.mark.parametrize("scale", [0.0, -0.1, 1.01, np.nan, np.inf])
+def test_foot_collider_scale_rejects_invalid_values(scale):
+    cloth = SockClothAttr(FakeEnvironment(), 1200)
+
+    with pytest.raises(ValueError, match="foot_cross_section_scale"):
+        cloth.configure_right_leg_colliders(2000, scale)
 
 
 def test_particle_arrays_are_finite_n_by_three():

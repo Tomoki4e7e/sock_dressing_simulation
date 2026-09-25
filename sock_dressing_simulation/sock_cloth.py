@@ -552,8 +552,21 @@ class SockClothAttr:
             raise ValueError("grasp target position must be a finite 3-vector")
         self._send_data("SetGraspTargetPosition", side, *value.tolist())
 
-    def configure_right_leg_colliders(self, human_id: int) -> None:
-        self._send_data("ConfigureRightLegColliders", int(human_id))
+    def configure_right_leg_colliders(
+        self,
+        human_id: int,
+        foot_cross_section_scale: float = 1.0,
+    ) -> None:
+        scale = float(foot_cross_section_scale)
+        if not np.isfinite(scale) or scale <= 0 or scale > 1:
+            raise ValueError(
+                "foot_cross_section_scale must be finite and in (0, 1]"
+            )
+        self._send_data(
+            "ConfigureRightLegColliders",
+            int(human_id),
+            scale,
+        )
 
     def configure_human_visual_pose(
         self, seat_position: Sequence[float], foot_position: Sequence[float]

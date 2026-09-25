@@ -225,7 +225,10 @@ class SockDressingEnv:
             rotation=list(scene.get("sock_rotation", [0, 0, 0])),
             scale=[1.0, 1.0, 1.0],
         )
-        self.sock_cloth.configure_right_leg_colliders(int(scene["human_id"]))
+        self.sock_cloth.configure_right_leg_colliders(
+            int(scene["human_id"]),
+            float(scene.get("right_foot_collider_cross_section_scale", 1.0)),
+        )
         frozen_toe = scene.get("visuals", {}).get("frozen_right_toe_position")
         if frozen_toe is not None:
             self.sock_cloth.freeze_human_right_toe_at(frozen_toe)

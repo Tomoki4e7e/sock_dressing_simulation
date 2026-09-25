@@ -1,0 +1,9 @@
+extends: autonomous_real_only_straight_neutral_foot_front.yaml
+
+scene:
+  right_foot_collider_cross_section_scale: 0.8
+
+obi:
+  expected:
+    # Expand the gripper-side opening edge from 44 mm to 70 mm.
+    grasp_thickness_half_width_m: 0.035
