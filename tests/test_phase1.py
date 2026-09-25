@@ -333,6 +333,49 @@ def test_locked_human_and_chair_translate_to_lowered_opening_normal():
     assert report["requested_vertical_drop_m"] == pytest.approx(0.05)
 
 
+def test_human_chair_grid_offset_uses_horizontal_robot_away_axis():
+    config = load_config(
+        Path("config/autonomous_real_only_human_chair_offset_search.yaml")
+    )
+    environment = SockDressingEnv(config, backend=_Backend())
+    baseline = {
+        "human_root_position": [1.0, 2.0, 3.0],
+        "chair_position": [4.0, 5.0, 6.0],
+        "human_anchor_position": [7.0, 8.0, 9.0],
+        "right_toe_position": [0.0, 1.0, -1.0],
+    }
+    config["scene"]["robot_position"] = [0.0, -2.0, 0.0]
+    config["scene"]["initial_pose_contract"].update(
+        {"away_from_robot_m": 0.03, "down_m": 0.04}
+    )
+
+    translated, report = environment._apply_human_chair_grid_offset(
+        baseline
+    )
+
+    expected_delta = np.asarray([0.0, -0.04, -0.03])
+    for name, value in baseline.items():
+        np.testing.assert_allclose(
+            np.asarray(translated[name]) - np.asarray(value),
+            expected_delta,
+        )
+    np.testing.assert_allclose(report["away_axis_xz"], [0.0, 0.0, -1.0])
+    np.testing.assert_allclose(report["translation_m"], expected_delta)
+
+
+def test_human_chair_grid_offset_rejects_degenerate_horizontal_axis():
+    config = load_config(
+        Path("config/autonomous_real_only_human_chair_offset_search.yaml")
+    )
+    environment = SockDressingEnv(config, backend=_Backend())
+    baseline = config["scene"]["initial_pose_contract"]["locked_pose_baseline"]
+    toe = baseline["right_toe_position"]
+    config["scene"]["robot_position"] = [toe[0], -3.0, toe[2]]
+
+    with pytest.raises(RuntimeError, match="horizontal away axis"):
+        environment._apply_human_chair_grid_offset(baseline)
+
+
 @pytest.mark.parametrize(
     ("toe_alignment", "left_depth", "offset_report", "expected"),
     [

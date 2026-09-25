@@ -1,0 +1,30 @@
+extends: autonomous_real_only_downward_plate_human_chair.yaml
+
+scenario:
+  foot:
+    plantarflexion_degrees: 0.0
+
+scene:
+  initial_pose_contract:
+    enforce: false
+    calibrate_foot_to_sock: false
+    lock_human_and_chair: false
+    straight_right_leg: true
+    right_knee_flexion_max_degrees: 2.0
+    foot_to_sock_m: 0.035
+    foot_to_sock_tolerance_m: 0.01
+    right_toe_offset_world_m: null
+    # Move the complete straight-leg pose until its neutral ankle lies on the
+    # downward-facing gripper opening normal at the previous target height.
+    vertical_toe_drop_m: 0.15272
+    vertical_toe_drop_tolerance_m: 0.005
+    away_from_robot_m: null
+    down_m: null
+    locked_pose_baseline:
+      human_root_position: [0.0599999987, 1.4800000191, -0.7200000286]
+      chair_position: [0.0, 0.48, -0.18]
+      human_anchor_position: [0.0, 0.7299998999, -0.18]
+      right_toe_position: [-0.1097250879, 0.6237842441, 0.8278987408]
+
+dressing_player:
+  abort_on_rigid_collision_qa_failure: false

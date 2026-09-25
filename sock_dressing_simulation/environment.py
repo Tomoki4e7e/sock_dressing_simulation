@@ -28,6 +28,7 @@ class SockDressingEnv:
         self._rollout_started = False
         self._right_toe_offset_report: Optional[Dict[str, Any]] = None
         self._human_chair_translation_report: Optional[Dict[str, Any]] = None
+        self._human_chair_grid_offset_report: Optional[Dict[str, Any]] = None
         self._effective_locked_pose_baseline: Optional[Dict[str, Any]] = None
 
     def connect(self) -> "SockDressingEnv":
@@ -952,6 +953,16 @@ class SockDressingEnv:
                         locked_pose_baseline,
                         final_geometry,
                     )
+                if (
+                    pose_settings.get("away_from_robot_m") is not None
+                    or pose_settings.get("down_m") is not None
+                ):
+                    (
+                        effective_baseline,
+                        self._human_chair_grid_offset_report,
+                    ) = self._apply_human_chair_grid_offset(
+                        effective_baseline
+                    )
                 self._effective_locked_pose_baseline = effective_baseline
                 chair_id = int(
                     self.config["scene"]
@@ -979,12 +990,15 @@ class SockDressingEnv:
                     )
                 )
                 self._env.step()
-            if self._human_chair_translation_report is not None:
+            if (
+                self._human_chair_translation_report is not None
+                or self._human_chair_grid_offset_report is not None
+            ):
                 geometry = self._request_scene_geometry()
                 actual = np.asarray(geometry.right_toe_position, dtype=float)
                 target = np.asarray(
-                    self._human_chair_translation_report[
-                        "target_right_toe_position"
+                    self._effective_locked_pose_baseline[
+                        "right_toe_position"
                     ],
                     dtype=float,
                 )
@@ -992,24 +1006,26 @@ class SockDressingEnv:
                     pose_settings.get("vertical_toe_drop_tolerance_m", 0.005)
                 )
                 target_error = float(np.linalg.norm(actual - target))
-                self._human_chair_translation_report.update(
-                    {
-                        "actual_right_toe_position": actual.tolist(),
-                        "target_error_m": target_error,
-                        "opening_to_toe_alignment": (
-                            geometry.opening_to_toe_alignment
-                        ),
-                        "ok": (
-                            target_error <= tolerance
-                            and geometry.opening_to_toe_alignment
-                            >= float(
-                                pose_settings.get(
-                                    "opening_to_toe_alignment_min", 0.9
-                                )
+                final_report = {
+                    "actual_right_toe_position": actual.tolist(),
+                    "target_error_m": target_error,
+                    "opening_to_toe_alignment": (
+                        geometry.opening_to_toe_alignment
+                    ),
+                    "ok": (
+                        target_error <= tolerance
+                        and geometry.opening_to_toe_alignment
+                        >= float(
+                            pose_settings.get(
+                                "opening_to_toe_alignment_min", 0.9
                             )
-                        ),
-                    }
-                )
+                        )
+                    ),
+                }
+                if self._human_chair_translation_report is not None:
+                    self._human_chair_translation_report.update(final_report)
+                if self._human_chair_grid_offset_report is not None:
+                    self._human_chair_grid_offset_report.update(final_report)
             if initial_grasp and not all(
                 item["attached"] for item in initial_grasp
             ):
@@ -1057,6 +1073,9 @@ class SockDressingEnv:
                 "right_toe_offset": self._right_toe_offset_report,
                 "human_chair_translation": (
                     self._human_chair_translation_report
+                ),
+                "human_chair_grid_offset": (
+                    self._human_chair_grid_offset_report
                 ),
                 "initial_pose_contract": pose_contract,
             }
@@ -1559,17 +1578,22 @@ class SockDressingEnv:
         angle_error = abs(geometry.right_leg_raise_degrees - wanted_angle)
         offset_report = self._right_toe_offset_report
         translation_report = self._human_chair_translation_report
+        grid_offset_report = self._human_chair_grid_offset_report
         offset_ok = (
             offset_report is None or bool(offset_report.get("ok", False))
         ) and (
             translation_report is None
             or bool(translation_report.get("ok", False))
+        ) and (
+            grid_offset_report is None
+            or bool(grid_offset_report.get("ok", False))
         )
         sock_alignment_ok = (
             geometry.opening_to_toe_alignment >= minimum_toe_alignment
             and (
                 offset_report is not None
                 or translation_report is not None
+                or grid_offset_report is not None
                 or (
                     distance_error <= distance_tolerance
                     and geometry.foot_to_opening_lateral_m <= lateral_tolerance
@@ -1762,6 +1786,7 @@ class SockDressingEnv:
             "configured_chair_position": configured_chair_position,
             "right_toe_offset": offset_report,
             "human_chair_translation": translation_report,
+            "human_chair_grid_offset": grid_offset_report,
             "human_visual_ok": visual_ok,
             "human_visual_diagnostics": task_pose_visual,
             "human_chair_lock_ok": lock_ok,
@@ -1931,6 +1956,74 @@ class SockDressingEnv:
             "translation_m": delta.tolist(),
             "distance_along_outward_normal_m": float(distance),
             "tolerance_m": tolerance,
+            "translated_locked_pose_baseline": translated,
+        }
+
+    def _apply_human_chair_grid_offset(
+        self,
+        locked_pose_baseline: Mapping[str, Any],
+    ) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        settings = self.config["scene"].get("initial_pose_contract", {})
+        away = float(settings.get("away_from_robot_m") or 0.0)
+        down = float(settings.get("down_m") or 0.0)
+        if (
+            not np.isfinite(away)
+            or not np.isfinite(down)
+            or away < 0
+            or down < 0
+        ):
+            raise ValueError(
+                "away_from_robot_m and down_m must be finite and non-negative"
+            )
+        toe = np.asarray(
+            locked_pose_baseline["right_toe_position"], dtype=float
+        )
+        robot = np.asarray(
+            self.config["scene"]["robot_position"], dtype=float
+        )
+        if (
+            toe.shape != (3,)
+            or robot.shape != (3,)
+            or not np.all(np.isfinite(toe))
+            or not np.all(np.isfinite(robot))
+        ):
+            raise ValueError(
+                "right toe and robot positions must be finite 3-vectors"
+            )
+        horizontal = toe - robot
+        horizontal[1] = 0.0
+        horizontal_length = float(np.linalg.norm(horizontal))
+        if horizontal_length <= 1e-8:
+            raise RuntimeError(
+                "right toe and Dry-AIREC do not define a horizontal away axis"
+            )
+        away_axis = horizontal / horizontal_length
+        delta = away_axis * away + np.asarray([0.0, -down, 0.0])
+        translated: Dict[str, Any] = {}
+        for name in (
+            "human_root_position",
+            "chair_position",
+            "human_anchor_position",
+            "right_toe_position",
+        ):
+            value = np.asarray(locked_pose_baseline[name], dtype=float)
+            if value.shape != (3,) or not np.all(np.isfinite(value)):
+                raise ValueError(
+                    f"locked_pose_baseline.{name} must be a finite 3-vector"
+                )
+            translated[name] = (value + delta).tolist()
+        return translated, {
+            "ok": False,
+            "frame": "unity_world",
+            "robot_position": robot.tolist(),
+            "baseline_right_toe_position": toe.tolist(),
+            "away_axis_xz": away_axis.tolist(),
+            "requested_away_from_robot_m": away,
+            "requested_down_m": down,
+            "translation_m": delta.tolist(),
+            "target_right_toe_position": translated[
+                "right_toe_position"
+            ],
             "translated_locked_pose_baseline": translated,
         }
 

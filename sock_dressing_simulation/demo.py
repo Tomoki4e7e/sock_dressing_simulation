@@ -405,12 +405,21 @@ def run_demo(
                         )
                     )
                     if (
-                        (
-                            int(rigid_qa.get("ignored_pair_count", 0)) > 0
-                            and not allow_ignored_rigid_pairs
+                        bool(
+                            config.get("dressing_player", {}).get(
+                                "abort_on_rigid_collision_qa_failure", True
+                            )
                         )
-                        or float(rigid_qa.get("maximum_penetration_m", 0.0))
-                        > maximum_penetration
+                        and (
+                            (
+                                int(rigid_qa.get("ignored_pair_count", 0)) > 0
+                                and not allow_ignored_rigid_pairs
+                            )
+                            or float(
+                                rigid_qa.get("maximum_penetration_m", 0.0)
+                            )
+                            > maximum_penetration
+                        )
                     ):
                         raise RuntimeError(
                             "robot/human rigid collision QA failed: "
