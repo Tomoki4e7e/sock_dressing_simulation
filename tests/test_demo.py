@@ -568,9 +568,60 @@ def test_task_success_rejects_robot_human_penetration(monkeypatch):
             {
                 "ignored_pair_count": 0,
                 "maximum_penetration_m": 0.006,
+                "maximum_enabled_penetration_m": 0.006,
             }
         ],
     )
 
     assert not report["success"]
     assert not report["rigid_collision_ok"]
+    assert report["maximum_enabled_robot_human_penetration_m"] == pytest.approx(
+        0.006
+    )
+
+
+def test_task_success_ignores_disabled_pair_penetration(monkeypatch):
+    config = load_config(Path("config/custom_player.yaml"))
+    observation = {
+        "diagnostics": {
+            "grasp_attachments": [
+                {"side": "left", "verified": True},
+                {"side": "right", "verified": True},
+            ]
+        },
+        "cloth": {},
+    }
+    monkeypatch.setattr(
+        SockDressingEnv,
+        "cloth_radius_qa",
+        staticmethod(lambda *args, **kwargs: {"passes": True}),
+    )
+
+    report = _task_success(
+        observation,
+        [{"ok": True}],
+        [0.0, 0.2],
+        config,
+        application={"initial_pose_contract": {"ok": True}},
+        grasp_quality=[
+            {
+                "ok": True,
+                "attached_grippers": 2,
+                "maximum_edge_error_m": 0.01,
+            }
+        ],
+        rigid_collision_qa_by_frame=[
+            {
+                "ignored_pair_count": 0,
+                "maximum_penetration_m": 0.05,
+                "maximum_enabled_penetration_m": 0.001,
+                "maximum_ignored_penetration_m": 0.05,
+            }
+        ],
+    )
+
+    assert report["rigid_collision_ok"]
+    assert report["maximum_robot_human_penetration_m"] == pytest.approx(0.001)
+    assert report[
+        "maximum_ignored_robot_human_penetration_m"
+    ] == pytest.approx(0.05)

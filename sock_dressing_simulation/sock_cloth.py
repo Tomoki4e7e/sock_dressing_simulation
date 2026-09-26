@@ -298,6 +298,11 @@ class DressingQA:
     foot_contact_count: int
     maximum_cloth_foot_penetration_m: float
     maximum_cloth_foot_force_proxy: float
+    obi_foot_contact_count: int
+    obi_maximum_cloth_foot_penetration_m: float
+    geometric_overlap_particle_count: int
+    geometric_maximum_cloth_foot_penetration_m: float
+    geometric_regions: Tuple[Mapping[str, Any], ...]
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "DressingQA":
@@ -315,8 +320,27 @@ class DressingQA:
             [item.get("containment_ratio", np.nan) for item in sections],
             dtype=float,
         )
+        geometric = dict(value.get("geometric_foot_penetration", {}))
+        geometric_regions = tuple(
+            dict(item) for item in geometric.get("regions", ())
+        )
+        obi_penetration = float(
+            value.get(
+                "obi_maximum_cloth_foot_penetration_m",
+                value["maximum_cloth_foot_penetration_m"],
+            )
+        )
+        geometric_penetration = float(
+            value.get(
+                "geometric_maximum_cloth_foot_penetration_m",
+                value["maximum_cloth_foot_penetration_m"],
+            )
+        )
         if (
             not np.all(np.isfinite(scalars))
+            or not np.all(
+                np.isfinite([obi_penetration, geometric_penetration])
+            )
             or not sections
             or not np.all(np.isfinite(section_values))
             or np.any(section_values < 0)
@@ -324,6 +348,8 @@ class DressingQA:
             or scalars[0] < 0
             or scalars[0] > 1
             or np.any(scalars[2:] < 0)
+            or obi_penetration < 0
+            or geometric_penetration < 0
         ):
             raise ValueError("dressing QA values must be finite and in range")
         return cls(
@@ -337,6 +363,18 @@ class DressingQA:
             foot_contact_count=int(value.get("foot_contact_count", 0)),
             maximum_cloth_foot_penetration_m=float(scalars[4]),
             maximum_cloth_foot_force_proxy=float(scalars[5]),
+            obi_foot_contact_count=int(
+                value.get(
+                    "obi_foot_contact_count",
+                    value.get("foot_contact_count", 0),
+                )
+            ),
+            obi_maximum_cloth_foot_penetration_m=obi_penetration,
+            geometric_overlap_particle_count=int(
+                value.get("geometric_overlap_particle_count", 0)
+            ),
+            geometric_maximum_cloth_foot_penetration_m=geometric_penetration,
+            geometric_regions=geometric_regions,
         )
 
 

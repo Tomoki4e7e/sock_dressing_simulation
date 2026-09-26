@@ -1,7 +1,9 @@
+from copy import deepcopy
 import json
+from pathlib import Path
+
 import numpy as np
 import pytest
-from pathlib import Path
 
 from sock_dressing_simulation.config import load_config
 from sock_dressing_simulation.quality import assess_observation_quality
@@ -132,6 +134,80 @@ def test_wide_cuff_small_foot_profile_uses_requested_geometry():
     assert config["inference"]["reference_actions"] is None
 
 
+def test_rigid_collision_corrected_profile_enables_gripper_foot_contacts():
+    config = load_config(
+        Path(
+            "config/"
+            "autonomous_real_only_straight_neutral_wide_cuff_"
+            "rigid_collision_corrected.yaml"
+        )
+    )
+    scene = config["scene"]
+    player = config["dressing_player"]
+
+    assert not scene["ignore_robot_human_rigid_collisions"]
+    assert scene["ignore_non_gripper_robot_human_rigid_collisions"]
+    assert scene["initial_pose_contract"][
+        "maximum_robot_human_penetration_m"
+    ] == pytest.approx(0.005)
+    assert player["abort_on_rigid_collision_qa_failure"]
+    assert not player["allow_ignored_robot_human_collision_pairs"]
+    assert player["maximum_robot_human_penetration_m"] == pytest.approx(0.005)
+
+
+def test_plate_normal_profile_uses_exactly_four_grasp_points():
+    config = load_config(
+        Path("config/autonomous_real_only_plate_normal_four_point.yaml")
+    )
+    scene = config["scene"]
+    pose = scene["initial_pose_contract"]
+
+    assert scene["grasp_anchors"]["align_sock_to_gripper_plate"]
+    assert config["obi"]["expected"]["maximum_grasp_particles_per_side"] == 2
+    assert config["obi"]["expected"][
+        "grasp_thickness_half_width_m"
+    ] == pytest.approx(0.022)
+    assert pose["required_grasp_particles_per_side"] == 2
+    assert pose["lock_human_and_chair"]
+    assert pose["vertical_toe_drop_m"] == pytest.approx(0.40)
+    assert pose["away_from_robot_m"] is None
+    assert pose["down_m"] is None
+    assert pose["opening_to_toe_alignment_min"] == pytest.approx(0.90)
+    assert pose["enforce"]
+
+
+def test_triaxial_offset_profile_only_adds_requested_pose_offsets():
+    baseline = load_config(
+        Path("config/autonomous_real_only_plate_normal_four_point.yaml")
+    )
+    config = load_config(
+        Path(
+            "config/"
+            "autonomous_real_only_plate_normal_four_point_"
+            "human_triaxial_offset.yaml"
+        )
+    )
+    pose = config["scene"]["initial_pose_contract"]
+
+    assert pose["away_from_robot_m"] == pytest.approx(0.10)
+    assert pose["up_m"] == pytest.approx(0.10)
+    assert pose["right_from_robot_m"] == pytest.approx(0.05)
+    assert pose["down_m"] is None
+    assert pose["required_grasp_particles_per_side"] == 2
+    assert pose["opening_to_toe_alignment_min"] == pytest.approx(0.90)
+    assert config["scene"]["grasp_anchors"]["align_sock_to_gripper_plate"]
+    assert config["obi"]["expected"]["maximum_grasp_particles_per_side"] == 2
+    expected = deepcopy(baseline)
+    expected["scene"]["initial_pose_contract"].update(
+        {
+            "away_from_robot_m": 0.10,
+            "up_m": 0.10,
+            "right_from_robot_m": 0.05,
+        }
+    )
+    assert config == expected
+
+
 def test_human_chair_locked_profile_restores_recorded_world_coordinates():
     config = load_config(
         Path("config/autonomous_real_only_human_chair_locked_pose.yaml")
@@ -260,6 +336,50 @@ def test_custom_player_reports_geometric_dressing_qa():
     assert '"surface_containment_ratio"' in source
     assert '"cuff_progress_toward_ankle_m"' in source
     assert '"maximum_cloth_foot_penetration_m"' in source
+    assert '"geometric_maximum_cloth_foot_penetration_m"' in source
+    assert '"geometric_overlap_particle_count"' in source
+    assert '{ "toes", "forefoot", "heel", "ankle", "calf" }' in source
+
+
+def test_custom_player_projects_strain_before_collision_solving():
+    source = Path(
+        "RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs"
+    ).read_text()
+
+    assert "solver.OnSimulationStart += OnSolverSimulationStart;" in source
+    assert "solver.OnSimulationEnd += OnSolverSimulationEnd;" in source
+    callback = source.split("private void OnSolverSimulationStart(", 1)[1].split(
+        "private void OnSolverCollision(", 1
+    )[0]
+    assert "SyncRightLegCollidersToBones();" in callback
+    assert "LimitStructuralStretch();" in callback
+    end_callback = source.split("private void OnSolverSimulationEnd(", 1)[1].split(
+        "private Dictionary<string, object> GeometricFootPenetration()", 1
+    )[0]
+    assert "LimitStructuralStretch();" in end_callback
+    late_update = source.split("private void LateUpdate()", 1)[1].split(
+        "[RFUAPI]", 1
+    )[0]
+    get_particles = source.split("public void GetParticles()", 1)[1].split(
+        "[RFUAPI]", 1
+    )[0]
+    assert "LimitStructuralStretch();" not in late_update
+    assert "LimitStructuralStretch();" not in get_particles
+    collision_callback = source.split(
+        "private void OnSolverCollision(", 1
+    )[1].split("private Dictionary<string, object> GeometricFootPenetration()", 1)[
+        0
+    ]
+    assert "contacts.Clear();" not in collision_callback
+    assert "MaximumAggregatedContactRecords" in collision_callback
+    get_contacts = source.split("public void GetClothContacts()", 1)[1].split(
+        "[RFUAPI]", 1
+    )[0]
+    assert "contacts.Clear();" in get_contacts
+    rest_length = source.split(
+        "private float StructuralRestLength", 1
+    )[1].split("private void LimitStructuralStretch", 1)[0]
+    assert "Mathf.Max(alignedRest, blueprintRest)" in rest_length
 
 
 def test_dressing_qa_requires_finite_cross_section_observations():
@@ -286,6 +406,45 @@ def test_dressing_qa_requires_finite_cross_section_observations():
         DressingQA.from_mapping(
             {**value, "surface_containment_ratio": float("nan")}
         )
+
+
+def test_dressing_qa_preserves_geometric_overlap_without_obi_contacts():
+    value = {
+        "valid": True,
+        "simulation_frame": 12,
+        "surface_containment_ratio": 0.0,
+        "sections": [
+            {"name": "calf", "valid": True, "containment_ratio": 0.0}
+        ],
+        "cuff_progress_toward_ankle_m": 0.0,
+        "maximum_cuff_reverse_step_m": 0.0,
+        "cuff_beyond_distal_toe_m": 0.0,
+        "foot_contact_count": 0,
+        "obi_foot_contact_count": 0,
+        "obi_maximum_cloth_foot_penetration_m": 0.0,
+        "geometric_overlap_particle_count": 3,
+        "geometric_maximum_cloth_foot_penetration_m": 0.004,
+        "geometric_foot_penetration": {
+            "regions": [
+                {
+                    "name": "calf",
+                    "overlap_particle_count": 3,
+                    "maximum_penetration_m": 0.004,
+                }
+            ]
+        },
+        "maximum_cloth_foot_penetration_m": 0.004,
+        "maximum_cloth_foot_force_proxy": 0.0,
+    }
+
+    report = DressingQA.from_mapping(value)
+
+    assert report.foot_contact_count == 0
+    assert report.geometric_overlap_particle_count == 3
+    assert report.geometric_maximum_cloth_foot_penetration_m == pytest.approx(
+        0.004
+    )
+    assert report.geometric_regions[0]["name"] == "calf"
 
 
 def test_sock_geometry_reports_particle_derived_hanging_direction():
@@ -316,7 +475,15 @@ def test_sock_geometry_reports_particle_derived_hanging_direction():
     assert "Physics.IgnoreCollision(robotCollider, humanCollider, true)" in source
     assert "Physics.ComputePenetration(" in source
     assert "IgnoreNonGripperRobotHumanRigidCollisions" in source
-    assert "IsGripperCollider(value)" in source
+    assert "IsGripperCollider(value, robot.transform)" in source
+    classifier = source[
+        source.index("private static bool IsGripperCollider"):
+        source.index("private static string TransformPath")
+    ]
+    assert "current != robotRoot" in classifier
+    assert '"maximum_enabled_penetration_m"' in source
+    assert '"maximum_ignored_penetration_m"' in source
+    assert '"robot_collider_path"' in source
     assert not config["scene"]["ignore_robot_human_rigid_collisions"]
     assert config["scene"]["ignore_non_gripper_robot_human_rigid_collisions"]
     assert config["scene"]["robot_direct_joint_control"]
@@ -454,6 +621,16 @@ def test_human_chair_lock_restores_world_anchors_and_reports_drift():
     assert "chair.transform.position = lockedChairPosition;" in source
     assert '"human_root_drift_m"' in source
     assert '"human_anchor_drift_m"' in source
+    restore = source.split(
+        "public void RestoreHumanChairWorldPose", 1
+    )[1].split("public void LockHumanAndChair", 1)[0]
+    assert "rigidTaskPoseTranslation = true;" in restore
+    assert "UpdateCanonicalHumanTaskPose();" in restore
+    diagnostics = source.split(
+        "public void GetVisualDiagnostics", 1
+    )[1].split("[RFUAPI]", 1)[0]
+    assert "if (sockHuman != null)" in diagnostics
+    assert '{ "locked", humanChairLocked }' in diagnostics
 
 
 def test_human_task_pose_rejects_nonfinite_plantarflexion():

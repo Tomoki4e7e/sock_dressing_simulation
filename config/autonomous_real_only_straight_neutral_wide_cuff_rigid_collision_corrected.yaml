@@ -1,0 +1,14 @@
+extends: autonomous_real_only_straight_neutral_wide_cuff_collision_corrected.yaml
+
+scene:
+  # Preserve collision response for the grippers while allowing unrelated arm
+  # links to pass the static avatar proxies used by this task.
+  ignore_robot_human_rigid_collisions: false
+  ignore_non_gripper_robot_human_rigid_collisions: true
+  initial_pose_contract:
+    maximum_robot_human_penetration_m: 0.005
+
+dressing_player:
+  abort_on_rigid_collision_qa_failure: true
+  allow_ignored_robot_human_collision_pairs: false
+  maximum_robot_human_penetration_m: 0.005

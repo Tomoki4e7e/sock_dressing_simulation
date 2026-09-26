@@ -416,7 +416,13 @@ def run_demo(
                                 and not allow_ignored_rigid_pairs
                             )
                             or float(
-                                rigid_qa.get("maximum_penetration_m", 0.0)
+                                rigid_qa.get(
+                                    "maximum_enabled_penetration_m",
+                                    rigid_qa.get(
+                                        "maximum_penetration_m",
+                                        0.0,
+                                    ),
+                                )
                             )
                             > maximum_penetration
                         )
@@ -908,9 +914,21 @@ def _task_success(
             "maximum_robot_human_penetration_m", float("inf")
         )
     )
-    maximum_penetration = max(
+    maximum_enabled_penetration = max(
         (
-            float(item.get("maximum_penetration_m", 0.0))
+            float(
+                item.get(
+                    "maximum_enabled_penetration_m",
+                    item.get("maximum_penetration_m", 0.0),
+                )
+            )
+            for item in rigid_collision_qa
+        ),
+        default=None,
+    )
+    maximum_ignored_penetration = max(
+        (
+            float(item.get("maximum_ignored_penetration_m", 0.0))
             for item in rigid_collision_qa
         ),
         default=None,
@@ -924,7 +942,12 @@ def _task_success(
                 )
             )
         )
-        and float(item.get("maximum_penetration_m", 0.0))
+        and float(
+            item.get(
+                "maximum_enabled_penetration_m",
+                item.get("maximum_penetration_m", 0.0),
+            )
+        )
         <= maximum_allowed_penetration
         for item in rigid_collision_qa
     )
@@ -1084,7 +1107,13 @@ def _task_success(
         "foot_contact_ok": foot_contact_ok,
         "foot_contact_collider_ids": foot_contact_ids,
         "rigid_collision_ok": rigid_collision_ok,
-        "maximum_robot_human_penetration_m": maximum_penetration,
+        "maximum_robot_human_penetration_m": maximum_enabled_penetration,
+        "maximum_enabled_robot_human_penetration_m": (
+            maximum_enabled_penetration
+        ),
+        "maximum_ignored_robot_human_penetration_m": (
+            maximum_ignored_penetration
+        ),
         "maximum_allowed_robot_human_penetration_m": maximum_allowed_penetration,
         "dressing_observations_ok": dressing_observations_ok,
         "final_coverage_hold_frames": hold_frames,

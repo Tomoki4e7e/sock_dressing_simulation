@@ -1,0 +1,27 @@
+extends: autonomous_real_only_straight_neutral_wide_cuff_rigid_collision_corrected.yaml
+
+scene:
+  grasp_anchors:
+    # Orient the rectangular cuff opening from the initial grasping-frame
+    # plate, rather than deriving its normal from the current toe position.
+    align_sock_to_gripper_plate: true
+  initial_pose_contract:
+    enforce: true
+    lock_human_and_chair: true
+    # Keep the complete seated human/chair pose on the downward-facing plate
+    # normal. The collision-corrected parent's lateral clearance offset would
+    # move the toe away from that normal.
+    vertical_toe_drop_m: 0.40
+    away_from_robot_m: null
+    down_m: null
+    opening_to_toe_alignment_min: 0.90
+    maximum_cloth_foot_penetration_m: 0.002
+    # Two rectangular-corner pins at each gripper are four grasp points total.
+    required_grasp_particles_per_side: 2
+
+obi:
+  expected:
+    maximum_grasp_particles_per_side: 2
+    # Match the approximately 44 mm GripperV2 jaw thickness. The inherited
+    # 70 mm wide-cuff experiment over-stretches a cuff held at only four pins.
+    grasp_thickness_half_width_m: 0.022

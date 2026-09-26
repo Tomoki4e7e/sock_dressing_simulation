@@ -1,0 +1,13 @@
+extends: autonomous_real_only_plate_normal_four_point.yaml
+
+scene:
+  initial_pose_contract:
+    # Translate the complete seated human/chair pose so the right toe starts
+    # on the plate-normal ray from the gripper midpoint. Keep the collision-
+    # safe axial clearance while removing the previous three-axis offset that
+    # moved the toe laterally away from the hands.
+    vertical_toe_drop_m: 0.40
+    away_from_robot_m: null
+    down_m: null
+    up_m: null
+    right_from_robot_m: null

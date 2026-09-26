@@ -261,16 +261,7 @@ class SockDressingEnv:
                     ),
                     bool(pose_contract.get("straight_right_leg", False)),
                 )
-        if scene.get(
-            "ignore_non_gripper_robot_human_rigid_collisions", False
-        ):
-            self.sock_cloth.ignore_non_gripper_robot_human_rigid_collisions(
-                int(assets["robot_id"])
-            )
-        elif scene.get("ignore_robot_human_rigid_collisions", True):
-            self.sock_cloth.ignore_robot_human_rigid_collisions(
-                int(assets["robot_id"])
-            )
+        self._configure_robot_human_rigid_collisions()
         self._create_native_cameras()
         self.sock_cloth.configure_mask_proxy_cameras()
         self._create_grasp_anchors()
@@ -335,6 +326,30 @@ class SockDressingEnv:
                 "native custom Player is missing enabled Obi colliders: "
                 f"{sorted(required - enabled_ids)}"
             )
+
+    def _configure_robot_human_rigid_collisions(self) -> None:
+        scene = self.config["scene"]
+        ignore_all = bool(
+            scene.get("ignore_robot_human_rigid_collisions", True)
+        )
+        ignore_non_gripper = bool(
+            scene.get(
+                "ignore_non_gripper_robot_human_rigid_collisions",
+                False,
+            )
+        )
+        if ignore_all and ignore_non_gripper:
+            raise ValueError(
+                "robot-human collision policy cannot ignore all and "
+                "selectively enable grippers at the same time"
+            )
+        robot_id = int(self.config["assets"]["robot_id"])
+        if ignore_non_gripper:
+            self.sock_cloth.ignore_non_gripper_robot_human_rigid_collisions(
+                robot_id
+            )
+        elif ignore_all:
+            self.sock_cloth.ignore_robot_human_rigid_collisions(robot_id)
 
     def _create_native_cameras(self) -> None:
         import pyrcareworld.attributes as attr
@@ -959,6 +974,8 @@ class SockDressingEnv:
                 if (
                     pose_settings.get("away_from_robot_m") is not None
                     or pose_settings.get("down_m") is not None
+                    or pose_settings.get("up_m") is not None
+                    or pose_settings.get("right_from_robot_m") is not None
                 ):
                     (
                         effective_baseline,
@@ -979,8 +996,11 @@ class SockDressingEnv:
                     effective_baseline["right_toe_position"],
                     chair_id,
                 )
-                if not pose_settings.get("lock_human_and_chair", False):
-                    self._env.step()
+                # Straight-leg restoration updates authored world-space bone
+                # anchors in LateUpdate. Settle once before capturing the lock;
+                # otherwise LockHumanAndChair records the pre-translation toe.
+                self._env.step()
+                self._request_scene_geometry()
             if (
                 native
                 and pose_settings.get("lock_human_and_chair", False)
@@ -1043,7 +1063,120 @@ class SockDressingEnv:
                     item["particle_indices"] = list(
                         state.get("particle_indices", ())
                     )
+            if native:
+                # Reapply after all runtime robot and human colliders exist.
+                self._configure_robot_human_rigid_collisions()
             pose_contract = self._request_initial_pose_contract() if native else {}
+            initial_rigid_penetration_limit = pose_settings.get(
+                "maximum_robot_human_penetration_m"
+            )
+            if native and initial_rigid_penetration_limit is not None:
+                initial_rigid_penetration_limit = float(
+                    initial_rigid_penetration_limit
+                )
+                if (
+                    not np.isfinite(initial_rigid_penetration_limit)
+                    or initial_rigid_penetration_limit < 0
+                ):
+                    raise ValueError(
+                        "initial maximum_robot_human_penetration_m must be "
+                        "finite and non-negative"
+                    )
+                self.sock_cloth.request_robot_human_rigid_collision_qa(
+                    int(self.config["assets"]["robot_id"])
+                )
+                self._env.step()
+                initial_rigid_qa = dict(
+                    self.sock_cloth.data.get(
+                        "robot_human_rigid_collision_qa",
+                        {},
+                    )
+                )
+                enabled_pairs = int(
+                    initial_rigid_qa.get("enabled_pair_count", 0)
+                )
+                ignored_pairs = int(
+                    initial_rigid_qa.get("ignored_pair_count", 0)
+                )
+                enabled_penetration = float(
+                    initial_rigid_qa.get(
+                        "maximum_enabled_penetration_m",
+                        float("inf"),
+                    )
+                )
+                initial_rigid_ok = bool(
+                    enabled_pairs > 0
+                    and ignored_pairs == 0
+                    and np.isfinite(enabled_penetration)
+                    and enabled_penetration
+                    <= initial_rigid_penetration_limit
+                )
+                pose_contract["initial_robot_human_rigid_collision_qa"] = (
+                    initial_rigid_qa
+                )
+                pose_contract[
+                    "maximum_robot_human_penetration_limit_m"
+                ] = initial_rigid_penetration_limit
+                pose_contract["robot_human_rigid_collision_ok"] = (
+                    initial_rigid_ok
+                )
+                pose_contract["ok"] = bool(
+                    pose_contract.get("ok", False) and initial_rigid_ok
+                )
+                if not initial_rigid_ok:
+                    raise RuntimeError(
+                        "initial gripper-foot collision contract failed: "
+                        f"qa={initial_rigid_qa}, "
+                        f"limit={initial_rigid_penetration_limit}"
+                    )
+            initial_penetration_limit = pose_settings.get(
+                "maximum_cloth_foot_penetration_m"
+            )
+            if native and initial_penetration_limit is not None:
+                initial_penetration_limit = float(initial_penetration_limit)
+                if (
+                    not np.isfinite(initial_penetration_limit)
+                    or initial_penetration_limit < 0
+                ):
+                    raise ValueError(
+                        "initial maximum_cloth_foot_penetration_m must be "
+                        "finite and non-negative"
+                    )
+                # Discard contacts accumulated while the human, chair, sock,
+                # and colliders were still moving into their final poses.
+                self.sock_cloth.request_dressing_qa()
+                self._env.step()
+                self.sock_cloth.request_dressing_qa()
+                self._env.step()
+                initial_dressing_qa = dict(
+                    self.sock_cloth.data.get("dressing_qa", {})
+                )
+                initial_penetration = float(
+                    initial_dressing_qa.get(
+                        "maximum_cloth_foot_penetration_m",
+                        float("inf"),
+                    )
+                )
+                initial_clearance_ok = bool(
+                    initial_dressing_qa.get("valid", False)
+                    and np.isfinite(initial_penetration)
+                    and initial_penetration <= initial_penetration_limit
+                )
+                pose_contract["initial_dressing_qa"] = initial_dressing_qa
+                pose_contract["maximum_cloth_foot_penetration_limit_m"] = (
+                    initial_penetration_limit
+                )
+                pose_contract["cloth_foot_clearance_ok"] = initial_clearance_ok
+                pose_contract["ok"] = bool(
+                    pose_contract.get("ok", False) and initial_clearance_ok
+                )
+                if not initial_clearance_ok:
+                    raise RuntimeError(
+                        "initial cloth-foot penetration contract failed: "
+                        f"penetration={initial_penetration}, "
+                        f"limit={initial_penetration_limit}, "
+                        f"qa={initial_dressing_qa}"
+                    )
             if (
                 pose_contract
                 and not pose_contract["ok"]
@@ -1244,6 +1377,18 @@ class SockDressingEnv:
                             "robot_human_maximum_penetration_m", float("inf")
                         )
                     ),
+                    "maximum_enabled_penetration_m": float(
+                        configuration.get(
+                            "robot_human_maximum_enabled_penetration_m",
+                            float("inf"),
+                        )
+                    ),
+                    "maximum_ignored_penetration_m": float(
+                        configuration.get(
+                            "robot_human_maximum_ignored_penetration_m",
+                            float("inf"),
+                        )
+                    ),
                 },
                 "visual_diagnostics": list(
                     getattr(self.cloth, "data", {}).get("visual_diagnostics", [])
@@ -1318,6 +1463,9 @@ class SockDressingEnv:
         self.sock_cloth.request_grasp_state()
         self.sock_cloth.request_scene_geometry()
         self.sock_cloth.request_dressing_qa()
+        self.sock_cloth.request_robot_human_rigid_collision_qa(
+            int(self.config["assets"]["robot_id"])
+        )
         self.sock_cloth.request_visual_diagnostics(
             int(self.config["scene"].get("stable_ids", {}).get("chair", -1))
         )
@@ -1376,6 +1524,9 @@ class SockDressingEnv:
                 )
         diagnostics = self.diagnostics()
         diagnostics["human_chair_lock_qa"] = lock_report
+        diagnostics["robot_human_rigid_collision_qa"] = dict(
+            cloth.get("robot_human_rigid_collision_qa", {})
+        )
         observation = {
             "robot": robot_data,
             "human": dict(getattr(self.human, "data", {}) or {}),
@@ -1935,6 +2086,7 @@ class SockDressingEnv:
         target_toe = center + outward * distance
         delta = target_toe - baseline_toe
         translated: Dict[str, Any] = {}
+        rigid_task_pose = bool(settings.get("straight_right_leg", False))
         for name in (
             "human_root_position",
             "chair_position",
@@ -1946,7 +2098,13 @@ class SockDressingEnv:
                 raise ValueError(
                     f"locked_pose_baseline.{name} must be a finite 3-vector"
                 )
-            translated[name] = (value + delta).tolist()
+            # The straight-leg avatar is authored from explicit world-space
+            # bone anchors. Moving both its transform root and those anchors
+            # applies the translation twice on the following Unity frame.
+            translated[name] = (
+                value if rigid_task_pose and name == "human_root_position"
+                else value + delta
+            ).tolist()
         return translated, {
             "ok": False,
             "frame": "unity_world",
@@ -1969,14 +2127,20 @@ class SockDressingEnv:
         settings = self.config["scene"].get("initial_pose_contract", {})
         away = float(settings.get("away_from_robot_m") or 0.0)
         down = float(settings.get("down_m") or 0.0)
+        up = float(settings.get("up_m") or 0.0)
+        right = float(settings.get("right_from_robot_m") or 0.0)
         if (
             not np.isfinite(away)
             or not np.isfinite(down)
+            or not np.isfinite(up)
+            or not np.isfinite(right)
             or away < 0
             or down < 0
+            or up < 0
+            or right < 0
         ):
             raise ValueError(
-                "away_from_robot_m and down_m must be finite and non-negative"
+                "human/chair offsets must be finite and non-negative"
             )
         toe = np.asarray(
             locked_pose_baseline["right_toe_position"], dtype=float
@@ -2001,8 +2165,21 @@ class SockDressingEnv:
                 "right toe and Dry-AIREC do not define a horizontal away axis"
             )
         away_axis = horizontal / horizontal_length
-        delta = away_axis * away + np.asarray([0.0, -down, 0.0])
+        world_up = np.asarray([0.0, 1.0, 0.0])
+        right_axis = np.cross(world_up, away_axis)
+        right_length = float(np.linalg.norm(right_axis))
+        if right_length <= 1e-8:
+            raise RuntimeError(
+                "Dry-AIREC view does not define a horizontal right axis"
+            )
+        right_axis /= right_length
+        delta = (
+            away_axis * away
+            + right_axis * right
+            + world_up * (up - down)
+        )
         translated: Dict[str, Any] = {}
+        rigid_task_pose = bool(settings.get("straight_right_leg", False))
         for name in (
             "human_root_position",
             "chair_position",
@@ -2014,15 +2191,21 @@ class SockDressingEnv:
                 raise ValueError(
                     f"locked_pose_baseline.{name} must be a finite 3-vector"
                 )
-            translated[name] = (value + delta).tolist()
+            translated[name] = (
+                value if rigid_task_pose and name == "human_root_position"
+                else value + delta
+            ).tolist()
         return translated, {
             "ok": False,
             "frame": "unity_world",
             "robot_position": robot.tolist(),
             "baseline_right_toe_position": toe.tolist(),
             "away_axis_xz": away_axis.tolist(),
+            "right_axis_xz": right_axis.tolist(),
             "requested_away_from_robot_m": away,
             "requested_down_m": down,
+            "requested_up_m": up,
+            "requested_right_from_robot_m": right,
             "translation_m": delta.tolist(),
             "target_right_toe_position": translated[
                 "right_toe_position"
@@ -2039,6 +2222,9 @@ class SockDressingEnv:
         self.sock_cloth.request_contacts()
         self.sock_cloth.request_coverage()
         self.sock_cloth.request_dressing_qa()
+        self.sock_cloth.request_robot_human_rigid_collision_qa(
+            int(self.config["assets"]["robot_id"])
+        )
         if hasattr(self.robot, "GetJointInverseDynamicsForce"):
             self.robot.GetJointInverseDynamicsForce()
         self._env.step()
@@ -2051,6 +2237,10 @@ class SockDressingEnv:
                 for item in contacts
             }
         )
+        diagnostics = self.diagnostics()
+        diagnostics["robot_human_rigid_collision_qa"] = dict(
+            cloth.get("robot_human_rigid_collision_qa", {})
+        )
         observation = {
             "robot": robot_data,
             "human": dict(getattr(self.human, "data", {}) or {}),
@@ -2060,7 +2250,7 @@ class SockDressingEnv:
             "contact_force": contacts,
             "dressing_qa": dict(cloth.get("dressing_qa", {})),
             "collision_pairs": collision_pairs,
-            "diagnostics": self.diagnostics(),
+            "diagnostics": diagnostics,
         }
         observation.update(self.robot_signals(robot_data))
         return observation

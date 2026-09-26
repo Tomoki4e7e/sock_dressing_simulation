@@ -122,6 +122,12 @@ class _Cloth:
     def request_configuration(self):
         self.configuration_requested = True
 
+    def ignore_non_gripper_robot_human_rigid_collisions(self, robot_id):
+        self.rigid_collision_policy = ("non_gripper", robot_id)
+
+    def ignore_robot_human_rigid_collisions(self, robot_id):
+        self.rigid_collision_policy = ("all", robot_id)
+
     def stop_foot_clearance_tracking(self):
         self.clearance_tracking_stopped = True
 
@@ -319,12 +325,10 @@ def test_locked_human_and_chair_translate_to_lowered_opening_normal():
     delta = target_toe - baseline_toe
     assert target_toe[1] == pytest.approx(baseline_toe[1] - 0.05)
     np.testing.assert_allclose(target_toe, [-0.14, target_toe[1], 0.70])
-    for name in (
-        "human_root_position",
-        "chair_position",
-        "human_anchor_position",
-        "right_toe_position",
-    ):
+    np.testing.assert_allclose(
+        translated["human_root_position"], baseline["human_root_position"]
+    )
+    for name in ("chair_position", "human_anchor_position", "right_toe_position"):
         np.testing.assert_allclose(
             np.asarray(translated[name]) - np.asarray(baseline[name]),
             delta,
@@ -346,20 +350,32 @@ def test_human_chair_grid_offset_uses_horizontal_robot_away_axis():
     }
     config["scene"]["robot_position"] = [0.0, -2.0, 0.0]
     config["scene"]["initial_pose_contract"].update(
-        {"away_from_robot_m": 0.03, "down_m": 0.04}
+        {
+            "away_from_robot_m": 0.03,
+            "down_m": 0.04,
+            "up_m": 0.10,
+            "right_from_robot_m": 0.05,
+        }
     )
 
     translated, report = environment._apply_human_chair_grid_offset(
         baseline
     )
 
-    expected_delta = np.asarray([0.0, -0.04, -0.03])
-    for name, value in baseline.items():
+    expected_delta = np.asarray([-0.05, 0.06, -0.03])
+    np.testing.assert_allclose(
+        translated["human_root_position"], baseline["human_root_position"]
+    )
+    for name in ("chair_position", "human_anchor_position", "right_toe_position"):
+        value = baseline[name]
         np.testing.assert_allclose(
             np.asarray(translated[name]) - np.asarray(value),
             expected_delta,
         )
     np.testing.assert_allclose(report["away_axis_xz"], [0.0, 0.0, -1.0])
+    np.testing.assert_allclose(report["right_axis_xz"], [-1.0, 0.0, 0.0])
+    assert report["requested_up_m"] == pytest.approx(0.10)
+    assert report["requested_right_from_robot_m"] == pytest.approx(0.05)
     np.testing.assert_allclose(report["translation_m"], expected_delta)
 
 
