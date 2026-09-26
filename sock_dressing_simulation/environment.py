@@ -26,6 +26,7 @@ class SockDressingEnv:
         self._camera_mount_report: Dict[str, Any] = {}
         self.sock_cloth = None
         self._rollout_started = False
+        self._initial_tip_guidance_active = False
         self._right_toe_offset_report: Optional[Dict[str, Any]] = None
         self._human_chair_translation_report: Optional[Dict[str, Any]] = None
         self._human_chair_grid_offset_report: Optional[Dict[str, Any]] = None
@@ -307,6 +308,18 @@ class SockDressingEnv:
             cuff_insertion_depth_m=float(expected["cuff_insertion_depth_m"]),
             grasp_thickness_half_width_m=float(
                 expected["grasp_thickness_half_width_m"]
+            ),
+            opening_rim_maximum_stretch=float(
+                expected.get("opening_rim_maximum_stretch", 1.05)
+            ),
+            opening_rim_plane_stiffness=float(
+                expected.get("opening_rim_plane_stiffness", 0.75)
+            ),
+            opening_rim_shape_stiffness=float(
+                expected.get("opening_rim_shape_stiffness", 0.5)
+            ),
+            opening_rim_maximum_correction_m=float(
+                expected.get("opening_rim_maximum_correction_m", 0.01)
             ),
         )
         self.sock_cloth.request_configuration()
@@ -914,6 +927,24 @@ class SockDressingEnv:
                         list(final_geometry.right_toe_position),
                         grasp_distance,
                     )
+                tip_target_names = (
+                    "sock_tip_target_span_axis_offset_m",
+                    "sock_tip_target_cross_axis_offset_m",
+                    "sock_tip_target_opening_depth_m",
+                )
+                if all(name in pose_settings for name in tip_target_names):
+                    self.sock_cloth.configure_initial_tip_guidance(
+                        float(pose_settings[tip_target_names[0]]),
+                        float(pose_settings[tip_target_names[1]]),
+                        float(pose_settings[tip_target_names[2]]),
+                        float(
+                            pose_settings.get(
+                                "sock_tip_guidance_maximum_correction_m",
+                                0.02,
+                            )
+                        ),
+                    )
+                    self._initial_tip_guidance_active = True
                 self.sock_cloth.request_grasp_state()
                 self._env.step()
                 states = {
@@ -1215,6 +1246,7 @@ class SockDressingEnv:
                 ),
                 "initial_pose_contract": pose_contract,
             }
+
         self.cloth.SetTransform(
             position=list(scenario.sock_position),
             rotation=list(scenario.sock_rotation),
@@ -1251,6 +1283,12 @@ class SockDressingEnv:
             "chair_part_ids": [int(part.id) for part in self.chair],
             "grasp_attachments": list(self._grasp_attachment_report),
         }
+
+    def release_initial_tip_guidance(self) -> None:
+        if not self._initial_tip_guidance_active:
+            return
+        self.sock_cloth.release_initial_tip_guidance()
+        self._initial_tip_guidance_active = False
 
     def _validate_simulator_joint_mapping(self) -> None:
         from .joints import JointMap
@@ -1571,6 +1609,42 @@ class SockDressingEnv:
         minimum_toe_alignment = float(
             settings.get("opening_to_toe_alignment_min", 0.9)
         )
+        minimum_plate_alignment = float(
+            settings.get("opening_plate_normal_alignment_min", -1.0)
+        )
+        minimum_plate_downward_alignment = float(
+            settings.get("plate_downward_alignment_min", -1.0)
+        )
+        minimum_ring_plate_alignment = float(
+            settings.get("opening_ring_plate_alignment_min", -1.0)
+        )
+        maximum_ring_sag = float(
+            settings.get("opening_ring_maximum_sag_m", float("inf"))
+        )
+        minimum_ring_area_retention = float(
+            settings.get("opening_ring_area_retention_min", 0.0)
+        )
+        maximum_tip_span_offset = float(
+            settings.get("sock_tip_span_axis_offset_max_m", float("inf"))
+        )
+        minimum_tip_cross_offset = float(
+            settings.get("sock_tip_cross_axis_offset_min_m", -float("inf"))
+        )
+        maximum_tip_cross_offset = float(
+            settings.get("sock_tip_cross_axis_offset_max_m", float("inf"))
+        )
+        minimum_tip_opening_depth = float(
+            settings.get("sock_tip_opening_depth_min_m", -float("inf"))
+        )
+        maximum_tip_opening_depth = float(
+            settings.get("sock_tip_opening_depth_max_m", float("inf"))
+        )
+        if (
+            maximum_tip_span_offset <= 0
+            or minimum_tip_cross_offset > maximum_tip_cross_offset
+            or minimum_tip_opening_depth > maximum_tip_opening_depth
+        ):
+            raise ValueError("sock tip initial-pose bounds are invalid")
         minimum_cuff_insertion = float(
             settings.get("minimum_cuff_insertion_depth_m", 0.0)
         )
@@ -1742,8 +1816,48 @@ class SockDressingEnv:
             grid_offset_report is None
             or bool(grid_offset_report.get("ok", False))
         )
+        opening_plate_alignment = float(
+            getattr(geometry, "opening_plate_normal_alignment", 1.0)
+        )
+        plate_downward_alignment = float(
+            getattr(geometry, "plate_downward_alignment", 0.0)
+        )
+        ring_plate_alignment = float(
+            getattr(geometry, "opening_ring_plate_alignment", 1.0)
+        )
+        ring_maximum_sag = float(
+            getattr(geometry, "opening_ring_maximum_sag_m", 0.0)
+        )
+        ring_area_retention = float(
+            getattr(geometry, "opening_ring_area_retention", 1.0)
+        )
+        tip_span_offset = float(
+            getattr(geometry, "sock_tip_span_axis_offset_m", 0.0)
+        )
+        tip_cross_offset = float(
+            getattr(geometry, "sock_tip_cross_axis_offset_m", 0.0)
+        )
+        tip_opening_depth = float(
+            getattr(geometry, "sock_tip_opening_depth_m", 0.0)
+        )
+        tip_inside_arm_loop = (
+            abs(tip_span_offset)
+            <= maximum_tip_span_offset
+            and minimum_tip_cross_offset
+            <= tip_cross_offset
+            <= maximum_tip_cross_offset
+            and minimum_tip_opening_depth
+            <= tip_opening_depth
+            <= maximum_tip_opening_depth
+        )
         sock_alignment_ok = (
             geometry.opening_to_toe_alignment >= minimum_toe_alignment
+            and opening_plate_alignment >= minimum_plate_alignment
+            and plate_downward_alignment >= minimum_plate_downward_alignment
+            and ring_plate_alignment >= minimum_ring_plate_alignment
+            and ring_maximum_sag <= maximum_ring_sag
+            and ring_area_retention >= minimum_ring_area_retention
+            and tip_inside_arm_loop
             and (
                 offset_report is not None
                 or translation_report is not None
@@ -1862,6 +1976,53 @@ class SockDressingEnv:
             "opening_normal": list(geometry.opening_normal),
             "opening_outward_normal": list(geometry.opening_outward_normal),
             "opening_target_normal": list(geometry.opening_target_normal),
+            "grasp_plate_outward_normal": list(
+                getattr(
+                    geometry,
+                    "grasp_plate_outward_normal",
+                    geometry.opening_outward_normal,
+                )
+            ),
+            "opening_plate_normal_alignment": opening_plate_alignment,
+            "opening_plate_normal_alignment_min": minimum_plate_alignment,
+            "plate_downward_alignment": plate_downward_alignment,
+            "plate_downward_alignment_min": (
+                minimum_plate_downward_alignment
+            ),
+            "opening_ring_inward_normal": list(
+                getattr(
+                    geometry,
+                    "opening_ring_inward_normal",
+                    geometry.opening_target_normal,
+                )
+            ),
+            "opening_ring_plate_alignment": ring_plate_alignment,
+            "opening_ring_plate_alignment_min": minimum_ring_plate_alignment,
+            "opening_ring_plane_rms_m": float(
+                getattr(geometry, "opening_ring_plane_rms_m", 0.0)
+            ),
+            "opening_ring_plane_maximum_m": float(
+                getattr(geometry, "opening_ring_plane_maximum_m", 0.0)
+            ),
+            "opening_ring_maximum_sag_m": ring_maximum_sag,
+            "opening_ring_maximum_sag_limit_m": maximum_ring_sag,
+            "opening_ring_area_m2": float(
+                getattr(geometry, "opening_ring_area_m2", 0.0)
+            ),
+            "opening_ring_area_retention": ring_area_retention,
+            "opening_ring_area_retention_min": minimum_ring_area_retention,
+            "sock_tip_center": list(
+                getattr(geometry, "sock_tip_center", geometry.opening_center)
+            ),
+            "sock_tip_span_axis_offset_m": tip_span_offset,
+            "sock_tip_span_axis_offset_max_m": maximum_tip_span_offset,
+            "sock_tip_cross_axis_offset_m": tip_cross_offset,
+            "sock_tip_cross_axis_offset_min_m": minimum_tip_cross_offset,
+            "sock_tip_cross_axis_offset_max_m": maximum_tip_cross_offset,
+            "sock_tip_opening_depth_m": tip_opening_depth,
+            "sock_tip_opening_depth_min_m": minimum_tip_opening_depth,
+            "sock_tip_opening_depth_max_m": maximum_tip_opening_depth,
+            "sock_tip_inside_arm_loop": tip_inside_arm_loop,
             "opening_to_toe_alignment": geometry.opening_to_toe_alignment,
             "opening_to_toe_alignment_min": minimum_toe_alignment,
             "opening_span_m": opening_span,
@@ -2053,24 +2214,36 @@ class SockDressingEnv:
             + np.asarray(geometry.right_grasp_position, dtype=float)
         )
         inward = np.asarray(geometry.opening_target_normal, dtype=float)
+        plate_outward = np.asarray(
+            getattr(geometry, "grasp_plate_outward_normal", -inward),
+            dtype=float,
+        )
         baseline_toe = np.asarray(
             locked_pose_baseline["right_toe_position"], dtype=float
         )
         if (
             center.shape != (3,)
             or inward.shape != (3,)
+            or plate_outward.shape != (3,)
             or baseline_toe.shape != (3,)
             or not np.all(np.isfinite(center))
             or not np.all(np.isfinite(inward))
+            or not np.all(np.isfinite(plate_outward))
             or not np.all(np.isfinite(baseline_toe))
         ):
             raise ValueError(
                 "opening geometry and locked right toe must be finite 3-vectors"
             )
         normal_length = float(np.linalg.norm(inward))
-        if normal_length <= 1e-8:
+        plate_normal_length = float(np.linalg.norm(plate_outward))
+        if normal_length <= 1e-8 or plate_normal_length <= 1e-8:
             raise ValueError("opening target normal is degenerate")
-        outward = -inward / normal_length
+        outward = plate_outward / plate_normal_length
+        target_outward = -inward / normal_length
+        if float(np.dot(outward, target_outward)) < 0.999:
+            raise RuntimeError(
+                "opening target normal is not parallel to the gripper plate"
+            )
         if outward[1] >= -1e-3:
             raise RuntimeError(
                 "gripper plate outward normal does not point world-down"

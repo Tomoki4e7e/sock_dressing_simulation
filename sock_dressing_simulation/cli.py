@@ -59,6 +59,7 @@ def _prepare(config, scenario=None):
         bend_start=scenario.sock_mesh.rest_bend_start_m,
         bend_length=scenario.sock_mesh.rest_bend_length_m,
         bend_degrees=scenario.sock_mesh.rest_bend_degrees,
+        bend_azimuth_degrees=scenario.sock_mesh.rest_bend_azimuth_degrees,
     )
     return {
         "urdf": str(urdf),

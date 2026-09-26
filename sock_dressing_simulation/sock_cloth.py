@@ -92,6 +92,20 @@ class SceneGeometry:
     left_grasp_local_offset: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     right_grasp_local_offset: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     opening_target_normal: Tuple[float, float, float] = (0.0, 0.0, 1.0)
+    grasp_plate_outward_normal: Tuple[float, float, float] = (0.0, 0.0, -1.0)
+    opening_plate_normal_alignment: float = 1.0
+    plate_downward_alignment: float = 0.0
+    opening_ring_inward_normal: Tuple[float, float, float] = (0.0, 0.0, 1.0)
+    opening_ring_plate_alignment: float = 1.0
+    opening_ring_plane_rms_m: float = 0.0
+    opening_ring_plane_maximum_m: float = 0.0
+    opening_ring_maximum_sag_m: float = 0.0
+    opening_ring_area_m2: float = 0.0
+    opening_ring_area_retention: float = 1.0
+    sock_tip_center: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    sock_tip_span_axis_offset_m: float = 0.0
+    sock_tip_cross_axis_offset_m: float = 0.0
+    sock_tip_opening_depth_m: float = 0.0
     left_grasp_thickness_axis: Tuple[float, float, float] = (1.0, 0.0, 0.0)
     right_grasp_thickness_axis: Tuple[float, float, float] = (1.0, 0.0, 0.0)
     left_grasp_inward_axis: Tuple[float, float, float] = (0.0, 0.0, 1.0)
@@ -123,6 +137,9 @@ class SceneGeometry:
             "left_grasp_local_offset",
             "right_grasp_local_offset",
             "opening_target_normal",
+            "grasp_plate_outward_normal",
+            "opening_ring_inward_normal",
+            "sock_tip_center",
             "left_grasp_thickness_axis",
             "right_grasp_thickness_axis",
             "left_grasp_inward_axis",
@@ -139,6 +156,9 @@ class SceneGeometry:
                 "left_opening_edge": "left_grasp_position",
                 "right_opening_edge": "right_grasp_position",
                 "opening_target_normal": "opening_normal",
+                "grasp_plate_outward_normal": "opening_outward_normal",
+                "opening_ring_inward_normal": "opening_target_normal",
+                "sock_tip_center": "opening_center",
                 "left_grasp_thickness_axis": None,
                 "right_grasp_thickness_axis": None,
                 "left_grasp_inward_axis": "opening_target_normal",
@@ -190,6 +210,35 @@ class SceneGeometry:
         thickness_alignment = float(
             value.get("grasp_thickness_axis_alignment", 0.0)
         )
+        opening_plate_alignment = float(
+            value.get("opening_plate_normal_alignment", 1.0)
+        )
+        plate_downward_alignment = float(
+            value.get("plate_downward_alignment", 0.0)
+        )
+        ring_plate_alignment = float(
+            value.get("opening_ring_plate_alignment", 1.0)
+        )
+        ring_plane_rms = float(value.get("opening_ring_plane_rms_m", 0.0))
+        ring_plane_maximum = float(
+            value.get("opening_ring_plane_maximum_m", 0.0)
+        )
+        ring_maximum_sag = float(
+            value.get("opening_ring_maximum_sag_m", 0.0)
+        )
+        ring_area = float(value.get("opening_ring_area_m2", 0.0))
+        ring_area_retention = float(
+            value.get("opening_ring_area_retention", 1.0)
+        )
+        sock_tip_span_axis_offset = float(
+            value.get("sock_tip_span_axis_offset_m", 0.0)
+        )
+        sock_tip_cross_axis_offset = float(
+            value.get("sock_tip_cross_axis_offset_m", 0.0)
+        )
+        sock_tip_opening_depth = float(
+            value.get("sock_tip_opening_depth_m", 0.0)
+        )
         if (
             not np.isfinite(distance)
             or distance < 0
@@ -200,11 +249,11 @@ class SceneGeometry:
             or knee_flexion < 0
             or knee_flexion > 180
             or not np.isfinite(gravity_alignment)
-            or gravity_alignment < -1.0
-            or gravity_alignment > 1.0
+            or gravity_alignment < -1.000001
+            or gravity_alignment > 1.000001
             or not np.isfinite(toe_alignment)
-            or toe_alignment < -1.0
-            or toe_alignment > 1.0
+            or toe_alignment < -1.000001
+            or toe_alignment > 1.000001
             or not np.isfinite(left_insertion)
             or left_insertion < 0
             or not np.isfinite(right_insertion)
@@ -218,8 +267,30 @@ class SceneGeometry:
             or not np.isfinite(maximum_corner_error)
             or maximum_corner_error < 0
             or not np.isfinite(thickness_alignment)
-            or thickness_alignment < 0
-            or thickness_alignment > 1
+            or thickness_alignment < -0.000001
+            or thickness_alignment > 1.000001
+            or not np.isfinite(opening_plate_alignment)
+            or opening_plate_alignment < -1.000001
+            or opening_plate_alignment > 1.000001
+            or not np.isfinite(plate_downward_alignment)
+            or plate_downward_alignment < -1.000001
+            or plate_downward_alignment > 1.000001
+            or not np.isfinite(ring_plate_alignment)
+            or ring_plate_alignment < -1.000001
+            or ring_plate_alignment > 1.000001
+            or not np.isfinite(ring_plane_rms)
+            or ring_plane_rms < 0
+            or not np.isfinite(ring_plane_maximum)
+            or ring_plane_maximum < 0
+            or not np.isfinite(ring_maximum_sag)
+            or ring_maximum_sag < 0
+            or not np.isfinite(ring_area)
+            or ring_area < 0
+            or not np.isfinite(ring_area_retention)
+            or ring_area_retention < 0
+            or not np.isfinite(sock_tip_span_axis_offset)
+            or not np.isfinite(sock_tip_cross_axis_offset)
+            or not np.isfinite(sock_tip_opening_depth)
         ):
             raise ValueError(
                 "scene distances and angles are invalid: "
@@ -233,8 +304,31 @@ class SceneGeometry:
                 f"left_patch_span={left_patch_span}, "
                 f"right_patch_span={right_patch_span}, "
                 f"maximum_corner_error={maximum_corner_error}, "
-                f"thickness_alignment={thickness_alignment}"
+                f"thickness_alignment={thickness_alignment}, "
+                f"opening_plate_alignment={opening_plate_alignment}, "
+                f"plate_downward_alignment={plate_downward_alignment}, "
+                f"ring_plate_alignment={ring_plate_alignment}, "
+                f"ring_plane_rms={ring_plane_rms}, "
+                f"ring_plane_maximum={ring_plane_maximum}, "
+                f"ring_maximum_sag={ring_maximum_sag}, "
+                f"ring_area={ring_area}, "
+                f"ring_area_retention={ring_area_retention}, "
+                f"sock_tip_span_axis_offset={sock_tip_span_axis_offset}, "
+                f"sock_tip_cross_axis_offset={sock_tip_cross_axis_offset}, "
+                f"sock_tip_opening_depth={sock_tip_opening_depth}"
             )
+        gravity_alignment = float(np.clip(gravity_alignment, -1.0, 1.0))
+        toe_alignment = float(np.clip(toe_alignment, -1.0, 1.0))
+        thickness_alignment = float(np.clip(thickness_alignment, 0.0, 1.0))
+        opening_plate_alignment = float(
+            np.clip(opening_plate_alignment, -1.0, 1.0)
+        )
+        plate_downward_alignment = float(
+            np.clip(plate_downward_alignment, -1.0, 1.0)
+        )
+        ring_plate_alignment = float(
+            np.clip(ring_plate_alignment, -1.0, 1.0)
+        )
         return cls(
             foot_to_opening_plane_m=distance,
             foot_to_opening_lateral_m=lateral,
@@ -251,6 +345,17 @@ class SceneGeometry:
             right_grasp_patch_span_m=right_patch_span,
             maximum_grasp_corner_error_m=maximum_corner_error,
             grasp_thickness_axis_alignment=thickness_alignment,
+            opening_plate_normal_alignment=opening_plate_alignment,
+            plate_downward_alignment=plate_downward_alignment,
+            opening_ring_plate_alignment=ring_plate_alignment,
+            opening_ring_plane_rms_m=ring_plane_rms,
+            opening_ring_plane_maximum_m=ring_plane_maximum,
+            opening_ring_maximum_sag_m=ring_maximum_sag,
+            opening_ring_area_m2=ring_area,
+            opening_ring_area_retention=ring_area_retention,
+            sock_tip_span_axis_offset_m=sock_tip_span_axis_offset,
+            sock_tip_cross_axis_offset_m=sock_tip_cross_axis_offset,
+            sock_tip_opening_depth_m=sock_tip_opening_depth,
             **vectors,
         )
 
@@ -498,6 +603,10 @@ class SockClothAttr:
         maximum_particles_per_side: int,
         cuff_insertion_depth_m: float,
         grasp_thickness_half_width_m: float,
+        opening_rim_maximum_stretch: float = 1.05,
+        opening_rim_plane_stiffness: float = 0.75,
+        opening_rim_shape_stiffness: float = 0.5,
+        opening_rim_maximum_correction_m: float = 0.01,
     ) -> None:
         values = np.asarray(
             [
@@ -508,6 +617,10 @@ class SockClothAttr:
                 slip_opening_span_m,
                 cuff_insertion_depth_m,
                 grasp_thickness_half_width_m,
+                opening_rim_maximum_stretch,
+                opening_rim_plane_stiffness,
+                opening_rim_shape_stiffness,
+                opening_rim_maximum_correction_m,
             ],
             dtype=float,
         )
@@ -522,6 +635,10 @@ class SockClothAttr:
             or grasp_thickness_half_width_m <= 0
             or int(slip_consecutive_steps) < 1
             or int(maximum_particles_per_side) < 2
+            or not 1.0 <= opening_rim_maximum_stretch <= 1.5
+            or not 0.0 <= opening_rim_plane_stiffness <= 1.0
+            or not 0.0 <= opening_rim_shape_stiffness <= 1.0
+            or opening_rim_maximum_correction_m <= 0
         ):
             raise ValueError("invalid grasp/slip configuration")
         self._send_data(
@@ -535,6 +652,10 @@ class SockClothAttr:
             int(maximum_particles_per_side),
             float(cuff_insertion_depth_m),
             float(grasp_thickness_half_width_m),
+            float(opening_rim_maximum_stretch),
+            float(opening_rim_plane_stiffness),
+            float(opening_rim_shape_stiffness),
+            float(opening_rim_maximum_correction_m),
         )
 
     def set_grasp_targets(self, left_id: int, right_id: int) -> None:
@@ -579,6 +700,31 @@ class SockClothAttr:
         if not np.isfinite(distance) or distance <= 0:
             raise ValueError("max_distance_m must be finite and positive")
         self._send_data("AlignSockOpeningToGraspPlateAndGrasp", distance)
+
+    def configure_initial_tip_guidance(
+        self,
+        span_offset_m: float,
+        cross_axis_offset_m: float,
+        opening_depth_m: float,
+        maximum_correction_m: float,
+    ) -> None:
+        values = np.asarray(
+            (
+                span_offset_m,
+                cross_axis_offset_m,
+                opening_depth_m,
+                maximum_correction_m,
+            ),
+            dtype=float,
+        )
+        if not np.all(np.isfinite(values)) or values[3] <= 0:
+            raise ValueError(
+                "initial tip guidance values must be finite with positive correction"
+            )
+        self._send_data("ConfigureInitialTipGuidance", *values.tolist())
+
+    def release_initial_tip_guidance(self) -> None:
+        self._send_data("ReleaseInitialTipGuidance")
 
     def set_grasp_target_position(
         self, side: str, position: Sequence[float]

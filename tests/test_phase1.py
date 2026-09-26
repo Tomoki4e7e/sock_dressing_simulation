@@ -337,6 +337,34 @@ def test_locked_human_and_chair_translate_to_lowered_opening_normal():
     assert report["requested_vertical_drop_m"] == pytest.approx(0.05)
 
 
+@pytest.mark.parametrize(
+    ("opening_target_normal", "plate_outward_normal", "message"),
+    [
+        ((0.0, 1.0, 0.0), (0.0, 0.0, -1.0), "not parallel"),
+        ((0.0, -1.0, 0.0), (0.0, 1.0, 0.0), "world-down"),
+    ],
+)
+def test_locked_pose_rejects_invalid_gripper_plate_normal(
+    opening_target_normal, plate_outward_normal, message
+):
+    config = load_config(
+        Path("config/autonomous_real_only_downward_plate_human_chair.yaml")
+    )
+    environment = SockDressingEnv(config, backend=_Backend())
+    baseline = config["scene"]["initial_pose_contract"]["locked_pose_baseline"]
+    geometry = SimpleNamespace(
+        left_grasp_position=(-0.19, 0.50, 0.70),
+        right_grasp_position=(-0.09, 0.50, 0.70),
+        opening_target_normal=opening_target_normal,
+        grasp_plate_outward_normal=plate_outward_normal,
+    )
+
+    with pytest.raises(RuntimeError, match=message):
+        environment._translate_locked_pose_to_opening_normal(
+            baseline, geometry
+        )
+
+
 def test_human_chair_grid_offset_uses_horizontal_robot_away_axis():
     config = load_config(
         Path("config/autonomous_real_only_human_chair_offset_search.yaml")
@@ -393,17 +421,52 @@ def test_human_chair_grid_offset_rejects_degenerate_horizontal_axis():
 
 
 @pytest.mark.parametrize(
-    ("toe_alignment", "left_depth", "offset_report", "expected"),
+    (
+        "toe_alignment",
+        "left_depth",
+        "offset_report",
+        "plate_alignment",
+        "downward_alignment",
+        "ring_ok",
+        "tip_cross_offset",
+        "expected",
+    ),
     [
-        (0.95, 0.0, None, True),
-        (0.5, 0.0, None, False),
-        (0.5, 0.0, {"ok": True}, False),
+        (0.95, 0.0, None, 0.99, 0.8, True, 0.10, True),
+        (0.5, 0.0, None, 0.99, 0.8, True, 0.10, False),
+        (0.5, 0.0, {"ok": True}, 0.99, 0.8, True, 0.10, False),
+        (0.95, 0.0, None, 0.5, 0.8, True, 0.10, False),
+        (0.95, 0.0, None, 0.99, 0.4, True, 0.10, False),
+        (0.95, 0.0, None, 0.99, 0.8, False, 0.10, False),
+        (0.95, 0.0, None, 0.99, 0.8, True, -0.10, False),
     ],
 )
 def test_initial_pose_contract_requires_toe_facing_opening_edge_grasp(
-    toe_alignment, left_depth, offset_report, expected
+    toe_alignment,
+    left_depth,
+    offset_report,
+    plate_alignment,
+    downward_alignment,
+    ring_ok,
+    tip_cross_offset,
+    expected,
 ):
     config = load_config(Path("config/custom_player.yaml"))
+    config["scene"]["initial_pose_contract"].update(
+        {
+            "opening_plate_normal_alignment_min": 0.98,
+            "plate_downward_alignment_min": 0.5,
+            "opening_ring_plate_alignment_min": 0.98,
+            "opening_ring_maximum_sag_m": 0.005,
+            "opening_ring_area_retention_min": 0.90,
+            "sock_tip_span_axis_offset_max_m": 0.06,
+            "sock_tip_cross_axis_offset_min_m": 0.02,
+            "sock_tip_cross_axis_offset_max_m": 0.25,
+            "sock_tip_opening_depth_min_m": -0.05,
+            "sock_tip_opening_depth_max_m": 0.25,
+        }
+    )
+    half_width = config["obi"]["expected"]["grasp_thickness_half_width_m"]
     environment = SockDressingEnv(config, backend=_Backend())
 
     class Cloth:
@@ -448,18 +511,28 @@ def test_initial_pose_contract_requires_toe_facing_opening_edge_grasp(
                 opening_normal=(0.0, 0.0, 1.0),
                 opening_outward_normal=(0.0, 0.0, -1.0),
                 opening_target_normal=(0.0, 0.0, 1.0),
+                grasp_plate_outward_normal=(0.0, 0.0, -1.0),
+                opening_plate_normal_alignment=plate_alignment,
+                plate_downward_alignment=downward_alignment,
+                opening_ring_plate_alignment=0.99 if ring_ok else 0.80,
+                opening_ring_maximum_sag_m=0.003 if ring_ok else 0.02,
+                opening_ring_area_retention=0.95 if ring_ok else 0.50,
+                sock_tip_center=(0.0, tip_cross_offset, 0.10),
+                sock_tip_span_axis_offset_m=0.0,
+                sock_tip_cross_axis_offset_m=tip_cross_offset,
+                sock_tip_opening_depth_m=0.10,
                 sock_body_direction=(0.0, -1.0, 0.0),
                 right_toe_position=(0.0, 0.0, -0.1),
                 left_grasp_position=(-0.04, 0.0, 0.03),
                 right_grasp_position=(0.04, 0.0, 0.03),
                 left_opening_edge=(-0.04, 0.0, 0.03),
                 right_opening_edge=(0.04, 0.0, 0.03),
-                left_grasp_corner_negative=(-0.04, -0.02, 0.03),
-                left_grasp_corner_positive=(-0.04, 0.02, 0.03),
-                right_grasp_corner_negative=(0.04, -0.02, 0.03),
-                right_grasp_corner_positive=(0.04, 0.02, 0.03),
-                left_grasp_patch_span_m=0.04,
-                right_grasp_patch_span_m=0.04,
+                left_grasp_corner_negative=(-0.04, -half_width, 0.03),
+                left_grasp_corner_positive=(-0.04, half_width, 0.03),
+                right_grasp_corner_negative=(0.04, -half_width, 0.03),
+                right_grasp_corner_positive=(0.04, half_width, 0.03),
+                left_grasp_patch_span_m=2.0 * half_width,
+                right_grasp_patch_span_m=2.0 * half_width,
                 maximum_grasp_corner_error_m=0.0,
                 grasp_thickness_axis_alignment=1.0,
                 left_grasp_thickness_axis=(0.0, 1.0, 0.0),
@@ -496,6 +569,7 @@ def test_initial_pose_contract_requires_toe_facing_opening_edge_grasp(
         "right": [3, 4, 7, 8],
     }
     assert report["left_grasp_inward_axis"] == [0.0, 0.0, 1.0]
+    assert report["sock_tip_inside_arm_loop"] is (tip_cross_offset > 0)
 
 
 @pytest.mark.parametrize(
@@ -510,6 +584,7 @@ def test_initial_pose_contract_requires_edges_at_attached_grippers(
     right_edge, right_attached, expected
 ):
     config = load_config(Path("config/custom_player.yaml"))
+    half_width = config["obi"]["expected"]["grasp_thickness_half_width_m"]
     environment = SockDressingEnv(config, backend=_Backend())
 
     class Cloth:
@@ -562,12 +637,12 @@ def test_initial_pose_contract_requires_edges_at_attached_grippers(
                 right_grasp_position=(0.04, 0.0, 0.03),
                 left_opening_edge=(-0.04, 0.0, 0.03),
                 right_opening_edge=right_edge,
-                left_grasp_corner_negative=(-0.04, -0.02, 0.03),
-                left_grasp_corner_positive=(-0.04, 0.02, 0.03),
-                right_grasp_corner_negative=(0.04, -0.02, 0.03),
-                right_grasp_corner_positive=(0.04, 0.02, 0.03),
-                left_grasp_patch_span_m=0.04,
-                right_grasp_patch_span_m=0.04,
+                left_grasp_corner_negative=(-0.04, -half_width, 0.03),
+                left_grasp_corner_positive=(-0.04, half_width, 0.03),
+                right_grasp_corner_negative=(0.04, -half_width, 0.03),
+                right_grasp_corner_positive=(0.04, half_width, 0.03),
+                left_grasp_patch_span_m=2.0 * half_width,
+                right_grasp_patch_span_m=2.0 * half_width,
                 maximum_grasp_corner_error_m=0.0,
                 grasp_thickness_axis_alignment=1.0,
                 left_grasp_thickness_axis=(0.0, 1.0, 0.0),

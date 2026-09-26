@@ -108,6 +108,57 @@ def test_production_sock_topology_matches_phase4_contract(tmp_path):
     np.testing.assert_allclose(points[-1], points[-33:-1].mean(axis=0), atol=1e-8)
 
 
+def test_sock_rest_bend_sign_selects_opposite_distal_side(tmp_path):
+    toe_centers = {}
+    for bend_degrees in (-90.0, 90.0):
+        path = tmp_path / f"sock_{bend_degrees:+.0f}.obj"
+        generate_sock_obj(
+            path,
+            radial_segments=32,
+            length_segments=24,
+            closed_toe=True,
+            bend_start=0.03,
+            bend_length=0.18,
+            bend_degrees=bend_degrees,
+        )
+        points = np.asarray(
+            [
+                [float(value) for value in line.split()[1:]]
+                for line in path.read_text().splitlines()
+                if line.startswith("v ")
+            ]
+        )
+        toe_centers[bend_degrees] = points[-1]
+
+    assert toe_centers[-90.0][1] > 0.1
+    assert toe_centers[90.0][1] < -0.1
+    assert toe_centers[-90.0][2] == pytest.approx(toe_centers[90.0][2])
+
+
+def test_sock_rest_bend_azimuth_rotates_distal_side(tmp_path):
+    path = tmp_path / "sock_lateral.obj"
+    generate_sock_obj(
+        path,
+        radial_segments=32,
+        length_segments=24,
+        closed_toe=True,
+        bend_start=0.03,
+        bend_length=0.18,
+        bend_degrees=75.0,
+        bend_azimuth_degrees=90.0,
+    )
+    points = np.asarray(
+        [
+            [float(value) for value in line.split()[1:]]
+            for line in path.read_text().splitlines()
+            if line.startswith("v ")
+        ]
+    )
+
+    assert points[-1, 0] < -0.1
+    assert points[-1, 1] == pytest.approx(0.0, abs=1e-8)
+
+
 def test_package_meshes_are_vendored_and_rewritten(tmp_path):
     package = tmp_path / "source" / "example"
     mesh = package / "meshes" / "part.stl"

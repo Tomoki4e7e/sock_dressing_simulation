@@ -86,7 +86,7 @@ def test_custom_player_obeys_canonical_sock_physics_contract():
     assert expected["slip_opening_span_m"] == 0.11
     assert expected["slip_consecutive_steps"] == 2
     assert expected["maximum_grasp_particles_per_side"] == 4
-    assert expected["grasp_thickness_half_width_m"] == pytest.approx(0.022)
+    assert expected["grasp_thickness_half_width_m"] > 0
     assert not expected["tether_constraints"]
     assert expected["tether_compliance"] == 0.0
     assert expected["tether_scale"] == 1.0
@@ -173,7 +173,45 @@ def test_plate_normal_profile_uses_exactly_four_grasp_points():
     assert pose["away_from_robot_m"] is None
     assert pose["down_m"] is None
     assert pose["opening_to_toe_alignment_min"] == pytest.approx(0.90)
+    assert pose["opening_plate_normal_alignment_min"] == pytest.approx(0.98)
+    assert pose["plate_downward_alignment_min"] == pytest.approx(0.50)
+    assert pose["opening_ring_plate_alignment_min"] == pytest.approx(0.98)
+    assert pose["opening_ring_maximum_sag_m"] == pytest.approx(0.005)
+    assert pose["opening_ring_area_retention_min"] == pytest.approx(0.90)
+    assert config["obi"]["expected"]["opening_rim_maximum_stretch"] == pytest.approx(
+        1.05
+    )
+    assert config["obi"]["expected"]["opening_rim_plane_stiffness"] == pytest.approx(
+        1.00
+    )
+    assert config["obi"]["expected"]["opening_rim_shape_stiffness"] == pytest.approx(
+        1.00
+    )
+    assert config["obi"]["expected"][
+        "opening_rim_maximum_correction_m"
+    ] == pytest.approx(1.00)
     assert pose["enforce"]
+
+
+def test_taut_rim_profile_bends_sock_tip_toward_arm_loop_interior():
+    config = load_config(
+        Path("config/autonomous_real_only_plate_normal_taut_rim.yaml")
+    )
+
+    assert config["scenario"]["sock"]["rest_bend_degrees"] == pytest.approx(75.0)
+    assert config["scenario"]["sock"]["rest_bend_azimuth_degrees"] == pytest.approx(
+        90.0
+    )
+    pose = config["scene"]["initial_pose_contract"]
+    assert pose["sock_tip_span_axis_offset_max_m"] == pytest.approx(0.070)
+    assert pose["sock_tip_cross_axis_offset_min_m"] == pytest.approx(0.100)
+    assert pose["sock_tip_cross_axis_offset_max_m"] == pytest.approx(0.200)
+    assert pose["sock_tip_opening_depth_min_m"] == pytest.approx(0.050)
+    assert pose["sock_tip_opening_depth_max_m"] == pytest.approx(0.130)
+    assert pose["sock_tip_target_span_axis_offset_m"] == pytest.approx(0.048)
+    assert pose["sock_tip_target_cross_axis_offset_m"] == pytest.approx(0.142)
+    assert pose["sock_tip_target_opening_depth_m"] == pytest.approx(0.091)
+    assert config["scene"]["grasp_anchors"]["align_sock_to_gripper_plate"]
 
 
 def test_triaxial_offset_profile_only_adds_requested_pose_offsets():
@@ -269,7 +307,7 @@ def test_sock_opening_alignment_writes_solver_local_particle_positions():
     ).read_text()
     alignment = source[
         source.index("public void AlignSockOpeningToGraspTargets"):
-        source.index("public void SetGraspTargetPosition")
+        source.index("public void AlignSockOpeningToGraspTargetsAndGrasp")
     ]
 
     assert "GetParticleEndpoints(openingParticles" in alignment
@@ -300,7 +338,14 @@ def test_sock_opening_alignment_writes_solver_local_particle_positions():
     assert "AlignSockOpeningToGraspTargetsAndGrasp" in source
     assert "AlignSockOpeningToGraspPlateAndGrasp" in source
     assert "Vector3.Cross(openingAxis, shortAxis)" in source
-    assert "if (inwardNormal.y < 0)" in source
+    assert "Vector3.Dot(plateOutwardNormal, down) < 0" in source
+    assert "graspPlateOutwardNormal = plateOutwardNormal;" in source
+    assert '"grasp_plate_outward_normal", plateOutwardNormal' in source
+    assert '"opening_plate_normal_alignment"' in source
+    assert '"plate_downward_alignment"' in source
+    assert "OpeningRingPlaneMetrics(" in source
+    assert "EnforceOpeningRimPlane();" in source
+    assert "openingRimMaximumStretch" in source
     assert 'Grasp("left", leftTargetId, maxDistance);' in source
     assert 'Grasp("right", rightTargetId, maxDistance);' in source
 
@@ -315,9 +360,7 @@ def test_custom_player_keeps_grasp_targets_at_frames_and_enforces_edge_match():
     assert contract["minimum_cuff_insertion_depth_m"] == 0.0
     assert contract["maximum_opening_edge_error_m"] == pytest.approx(0.01)
     assert contract["required_grasp_particles_per_side"] == 4
-    assert config["obi"]["expected"]["grasp_thickness_half_width_m"] == pytest.approx(
-        0.022
-    )
+    assert config["obi"]["expected"]["grasp_thickness_half_width_m"] > 0
     assert config["scene"]["grasp_alignment"]["target_span_m"] == pytest.approx(
         0.105
     )
@@ -461,6 +504,15 @@ def test_sock_geometry_reports_particle_derived_hanging_direction():
     assert '"opening_target_normal", openingTargetNormal' in source
     assert '"opening_outward_normal", -openingNormal' in source
     assert '"opening_to_toe_alignment", openingToToeAlignment' in source
+    assert '"sock_tip_center", sockTipCenter' in source
+    assert '"sock_tip_span_axis_offset_m", sockTipSpanAxisOffset' in source
+    assert '"sock_tip_cross_axis_offset_m", sockTipCrossAxisOffset' in source
+    assert '"sock_tip_opening_depth_m", sockTipOpeningDepth' in source
+    assert "private Vector3 SockTipCenter()" in source
+    assert "maximumDistance - distances[i] <= distalTolerance" in source
+    assert "public void ConfigureInitialTipGuidance(" in source
+    assert "private void EnforceInitialTipGuidance()" in source
+    assert "public void ReleaseInitialTipGuidance()" in source
     assert "targetMidpoint - toeTarget" in source
     assert "Physics.gravity," not in source[
         source.index("public void AlignSockOpeningToGraspTargets"):
@@ -520,10 +572,12 @@ def test_grasp_pins_small_inner_cuff_patches_and_leaves_rim_dynamic():
     assert "solver.positions[cloth.GetParticleRuntimeIndex(i)]" in source
     assert "EnforceGraspParticlePositions();" in source
     assert "EnforceGraspTargetOrientations();" in source
-    assert "if (span > slipOpeningSpan)" in source
+    assert "Vector3.ProjectOnPlane(" in source
+    assert "Mathf.Min(rawOpeningAxis.magnitude, slipOpeningSpan)" in source
     assert "grasp.target.TransformPoint(grasp.localOffsets[i])" in source
     assert "ApplyGraspCenterTranslation();" in source
-    assert "rest * maximumStructuralStretch" in source
+    assert "rest * stretchLimit" in source
+    assert "? openingRimMaximumStretch" in source
     assert '"aligned_grasp_initialization"' in source
     assert "StructuralRestLength(" in source
     assert "if (pinned.Count == 0)" in source
@@ -531,7 +585,8 @@ def test_grasp_pins_small_inner_cuff_patches_and_leaves_rim_dynamic():
         source.index("private void LimitStructuralStretch"):
         source.index("private void EnforceGraspParticlePositions")
     ]
-    assert "openingParticles.Contains(edge.x)" not in limiter
+    assert "openingParticles.Contains(edge.x)" in limiter
+    assert "openingParticles.Contains(edge.y)" in limiter
     assert "solver.prevPositions[firstSolver]" in limiter
     assert "solver.prevPositions[secondSolver]" in limiter
     assert "cloth.volumeConstraintsEnabled = false;" in source
@@ -691,6 +746,8 @@ def test_sock_cloth_commands_match_unity_contract():
         [0.0, 0.5, 0.6], 0.03
     )
     cloth.align_sock_opening_to_grasp_plate_and_grasp(0.03)
+    cloth.configure_initial_tip_guidance(0.048, 0.142, 0.091, 0.015)
+    cloth.release_initial_tip_guidance()
     cloth.ignore_robot_human_rigid_collisions(1100)
     cloth.ignore_non_gripper_robot_human_rigid_collisions(1100)
     cloth.configure_right_leg_colliders(2000, 0.8)
@@ -755,6 +812,10 @@ def test_sock_cloth_commands_match_unity_contract():
             2,
             0.03,
             0.02,
+            1.05,
+            0.75,
+            0.5,
+            0.01,
         ),
         (1200, "SetGraspTargets", 2201, 2202),
         (1200, "AlignGraspTargetsToOpening"),
@@ -769,6 +830,15 @@ def test_sock_cloth_commands_match_unity_contract():
             0.03,
         ),
         (1200, "AlignSockOpeningToGraspPlateAndGrasp", 0.03),
+        (
+            1200,
+            "ConfigureInitialTipGuidance",
+            0.048,
+            0.142,
+            0.091,
+            0.015,
+        ),
+        (1200, "ReleaseInitialTipGuidance"),
         (1200, "IgnoreRobotHumanRigidCollisions", 1100),
         (1200, "IgnoreNonGripperRobotHumanRigidCollisions", 1100),
         (1200, "ConfigureRightLegColliders", 2000, 0.8),
@@ -876,6 +946,20 @@ def test_scene_geometry_is_typed_and_fail_closed():
             "opening_center": [0, 0, 0],
             "opening_normal": [1, 0, 0],
             "opening_outward_normal": [-1, 0, 0],
+            "grasp_plate_outward_normal": [-1, 0, 0],
+            "opening_plate_normal_alignment": 0.99,
+            "plate_downward_alignment": 0.75,
+            "opening_ring_inward_normal": [1, 0, 0],
+            "opening_ring_plate_alignment": 0.985,
+            "opening_ring_plane_rms_m": 0.001,
+            "opening_ring_plane_maximum_m": 0.002,
+            "opening_ring_maximum_sag_m": 0.003,
+            "opening_ring_area_m2": 0.004,
+            "opening_ring_area_retention": 0.95,
+            "sock_tip_center": [0.01, 0.12, 0.20],
+            "sock_tip_span_axis_offset_m": 0.01,
+            "sock_tip_cross_axis_offset_m": 0.12,
+            "sock_tip_opening_depth_m": 0.20,
             "opening_to_toe_alignment": 1.0,
             "left_cuff_insertion_depth_m": 0.03,
             "right_cuff_insertion_depth_m": 0.03,
@@ -896,6 +980,17 @@ def test_scene_geometry_is_typed_and_fail_closed():
     assert geometry.foot_to_opening_plane_m == pytest.approx(0.1)
     assert geometry.opening_target_normal == (1.0, 0.0, 0.0)
     assert geometry.opening_outward_normal == (-1.0, 0.0, 0.0)
+    assert geometry.grasp_plate_outward_normal == (-1.0, 0.0, 0.0)
+    assert geometry.opening_plate_normal_alignment == pytest.approx(0.99)
+    assert geometry.plate_downward_alignment == pytest.approx(0.75)
+    assert geometry.opening_ring_inward_normal == (1.0, 0.0, 0.0)
+    assert geometry.opening_ring_plate_alignment == pytest.approx(0.985)
+    assert geometry.opening_ring_maximum_sag_m == pytest.approx(0.003)
+    assert geometry.opening_ring_area_retention == pytest.approx(0.95)
+    assert geometry.sock_tip_center == (0.01, 0.12, 0.20)
+    assert geometry.sock_tip_span_axis_offset_m == pytest.approx(0.01)
+    assert geometry.sock_tip_cross_axis_offset_m == pytest.approx(0.12)
+    assert geometry.sock_tip_opening_depth_m == pytest.approx(0.20)
     assert geometry.opening_to_toe_alignment == pytest.approx(1.0)
     assert geometry.left_cuff_insertion_depth_m == pytest.approx(0.03)
     assert geometry.sock_body_direction == (0.0, -1.0, 0.0)

@@ -155,7 +155,7 @@ obi:
     maximum_grasp_particles_per_side: 4
     # GripperV2 finger thickness is about 45 mm. Pin the opening at local-X
     # offsets of +/-22 mm so the four held particles form a 44 mm short edge.
-    grasp_thickness_half_width_m: 0.022
+    grasp_thickness_half_width_m: 0.025
     # Use the inner cuff ring to estimate the opening normal and taper the
     # initial diameter stretch over the first 3 cm of the sock.
     cuff_insertion_depth_m: 0.03

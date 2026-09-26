@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Callable, Mapping, Optional, Sequence
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 import yaml
 
 from .config import resolve_package_path
@@ -238,6 +238,7 @@ def run_demo(
             try:
                 renderer_masks = _renderer_masks(observation["camera"])
                 last_renderer_masks = renderer_masks
+                opening_qa_frames = {0, steps // 2, steps - 1}
                 initialize_kwargs = {
                     "sock_points": sock_points,
                     "leg_points": leg_points,
@@ -371,6 +372,24 @@ def run_demo(
                     video_camera = observation.get("recording_camera")
                     if video_camera is None:
                         video_camera = observation["camera"]
+                    if frame in opening_qa_frames:
+                        _save_opening_qa_snapshot(
+                            episode / "opening_qa",
+                            frame,
+                            observation["camera"]["rgb"],
+                            video_camera["rgb"],
+                            observation.get("diagnostics", {}).get(
+                                "scene_geometry", {}
+                            ),
+                        )
+                    if frame == 0:
+                        release_tip = getattr(
+                            environment,
+                            "release_initial_tip_guidance",
+                            None,
+                        )
+                        if callable(release_tip):
+                            release_tip()
                     _write_video_frame(
                         video,
                         video_camera["rgb"],
@@ -560,6 +579,49 @@ def _save_mask_overlay(
     image[leg] = (0.55 * image[leg] + 0.45 * np.array([64, 255, 64])).astype(np.uint8)
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(image, "RGB").save(path)
+
+
+def _save_opening_qa_snapshot(
+    directory: Path,
+    frame: int,
+    inference_rgb: np.ndarray,
+    overview_rgb: np.ndarray,
+    geometry: Mapping,
+) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    metrics = {
+        name: geometry.get(name)
+        for name in (
+            "grasp_plate_outward_normal",
+            "opening_ring_inward_normal",
+            "opening_ring_plate_alignment",
+            "opening_ring_plane_rms_m",
+            "opening_ring_plane_maximum_m",
+            "opening_ring_maximum_sag_m",
+            "opening_ring_area_m2",
+            "opening_ring_area_retention",
+            "sock_tip_center",
+            "sock_tip_span_axis_offset_m",
+            "sock_tip_cross_axis_offset_m",
+            "sock_tip_opening_depth_m",
+            "plate_downward_alignment",
+        )
+    }
+    label = "\n".join(
+        f"{name}: {value}" for name, value in metrics.items()
+    )
+    for name, rgb in (
+        ("inference", inference_rgb),
+        ("overview", overview_rgb),
+    ):
+        image = Image.fromarray(np.asarray(rgb, dtype=np.uint8), "RGB")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((0, 0, min(image.width, 920), 248), fill=(0, 0, 0))
+        draw.multiline_text((8, 8), label, fill=(255, 255, 255), spacing=2)
+        image.save(directory / f"{frame:04d}_{name}.png")
+    (directory / f"{frame:04d}_geometry.json").write_text(
+        json.dumps(metrics, indent=2, sort_keys=True) + "\n"
+    )
 
 
 def _measured_coverage(environment, camera: Mapping) -> Optional[float]:

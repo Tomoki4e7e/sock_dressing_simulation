@@ -15,6 +15,13 @@ scene:
     away_from_robot_m: null
     down_m: null
     opening_to_toe_alignment_min: 0.90
+    # The measured cuff must face along the immutable initial plate normal,
+    # and that selected side of the plate must have a substantial down component.
+    opening_plate_normal_alignment_min: 0.98
+    plate_downward_alignment_min: 0.50
+    opening_ring_plate_alignment_min: 0.98
+    opening_ring_maximum_sag_m: 0.005
+    opening_ring_area_retention_min: 0.90
     maximum_cloth_foot_penetration_m: 0.002
     # Two rectangular-corner pins at each gripper are four grasp points total.
     required_grasp_particles_per_side: 2
@@ -25,3 +32,9 @@ obi:
     # Match the approximately 44 mm GripperV2 jaw thickness. The inherited
     # 70 mm wide-cuff experiment over-stretches a cuff held at only four pins.
     grasp_thickness_half_width_m: 0.022
+    # Keep all 32 lip particles taut and close to the moving gripper plate
+    # without turning them into additional kinematic grasp pins.
+    opening_rim_maximum_stretch: 1.05
+    opening_rim_plane_stiffness: 1.00
+    opening_rim_shape_stiffness: 1.00
+    opening_rim_maximum_correction_m: 1.00

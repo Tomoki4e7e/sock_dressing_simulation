@@ -177,6 +177,7 @@ def generate_sock_obj(
     bend_start: float = 0.0,
     bend_length: float = 0.0,
     bend_degrees: float = 0.0,
+    bend_azimuth_degrees: float = 0.0,
 ) -> Tuple[int, int]:
     if (
         length <= 0
@@ -185,14 +186,24 @@ def generate_sock_obj(
         or length_segments < 1
         or bend_start < 0
         or bend_length < 0
-        or bend_degrees < 0
-        or bend_degrees > 180
+        or abs(bend_degrees) > 180
+        or not math.isfinite(bend_azimuth_degrees)
         or bend_start + bend_length > length
-        or (bend_degrees > 0 and bend_length <= 0)
+        or (bend_degrees != 0 and bend_length <= 0)
     ):
         raise ValueError("invalid tubular sock dimensions")
     vertices = []
-    total_angle = math.radians(bend_degrees)
+    bend_sign = 1.0 if bend_degrees >= 0 else -1.0
+    total_angle = abs(math.radians(bend_degrees))
+    bend_azimuth = math.radians(bend_azimuth_degrees)
+    bend_direction = (
+        math.sin(bend_azimuth),
+        math.cos(bend_azimuth),
+    )
+    cross_direction = (
+        math.cos(bend_azimuth),
+        -math.sin(bend_azimuth),
+    )
     bend_radius = bend_length / total_angle if total_angle > 0 else 0.0
     for row in range(length_segments + 1):
         axial = length * row / length_segments
@@ -200,11 +211,13 @@ def generate_sock_obj(
         bent_distance = min(after_start, bend_length)
         fraction = bent_distance / bend_length if bend_length > 0 else 0.0
         bend_angle = total_angle * fraction
-        center_y = (
-            -bend_radius * (1.0 - math.cos(bend_angle))
+        center_offset = (
+            -bend_sign * bend_radius * (1.0 - math.cos(bend_angle))
             if total_angle > 0
             else 0.0
         )
+        center_x = center_offset * bend_direction[0]
+        center_y = center_offset * bend_direction[1]
         center_z = (
             bend_start + bend_radius * math.sin(bend_angle)
             if axial > bend_start and total_angle > 0
@@ -212,16 +225,26 @@ def generate_sock_obj(
         )
         if after_start > bend_length and total_angle > 0:
             remainder = after_start - bend_length
-            center_y -= remainder * math.sin(total_angle)
+            center_x -= (
+                bend_sign * remainder * math.sin(total_angle) *
+                bend_direction[0]
+            )
+            center_y -= (
+                bend_sign * remainder * math.sin(total_angle) *
+                bend_direction[1]
+            )
             center_z += remainder * math.cos(total_angle)
         for column in range(radial_segments):
             angle = 2.0 * math.pi * column / radial_segments
-            radial = radius * math.sin(angle)
+            radial_cross = radius * math.cos(angle)
+            radial_bend = radius * math.sin(angle)
             vertices.append(
                 (
-                    radius * math.cos(angle),
-                    center_y + radial * math.cos(bend_angle),
-                    center_z + radial * math.sin(bend_angle),
+                    center_x + radial_cross * cross_direction[0] +
+                    radial_bend * math.cos(bend_angle) * bend_direction[0],
+                    center_y + radial_cross * cross_direction[1] +
+                    radial_bend * math.cos(bend_angle) * bend_direction[1],
+                    center_z + bend_sign * radial_bend * math.sin(bend_angle),
                 )
             )
     faces = []

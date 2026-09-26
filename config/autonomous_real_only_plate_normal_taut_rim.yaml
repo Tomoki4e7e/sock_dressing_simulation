@@ -1,0 +1,50 @@
+extends: autonomous_real_only_plate_normal_four_point_toe_at_grippers.yaml
+
+joints:
+  # Let the cuff-band projection and Obi strain limiter settle between policy
+  # updates instead of rotating the four grasp corners faster than the free rim.
+  max_delta: [0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.0025, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.0025]
+
+scenario:
+  # The requested historical human placement includes the measured 30-degree
+  # right-ankle plantarflexion; without it the avatar rig moves the toe about
+  # 85 mm away from the recorded world position after LateUpdate.
+  foot:
+    rotation: [30.0, 0.0, 0.0]
+    plantarflexion_degrees: 30.0
+  sock:
+    # Keep the straight 3 cm cuff, then turn the free body laterally into the
+    # two-arm loop instead of folding it across the camera-facing short axis.
+    rest_bend_degrees: 75.0
+    rest_bend_azimuth_degrees: 90.0
+
+scene:
+  initial_pose_contract:
+    # Reproduce the measured human/chair world placement from
+    # phase4_20260923T094238Z while leaving the current neutral leg pose,
+    # robot, sock, camera, and autonomous policy unchanged.
+    vertical_toe_drop_m: null
+    locked_pose_baseline:
+      human_root_position: [0.0599999987, 1.4800000191, -0.7200000286]
+      chair_position: [-0.0728970766, 0.4562173188, -0.4003240466]
+      human_anchor_position: [-0.0728970766, 0.7062172587, -0.4003240466]
+      right_toe_position: [-0.1826222241, 0.5176867247, 0.5855188370]
+    foot_to_sock_m: 0.091
+    foot_to_sock_tolerance_m: 0.020
+    foot_lateral_tolerance_m: 0.100
+    opening_to_toe_alignment_min: -1.0
+    # This historical placement intersects the current neutral-foot sock by
+    # about 15 mm. Preserve physics and rollout QA, but do not abort before
+    # frame 0 solely because of that requested initial placement.
+    maximum_cloth_foot_penetration_m: null
+    # Distal cap must start in the measured interior corridor of the two-arm
+    # loop. These bounds reject the straight and camera-crossing bend variants.
+    sock_tip_span_axis_offset_max_m: 0.070
+    sock_tip_cross_axis_offset_min_m: 0.100
+    sock_tip_cross_axis_offset_max_m: 0.200
+    sock_tip_opening_depth_min_m: 0.050
+    sock_tip_opening_depth_max_m: 0.130
+    sock_tip_target_span_axis_offset_m: 0.048
+    sock_tip_target_cross_axis_offset_m: 0.142
+    sock_tip_target_opening_depth_m: 0.091
+    sock_tip_guidance_maximum_correction_m: 1.000

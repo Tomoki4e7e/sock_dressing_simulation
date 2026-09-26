@@ -838,3 +838,117 @@ stretch complianceの10 frame比較:
   - 両把持、足接触、coverage gain `0.154536`: pass
   - 最終stretch proxy `2.467773`（上限`1.5`）のため着衣成功判定はfail
   - 動画: `demo.mp4`（1280x960、5 fps、50 frame、10秒）
+
+## 板の下向き法線への開口整列（2026-09-26）
+
+仮想grasp frameを回転する前の左右gripper spanと板短軸から板法線を取得し、
+重力側の法線を開口外向き法線として固定した。靴下の粒子配置、4点把持、
+rollout中のgrasp frame姿勢は、この固定法線の反対を開口内向き法線として使う。
+scene geometryと初期pose contractには、実測開口―板法線alignmentと板法線―重力
+alignmentを追加し、上向き開口をfail-closedにした。
+
+検証結果:
+
+- Development Player再build: pass
+- Python regression: `108 passed`
+- inference doctor: pass
+- live acceptance:
+  `artifacts/unity/live-acceptance-plate-normal-downward-20260926.json`
+  - 初期pose contract: pass
+  - 実測開口―板法線alignment: `0.999895`（下限`0.98`）
+  - 板外向き法線―重力alignment: `0.789915`（下限`0.50`）
+  - 開口―つま先alignment: `0.999738`
+  - 後段pull時の伸長によりacceptance全体はfail
+- 実世界データ学習済みSAMDAMSARNN、seed 0、250 step完全自律試験:
+  `artifacts/phase4/plate-normal-downward-opening-autonomous/data_sock_sim_smoke/train/phase4_20260926T081343Z`
+  - reference action blend: `0.0`
+  - 初期pose、左右4点把持、開口span、robot―human衝突: pass
+  - 実測開口―板法線alignment: `0.999895`
+  - 板外向き法線: `[0.280614, -0.789915, 0.545244]`
+  - 開口―つま先alignment: `0.999738`
+  - 全250 frameで両把持を維持、最大開口span: `0.110000 m`
+  - coverage gain: `0.0`、最大cloth―foot侵入: `0.019131 m`
+  - stretch連続条件、containment、cuff進行、cloth―foot侵入条件が不合格のため
+    `task_success: false`
+  - 動画: `demo.mp4`（1280x960、5 fps、250 frame、50秒）
+
+## 靴下先端の腕輪内配置（2026-09-26）
+
+靴下rest bendを符号付き角度と方位角で指定できるようにし、`+75度 / 方位角90度`
+を採用した。初期整列時には開口座標系で布形状を捕捉し、先端中心を設定した
+腕輪内targetへ回転・平行移動するtaper付きguidanceを加えた。初期frame取得後は
+guidanceを解除する。先端のspan/cross/depth offsetをscene geometryへ追加し、
+腕輪内配置を初期pose contractでfail-closed検証する。
+
+検証結果:
+
+- Development Player再build: pass
+- Python regression: `113 passed`
+- 短時間の方向比較では`-75度 / 0度`、`+75度 / 0度`、
+  `+75度 / 60度`を不採用とし、右カメラで青い開口リムが見え、overviewで
+  靴下本体が両腕間に収まる`+75度 / 90度`を採用
+- 実世界データ学習済みSAMDAMSARNN、seed 0、250 step完全自律試験:
+  `artifacts/phase4/arm-loop-tip-inside-final-250/data_sock_sim_smoke/train/phase4_20260926T120301Z`
+  - reference action blend: `0.0`、250 frame完走
+  - 初期先端offset: span `0.053234 m`、cross `0.139692 m`、
+    opening depth `0.093635 m`（腕輪内contract: pass）
+  - 初期開口―板法線alignment: `1.0`
+  - 初期最大たるみ: `0.002802 m`、面積保持率: `0.966986`
+  - 初期stretch proxy: `1.492513`（上限`1.5`）
+  - 保存したoverview/inference写真で、初期先端が両腕の輪内にあり、
+    右カメラから開口リムが見えることを確認
+  - 最終stretch proxy `1.492512`、両把持と開口span条件は合格
+  - coverage gain `0.0`、最大cloth―foot侵入`0.012954 m`、containment未達のため
+    初期配置は合格だが着衣全体の`task_success: false`
+  - 動画: `demo.mp4`（1280x960、5 fps、250 frame、50秒）
+
+## 開口リム張力・下向き平面保持（2026-09-26）
+
+4把持点だけでなく全32開口粒子へ平面fit、最大たるみ、面積保持率のQAを追加した。
+開口周専用stretch制限とカフ帯のshape/plane投影を導入し、左右grasp target間の
+開口弦も固定した板法線に直交する平面へ投影する。これにより、独立した腕運動で
+開口弦が板法線方向へ傾き、リム全体が上向きへ回転する経路を防いだ。
+
+検証結果:
+
+- Development Player再build: pass
+- Python regression: `109 passed`
+- inference doctor: pass
+- 20/50 step可視比較後の採用値:
+  - rim stretch上限: `1.05`
+  - plane/shape stiffness: `1.0 / 1.0`
+  - 最大補正量: `1.0 m`
+- 実世界データ学習済みSAMDAMSARNN、seed 0、250 step完全自律試験:
+  `artifacts/phase4/rim-taut-downward-final-250/data_sock_sim_smoke/train/phase4_20260926T101357Z`
+  - reference action blend: `0.0`
+  - 全32粒子の開口―板法線alignment: 初期/中間/終端すべて`1.0`
+  - 最大たるみ: 初期`0.002802 m`、中間`0.000013 m`、終端`0.000066 m`
+  - 面積保持率: 初期`0.966985`、中間`0.997618`、終端`0.999474`
+  - 保存したoverview/inference写真で、開口を広げたまま斜め下向きに保持することを確認
+  - 全250 frameで両把持を維持
+  - coverage、containment、連続stretch、cloth―foot侵入条件は不合格のため、
+    開口姿勢は合格だが着衣全体の`task_success: false`
+  - 動画: `demo.mp4`（1280x960、5 fps、250 frame、50秒）
+
+## 旧toe-centered実験の人体・椅子位置復元（2026-09-26）
+
+`phase4_20260923T094238Z`で実測された人体・椅子のworld poseを現在の
+板法線整列・開口リム・先端腕輪内配置設定へ復元した。人体rigのLateUpdate後も
+旧つま先座標を再現するため、同実験の右足首plantarflexion `30度`も復元した。
+ロボット、靴下、カメラ、方策およびrollout物理設定は変更していない。
+
+検証結果:
+
+- Python regression: `113 passed`
+- 20 step可視確認:
+  `artifacts/phase4/historical-human-chair-pose-validation-20/data_sock_sim_smoke/train/phase4_20260926T125816Z`
+- 実世界データ学習済みSAMDAMSARNN、seed 0、250 step完全自律試験:
+  `artifacts/phase4/historical-human-chair-pose-final-250/data_sock_sim_smoke/train/phase4_20260926T130135Z`
+  - 250 frame完走、reference action blend: `0.0`
+  - 椅子位置: `[-0.072897077, 0.456217319, -0.400324047]`
+  - 右つま先位置: `[-0.182622224, 0.517686725, 0.585518837]`
+  - 指定旧デモとの差: 椅子・右つま先とも`0.0 m`
+  - 最大cloth―foot侵入: `0.133365 m`、最終stretch proxy: `1.547986`
+  - stretch、containment、cuff進行、cloth―foot侵入条件が不合格のため
+    `task_success: false`
+  - 動画: `demo.mp4`（1280x960、5 fps、250 frame、50秒）
