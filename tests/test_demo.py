@@ -11,6 +11,7 @@ from sock_dressing_simulation.demo import (
     _cloth_frame_report,
     _grasp_frame_report,
     _reference_action_at_frame,
+    _sock_tip_geometry_report,
     _task_success,
     _write_video_frame,
     run_demo,
@@ -77,6 +78,29 @@ class _Perception:
 
     def track(self, *args, **kwargs):
         return self.result
+
+
+def test_sock_tip_geometry_report_preserves_world_y_and_loop_offsets():
+    report = _sock_tip_geometry_report(
+        7,
+        {
+            "sock_tip_center": [0.1, 0.42, 0.3],
+            "opening_center": [0.0, 0.5, 0.2],
+            "sock_tip_span_axis_offset_m": 0.04,
+            "sock_tip_cross_axis_offset_m": 0.14,
+            "sock_tip_opening_depth_m": 0.09,
+            "opening_ring_maximum_sag_m": 0.001,
+            "opening_ring_area_retention": 0.96,
+            "opening_target_normal_alignment": 1.0,
+            "opening_ring_target_alignment": 0.99,
+        },
+    )
+
+    assert report["frame"] == 7
+    assert report["sock_tip_world_y_m"] == pytest.approx(0.42)
+    assert report["opening_center_world_y_m"] == pytest.approx(0.5)
+    assert report["sock_tip_cross_axis_offset_m"] == pytest.approx(0.14)
+    assert report["sock_tip_opening_depth_m"] == pytest.approx(0.09)
 
 
 class _Policy:

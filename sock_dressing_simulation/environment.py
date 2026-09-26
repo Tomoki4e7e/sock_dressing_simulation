@@ -919,7 +919,13 @@ class SockDressingEnv:
             ):
                 if grasp_settings.get("align_sock_to_gripper_plate", False):
                     self.sock_cloth.align_sock_opening_to_grasp_plate_and_grasp(
-                        grasp_distance
+                        grasp_distance,
+                        float(
+                            pose_settings.get(
+                                "opening_rotation_about_span_degrees",
+                                0.0,
+                            )
+                        ),
                     )
                 else:
                     final_geometry = self._request_scene_geometry()
@@ -1612,11 +1618,17 @@ class SockDressingEnv:
         minimum_plate_alignment = float(
             settings.get("opening_plate_normal_alignment_min", -1.0)
         )
+        minimum_target_alignment = float(
+            settings.get("opening_target_normal_alignment_min", -1.0)
+        )
         minimum_plate_downward_alignment = float(
             settings.get("plate_downward_alignment_min", -1.0)
         )
         minimum_ring_plate_alignment = float(
             settings.get("opening_ring_plate_alignment_min", -1.0)
+        )
+        minimum_ring_target_alignment = float(
+            settings.get("opening_ring_target_alignment_min", -1.0)
         )
         maximum_ring_sag = float(
             settings.get("opening_ring_maximum_sag_m", float("inf"))
@@ -1819,11 +1831,17 @@ class SockDressingEnv:
         opening_plate_alignment = float(
             getattr(geometry, "opening_plate_normal_alignment", 1.0)
         )
+        opening_target_alignment = float(
+            getattr(geometry, "opening_target_normal_alignment", 1.0)
+        )
         plate_downward_alignment = float(
             getattr(geometry, "plate_downward_alignment", 0.0)
         )
         ring_plate_alignment = float(
             getattr(geometry, "opening_ring_plate_alignment", 1.0)
+        )
+        ring_target_alignment = float(
+            getattr(geometry, "opening_ring_target_alignment", 1.0)
         )
         ring_maximum_sag = float(
             getattr(geometry, "opening_ring_maximum_sag_m", 0.0)
@@ -1853,8 +1871,10 @@ class SockDressingEnv:
         sock_alignment_ok = (
             geometry.opening_to_toe_alignment >= minimum_toe_alignment
             and opening_plate_alignment >= minimum_plate_alignment
+            and opening_target_alignment >= minimum_target_alignment
             and plate_downward_alignment >= minimum_plate_downward_alignment
             and ring_plate_alignment >= minimum_ring_plate_alignment
+            and ring_target_alignment >= minimum_ring_target_alignment
             and ring_maximum_sag <= maximum_ring_sag
             and ring_area_retention >= minimum_ring_area_retention
             and tip_inside_arm_loop
@@ -1985,6 +2005,8 @@ class SockDressingEnv:
             ),
             "opening_plate_normal_alignment": opening_plate_alignment,
             "opening_plate_normal_alignment_min": minimum_plate_alignment,
+            "opening_target_normal_alignment": opening_target_alignment,
+            "opening_target_normal_alignment_min": minimum_target_alignment,
             "plate_downward_alignment": plate_downward_alignment,
             "plate_downward_alignment_min": (
                 minimum_plate_downward_alignment
@@ -1998,6 +2020,10 @@ class SockDressingEnv:
             ),
             "opening_ring_plate_alignment": ring_plate_alignment,
             "opening_ring_plate_alignment_min": minimum_ring_plate_alignment,
+            "opening_ring_target_alignment": ring_target_alignment,
+            "opening_ring_target_alignment_min": (
+                minimum_ring_target_alignment
+            ),
             "opening_ring_plane_rms_m": float(
                 getattr(geometry, "opening_ring_plane_rms_m", 0.0)
             ),

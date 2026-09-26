@@ -94,9 +94,11 @@ class SceneGeometry:
     opening_target_normal: Tuple[float, float, float] = (0.0, 0.0, 1.0)
     grasp_plate_outward_normal: Tuple[float, float, float] = (0.0, 0.0, -1.0)
     opening_plate_normal_alignment: float = 1.0
+    opening_target_normal_alignment: float = 1.0
     plate_downward_alignment: float = 0.0
     opening_ring_inward_normal: Tuple[float, float, float] = (0.0, 0.0, 1.0)
     opening_ring_plate_alignment: float = 1.0
+    opening_ring_target_alignment: float = 1.0
     opening_ring_plane_rms_m: float = 0.0
     opening_ring_plane_maximum_m: float = 0.0
     opening_ring_maximum_sag_m: float = 0.0
@@ -213,11 +215,17 @@ class SceneGeometry:
         opening_plate_alignment = float(
             value.get("opening_plate_normal_alignment", 1.0)
         )
+        opening_target_alignment = float(
+            value.get("opening_target_normal_alignment", 1.0)
+        )
         plate_downward_alignment = float(
             value.get("plate_downward_alignment", 0.0)
         )
         ring_plate_alignment = float(
             value.get("opening_ring_plate_alignment", 1.0)
+        )
+        ring_target_alignment = float(
+            value.get("opening_ring_target_alignment", 1.0)
         )
         ring_plane_rms = float(value.get("opening_ring_plane_rms_m", 0.0))
         ring_plane_maximum = float(
@@ -272,12 +280,18 @@ class SceneGeometry:
             or not np.isfinite(opening_plate_alignment)
             or opening_plate_alignment < -1.000001
             or opening_plate_alignment > 1.000001
+            or not np.isfinite(opening_target_alignment)
+            or opening_target_alignment < -1.000001
+            or opening_target_alignment > 1.000001
             or not np.isfinite(plate_downward_alignment)
             or plate_downward_alignment < -1.000001
             or plate_downward_alignment > 1.000001
             or not np.isfinite(ring_plate_alignment)
             or ring_plate_alignment < -1.000001
             or ring_plate_alignment > 1.000001
+            or not np.isfinite(ring_target_alignment)
+            or ring_target_alignment < -1.000001
+            or ring_target_alignment > 1.000001
             or not np.isfinite(ring_plane_rms)
             or ring_plane_rms < 0
             or not np.isfinite(ring_plane_maximum)
@@ -323,11 +337,17 @@ class SceneGeometry:
         opening_plate_alignment = float(
             np.clip(opening_plate_alignment, -1.0, 1.0)
         )
+        opening_target_alignment = float(
+            np.clip(opening_target_alignment, -1.0, 1.0)
+        )
         plate_downward_alignment = float(
             np.clip(plate_downward_alignment, -1.0, 1.0)
         )
         ring_plate_alignment = float(
             np.clip(ring_plate_alignment, -1.0, 1.0)
+        )
+        ring_target_alignment = float(
+            np.clip(ring_target_alignment, -1.0, 1.0)
         )
         return cls(
             foot_to_opening_plane_m=distance,
@@ -346,8 +366,10 @@ class SceneGeometry:
             maximum_grasp_corner_error_m=maximum_corner_error,
             grasp_thickness_axis_alignment=thickness_alignment,
             opening_plate_normal_alignment=opening_plate_alignment,
+            opening_target_normal_alignment=opening_target_alignment,
             plate_downward_alignment=plate_downward_alignment,
             opening_ring_plate_alignment=ring_plate_alignment,
+            opening_ring_target_alignment=ring_target_alignment,
             opening_ring_plane_rms_m=ring_plane_rms,
             opening_ring_plane_maximum_m=ring_plane_maximum,
             opening_ring_maximum_sag_m=ring_maximum_sag,
@@ -694,12 +716,23 @@ class SockClothAttr:
         )
 
     def align_sock_opening_to_grasp_plate_and_grasp(
-        self, max_distance_m: float
+        self,
+        max_distance_m: float,
+        opening_rotation_degrees: float = 0.0,
     ) -> None:
         distance = float(max_distance_m)
+        rotation = float(opening_rotation_degrees)
         if not np.isfinite(distance) or distance <= 0:
             raise ValueError("max_distance_m must be finite and positive")
-        self._send_data("AlignSockOpeningToGraspPlateAndGrasp", distance)
+        if not np.isfinite(rotation) or not 0 <= rotation <= 180:
+            raise ValueError(
+                "opening_rotation_degrees must be finite and in [0, 180]"
+            )
+        self._send_data(
+            "AlignSockOpeningToGraspPlateAndGrasp",
+            distance,
+            rotation,
+        )
 
     def configure_initial_tip_guidance(
         self,

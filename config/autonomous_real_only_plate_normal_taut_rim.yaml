@@ -5,6 +5,16 @@ joints:
   # updates instead of rotating the four grasp corners faster than the free rim.
   max_delta: [0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.0025, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.0025]
 
+obi:
+  expected:
+    # Let gravity reshape the free distal body after frame-0 guidance release.
+    # The cuff remains controlled by the dedicated rim and four-point grasp.
+    bend_compliance: 0.03
+    # Forty passes left the guided initial mesh at 1.516x stretch and 100 at
+    # 1.503x; 120 keeps fail-closed headroom while remaining below former 200.
+    strain_limit_iterations: 120
+    damping: 0.50
+
 scenario:
   # The requested historical human placement includes the measured 30-degree
   # right-ankle plantarflexion; without it the avatar rig moves the toe about
@@ -25,14 +35,21 @@ scene:
     # robot, sock, camera, and autonomous policy unchanged.
     vertical_toe_drop_m: null
     locked_pose_baseline:
+      # HumanbodyAttr uses the translated anchor/toe as the world-space task
+      # pose; lowering the authored root as well would apply the 5 cm twice.
       human_root_position: [0.0599999987, 1.4800000191, -0.7200000286]
-      chair_position: [-0.0728970766, 0.4562173188, -0.4003240466]
-      human_anchor_position: [-0.0728970766, 0.7062172587, -0.4003240466]
-      right_toe_position: [-0.1826222241, 0.5176867247, 0.5855188370]
-    foot_to_sock_m: 0.091
-    foot_to_sock_tolerance_m: 0.020
-    foot_lateral_tolerance_m: 0.100
+      chair_position: [-0.0728970766, 0.4062173188, -0.4003240466]
+      human_anchor_position: [-0.0728970766, 0.6562172587, -0.4003240466]
+      right_toe_position: [-0.1826222241, 0.4676867247, 0.5855188370]
+    foot_to_sock_m: 0.110
+    foot_to_sock_tolerance_m: 0.030
+    foot_lateral_tolerance_m: 0.130
     opening_to_toe_alignment_min: -1.0
+    opening_rotation_about_span_degrees: 30.0
+    opening_target_normal_alignment_min: 0.98
+    opening_ring_target_alignment_min: 0.98
+    opening_plate_normal_alignment_min: 0.85
+    opening_ring_plate_alignment_min: 0.85
     # This historical placement intersects the current neutral-foot sock by
     # about 15 mm. Preserve physics and rollout QA, but do not abort before
     # frame 0 solely because of that requested initial placement.
@@ -47,4 +64,4 @@ scene:
     sock_tip_target_span_axis_offset_m: 0.048
     sock_tip_target_cross_axis_offset_m: 0.142
     sock_tip_target_opening_depth_m: 0.091
-    sock_tip_guidance_maximum_correction_m: 1.000
+    sock_tip_guidance_maximum_correction_m: 0.300

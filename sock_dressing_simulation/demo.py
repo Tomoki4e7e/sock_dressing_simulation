@@ -101,6 +101,7 @@ def run_demo(
     foot_contact_ids_by_frame = []
     rigid_collision_qa_by_frame = []
     human_chair_lock_qa_by_frame = []
+    sock_tip_geometry_by_frame = []
     final_task_success = {}
     video_path = episode / "demo.mp4"
     configured_prompts = settings.get("prompts", {})
@@ -343,6 +344,14 @@ def run_demo(
                             or {}
                         )
                     )
+                    sock_tip_geometry_by_frame.append(
+                        _sock_tip_geometry_report(
+                            frame,
+                            observation.get("diagnostics", {}).get(
+                                "scene_geometry", {}
+                            ),
+                        )
+                    )
                     foot_contact_ids_by_frame.append(
                         sorted(
                             {
@@ -510,6 +519,9 @@ def run_demo(
                         "human_chair_lock_qa_by_frame": (
                             human_chair_lock_qa_by_frame
                         ),
+                        "sock_tip_geometry_by_frame": (
+                            sock_tip_geometry_by_frame
+                        ),
                         "task_success": final_task_success,
                     }
                 )
@@ -595,6 +607,8 @@ def _save_opening_qa_snapshot(
             "grasp_plate_outward_normal",
             "opening_ring_inward_normal",
             "opening_ring_plate_alignment",
+            "opening_target_normal_alignment",
+            "opening_ring_target_alignment",
             "opening_ring_plane_rms_m",
             "opening_ring_plane_maximum_m",
             "opening_ring_maximum_sag_m",
@@ -622,6 +636,48 @@ def _save_opening_qa_snapshot(
     (directory / f"{frame:04d}_geometry.json").write_text(
         json.dumps(metrics, indent=2, sort_keys=True) + "\n"
     )
+
+
+def _sock_tip_geometry_report(frame: int, geometry: Mapping) -> dict:
+    center = geometry.get("sock_tip_center")
+    opening_center = geometry.get("opening_center")
+    return {
+        "frame": int(frame),
+        "sock_tip_center": center,
+        "sock_tip_world_y_m": (
+            float(center[1])
+            if isinstance(center, (list, tuple)) and len(center) == 3
+            else None
+        ),
+        "opening_center": opening_center,
+        "opening_center_world_y_m": (
+            float(opening_center[1])
+            if isinstance(opening_center, (list, tuple))
+            and len(opening_center) == 3
+            else None
+        ),
+        "sock_tip_span_axis_offset_m": geometry.get(
+            "sock_tip_span_axis_offset_m"
+        ),
+        "sock_tip_cross_axis_offset_m": geometry.get(
+            "sock_tip_cross_axis_offset_m"
+        ),
+        "sock_tip_opening_depth_m": geometry.get(
+            "sock_tip_opening_depth_m"
+        ),
+        "opening_ring_maximum_sag_m": geometry.get(
+            "opening_ring_maximum_sag_m"
+        ),
+        "opening_ring_area_retention": geometry.get(
+            "opening_ring_area_retention"
+        ),
+        "opening_target_normal_alignment": geometry.get(
+            "opening_target_normal_alignment"
+        ),
+        "opening_ring_target_alignment": geometry.get(
+            "opening_ring_target_alignment"
+        ),
+    }
 
 
 def _measured_coverage(environment, camera: Mapping) -> Optional[float]:

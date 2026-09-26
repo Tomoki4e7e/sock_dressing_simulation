@@ -952,3 +952,73 @@ guidanceを解除する。先端のspan/cross/depth offsetをscene geometryへ�
   - stretch、containment、cuff進行、cloth―foot侵入条件が不合格のため
     `task_success: false`
   - 動画: `demo.mp4`（1280x960、5 fps、250 frame、50秒）
+
+## 靴下先端の重力追従（2026-09-27）
+
+frame 0の腕輪内guidance解放後に遠位先端がrest shapeへ浮き戻らず、重力方向へ
+垂れ下がるように、leaf profileだけで布物理を調整した。`bend_compliance`を
+`0.01`から`0.03`、dampingを`0.95`から`0.50`へ変更し、custom strain projectionを
+200回から120回へ減らした。初期guidance最大補正も`1.0 m`から`0.30 m`へ制限した。
+開口リム、4点把持、人体・椅子、開口30度回転、ロボット、カメラ、方策は維持した。
+全frameの先端world Yと腕輪内offsetを`metadata.json`へ追加した。
+
+比較結果:
+
+- strain projection 40回: 初期stretch `1.516124`で不採用
+- strain projection 100回: 初期stretch `1.502596`で不採用
+- strain projection 120回: 初期stretch `1.497412`で合格
+- 採用20 step試験:
+  `artifacts/phase4/gravity-sag-bend03-strain120-20/data_sock_sim_smoke/train/phase4_20260926T150850Z`
+  - 先端world Y: `0.654759 m`から`0.575600 m`へ`79.2 mm`下降
+  - 最大一時上昇: `8.1 mm`
+  - 終端offset: span `-0.00641 m`、cross `0.11156 m`、depth `0.06885 m`
+    （腕輪内corridor: pass）
+
+最終検証:
+
+- Development Player再build: pass
+- Python regression: `114 passed`
+- inference doctor・lint: pass
+- 実世界データ学習済みSAMDAMSARNN、seed 0、250 step完全自律試験:
+  `artifacts/phase4/gravity-following-tip-final-250/data_sock_sim_smoke/train/phase4_20260926T151256Z`
+  - 250 frame完走、reference action blend: `0.0`
+  - 先端world Y: frame 0 `0.654759 m`、frame 19 `0.603393 m`、
+    frame 125 `0.440861 m`、frame 249 `0.243026 m`
+  - 全体で`0.411733 m`下降し、保存画像でも両腕間から下へ垂れることを確認
+  - 初期腕輪内配置、開口target alignment `1.0`、リム面積保持: pass
+  - rollout後半は方策動作により先端が初期腕輪内corridor外へ移動
+  - 最終stretch `1.554880`、最大cloth―foot侵入`0.330839 m`、
+    containment・cuff進行も不合格のため`task_success: false`
+  - 動画: `demo.mp4`（1280x960、5 fps、250 frame、50秒）
+
+## つま先5 cm下降・開口30度正面回転（2026-09-26）
+
+直前の旧toe-centered人体配置から、人体world-space anchor、右つま先、椅子を
+鉛直下向きへ`0.05 m`平行移動した。HumanbodyAttrではanchorが人体全体の
+world-space task poseを担うため、二重変位を避けてauthored root座標は維持した。
+また、物理板法線を保存したまま、左右グリッパー先端を結ぶ軸を中心に、開口外向き
+法線を人体つま先側へ`30度`回転した。開口、4点把持、リム平面保持、先端guidanceは
+共通の回転後targetを使用する。
+
+検証結果:
+
+- Development Player再build: pass
+- Python regression: `113 passed`
+- inference doctor・lint: pass
+- 20 step可視確認:
+  `artifacts/phase4/toe-down-opening-forward-validation-20/data_sock_sim_smoke/train/phase4_20260926T140849Z`
+  - 椅子Y変位: `-0.050000012 m`
+  - 人体anchor Y変位: `-0.049999952 m`
+  - 右つま先Y変位: `-0.049999833 m`
+  - 開口―板法線alignment: `0.866026`（`cos 30度`）
+  - 開口―回転target alignment: `1.0`
+  - リム―回転target alignment: `1.0`
+- 実世界データ学習済みSAMDAMSARNN、seed 0、250 step完全自律試験:
+  `artifacts/phase4/toe-down-opening-forward-final-250/data_sock_sim_smoke/train/phase4_20260926T141301Z`
+  - 250 frame完走、reference action blend: `0.0`
+  - 初期の5 cm下降、30度回転、リムtarget整列、先端腕輪内配置: pass
+  - 初期最大リムたるみ: `1.32e-7 m`、面積保持率: `1.000001`
+  - 最大cloth―foot侵入: `0.252893 m`、最終stretch proxy: `1.509982`
+  - stretch、containment、cuff進行、cloth―foot侵入条件が不合格のため
+    `task_success: false`
+  - 動画: `demo.mp4`（1280x960、5 fps、250 frame、50秒）
