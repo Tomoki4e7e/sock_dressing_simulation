@@ -953,6 +953,78 @@ guidanceを解除する。先端のspan/cross/depth offsetをscene geometryへ�
     `task_success: false`
   - 動画: `demo.mp4`（1280x960、5 fps、250 frame、50秒）
 
+## Dry-AIREC本体側への先端配置（2026-09-27）
+
+Tip Guidance解除前の先端targetを、開口基準のspan `0.0 m`、cross `-0.05 m`、
+depth `-0.06 m`へ変更した。初期pose contractではcross
+`[-0.08, -0.02] m`、depth `[-0.09, -0.03] m`を要求し、人体・足側へ出た配置を
+拒否する。解除後は先端の有限幅を考慮したspan判定に加え、cross
+`[-0.30, -0.10] m`、depth `[-0.12, 0.03] m`の本体側corridorを3 step連続で
+満たしてからSAMDAMSARNNを初期化する。
+
+検証結果:
+
+- Python regression: `117 passed`
+- 可視probeで、先端が片側gripper上や両腕外側ではなく、Dry-AIREC本体側の
+  両腕間へ垂れ下がることを確認
+- 実世界データ学習済みSAMDAMSARNN、seed 0、250 step完全自律試験:
+  `artifacts/phase4/robot-side-tip-final-250-v2/data_sock_sim_smoke/train/phase4_20260927T052250Z`
+  - 初期先端offset: span `-0.000029 m`、cross `-0.049954 m`、
+    depth `-0.059952 m`
+  - guidance解除後89同期step（`1.78秒`）待機してgate通過
+  - gate時先端下降量: `0.100475 m`
+  - gate時offset: span `0.041410 m`、cross `-0.186183 m`、
+    depth `0.014451 m`
+  - gate時stretch proxy: `1.428318`
+  - SAMDAMSARNN推論を250 frame完走、`stop_reason=max_steps`
+  - 垂下待機動画: `tip_drape_settle.mp4`
+    （1280x960、50 fps、89 frame、1.78秒）
+  - 推論動画: `demo.mp4`（1280x960、5 fps、250 frame、50秒）
+  - policy loopは完走したが着衣成功条件は未達のため
+    `task_success: false`
+
+## 先端垂下確認後の推論開始（2026-09-27）
+
+frame 0の推論指令後にtip guidanceを解除していた順序を改め、推論前にguidanceを
+解除して布だけを同期stepするfail-closed gateを追加した。先端が解除位置から
+`15 mm`以上下降し、開口中心より`20 mm`以上下かつ左右gripper間にあり、4点把持、
+opening rim、stretch上限を3 step連続で満たしてからSAMDAMSARNNとperceptionを
+初期化する。未達時は250 stepでtimeoutし、推論を実行しない。
+
+片側gripper上へ載る原因だった上向きrest shapeを、`-105度 / 方位角90度`へ変更し、
+tip guidance targetをspan `0.0 m`、cross `-0.05 m`へ移した。Obi solve後の反発に
+対するstrain projection headroomを`0.93`へ変更し、初期・gate時のstretchを
+`1.5`未満に維持した。待機動画と推論動画はepisode同期を崩さないよう別々に保存する。
+
+検証結果:
+
+- Development Player再build: pass
+- Python regression: `117 passed`
+- inference doctor・lint: pass
+- gate probe:
+  `artifacts/phase4/tip-drape-headroom93-probe/data_sock_sim_smoke/train/phase4_20260926T183646Z`
+  - 215同期step待機後にgate通過
+  - 先端下降量: `0.071610 m`
+  - 開口中心より下: `0.077383 m`
+  - span offset: `-0.042244 m`（両腕間）
+  - gate時stretch proxy: `1.403504`
+- 実世界データ学習済みSAMDAMSARNN、seed 0、250 step完全自律試験:
+  `artifacts/phase4/tip-drape-gated-final-250/data_sock_sim_smoke/train/phase4_20260926T184911Z`
+  - guidance解除後154同期step（`3.08秒`）待機してgate通過
+  - 推論開始前の先端下降量: `0.046861 m`
+  - gate時の開口中心より下: `0.054346 m`
+  - gate時span offset: `0.047676 m`（許容`0.049599 m`以内）
+  - 初期stretch proxy: `1.400132`、gate時: `1.398719`、最終: `1.409940`
+  - SAMDAMSARNN推論を250 frame完走、reference action blend: `0.0`
+  - 推論frame 0から249で先端world Y:
+    `0.442861 m`から`0.259443 m`へ下降
+  - 左右把持、opening span、最終stretch、人体・椅子固定: pass
+  - rollout中の一時的な構造辺stretch spike、containment、cuff進行、
+    cloth―foot侵入条件が不合格のため`task_success: false`
+  - 垂下待機動画: `tip_drape_settle.mp4`
+    （1280x960、50 fps、154 frame、3.08秒）
+  - 推論動画: `demo.mp4`（1280x960、5 fps、250 frame、50秒）
+
 ## 靴下先端の重力追従（2026-09-27）
 
 frame 0の腕輪内guidance解放後に遠位先端がrest shapeへ浮き戻らず、重力方向へ

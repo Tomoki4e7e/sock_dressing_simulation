@@ -42,7 +42,7 @@ def run_demo(
     joints = JointMap.from_config(config)
     scenario = scenario_from_config(config, seed=seed)
     episode = output_root / config["dataset"]["name"] / "train" / _episode_name()
-    policy = policy_factory(config, checkpoint=checkpoint, device=device)
+    policy = None
     perception = perception_factory(config)
     reference_actions = None
     reference_path = settings.get("reference_actions")
@@ -66,19 +66,33 @@ def run_demo(
     )
     reference_pull = float(settings.get("reference_cartesian_pull_m", 0.0))
     physics_steps_per_action = int(settings.get("physics_steps_per_action", 1))
+    tip_drape_settings = dict(settings.get("tip_drape_wait", {}) or {})
+    tip_drape_enabled = bool(tip_drape_settings.get("enabled", False))
+    tip_drape_maximum_steps = int(
+        tip_drape_settings.get("maximum_steps", 250)
+    )
+    tip_drape_consecutive_steps = int(
+        tip_drape_settings.get("consecutive_steps", 5)
+    )
     if (
         not 0 <= reference_blend <= 1
         or reference_hold < 1
         or physics_steps_per_action < 1
         or reference_interpolation not in {"hold", "linear"}
+        or tip_drape_maximum_steps < 1
+        or tip_drape_consecutive_steps < 1
     ):
         raise ValueError("invalid reference action projection settings")
     output = resolve_package_path(config["assets"]["output_dir"])
     metadata = {
         "phase": 4,
         "mode": "airec-closed-loop",
-        "checkpoint": str(policy.checkpoint),
-        "checkpoint_sha256": policy.checkpoint_sha256,
+        "checkpoint": str(
+            checkpoint
+            if checkpoint is not None
+            else resolve_package_path(settings["checkpoint"])
+        ),
+        "checkpoint_sha256": None,
         "perception": "SAM2+Depth-Anything-V2",
         "seed": scenario.seed,
         "scenario": scenario.to_metadata(),
@@ -104,6 +118,13 @@ def run_demo(
     sock_tip_geometry_by_frame = []
     final_task_success = {}
     video_path = episode / "demo.mp4"
+    tip_drape_video_path = episode / "tip_drape_settle.mp4"
+    tip_drape_report = {
+        "enabled": tip_drape_enabled,
+        "passed": not tip_drape_enabled,
+        "reason": "disabled" if not tip_drape_enabled else "not_started",
+        "samples": [],
+    }
     configured_prompts = settings.get("prompts", {})
     if not sock_points:
         sock_points = configured_prompts.get("sock", {}).get("positive")
@@ -220,14 +241,12 @@ def run_demo(
             "opening_frame": recording_camera_frame,
         }
         with EpisodeWriter(episode, joints.names, metadata) as writer:
-            Image.fromarray(observation["camera"]["rgb"].astype("uint8"), "RGB").save(
-                episode / "prompt_frame.png"
-            )
             video = _open_video(
                 video_path,
                 video_camera["rgb"].shape,
                 float(settings.get("rate_hz", 5.0)),
             )
+            tip_drape_video = None
             predicted_file = (episode / "predicted_action.csv").open(
                 "w", newline="", encoding="utf-8"
             )
@@ -237,6 +256,100 @@ def run_demo(
             predicted_writer = csv.writer(predicted_file)
             applied_writer = csv.writer(applied_file)
             try:
+                if tip_drape_enabled:
+                    release_tip = getattr(
+                        environment,
+                        "release_initial_tip_guidance",
+                        None,
+                    )
+                    if not callable(release_tip):
+                        raise RuntimeError(
+                            "tip drape wait requires initial tip guidance release"
+                        )
+                    initial_geometry = observation.get("diagnostics", {}).get(
+                        "scene_geometry", {}
+                    )
+                    initial_tip = _sock_tip_geometry_report(
+                        -1, initial_geometry
+                    )
+                    release_y = initial_tip.get("sock_tip_world_y_m")
+                    if release_y is None or not np.isfinite(float(release_y)):
+                        raise RuntimeError(
+                            "tip drape wait requires a finite release tip world Y"
+                        )
+                    release_tip()
+                    tip_drape_video = _open_video(
+                        tip_drape_video_path,
+                        video_camera["rgb"].shape,
+                        1.0 / float(config["obi"].get("timestep_s", 0.02)),
+                    )
+                    consecutive = 0
+                    previous_y = float(release_y)
+                    for wait_step in range(1, tip_drape_maximum_steps + 1):
+                        # Native custom-player observe requests diagnostics and
+                        # advances exactly one synchronized physics step.
+                        observation = environment.observe()
+                        video_camera = observation.get("recording_camera")
+                        if video_camera is None:
+                            video_camera = observation["camera"]
+                        _write_video_frame(
+                            tip_drape_video,
+                            video_camera["rgb"],
+                            wait_step - 1,
+                            crop_xywh=settings.get("recording_crop_xywh"),
+                        )
+                        sample = _tip_drape_sample(
+                            wait_step,
+                            observation,
+                            config,
+                            release_y=float(release_y),
+                            previous_y=previous_y,
+                            settings=tip_drape_settings,
+                        )
+                        tip_drape_report["samples"].append(sample)
+                        previous_y = float(sample["sock_tip_world_y_m"])
+                        consecutive = consecutive + 1 if sample["ok"] else 0
+                        if consecutive >= tip_drape_consecutive_steps:
+                            tip_drape_report.update(
+                                {
+                                    "passed": True,
+                                    "reason": "conditions_met",
+                                    "wait_steps": wait_step,
+                                    "consecutive_steps": consecutive,
+                                    "release_tip_world_y_m": float(release_y),
+                                    "inference_start_tip_world_y_m": previous_y,
+                                    "tip_drop_m": float(release_y) - previous_y,
+                                    "video": str(tip_drape_video_path),
+                                }
+                            )
+                            break
+                    if not tip_drape_report["passed"]:
+                        tip_drape_report.update(
+                            {
+                                "reason": "timeout",
+                                "wait_steps": tip_drape_maximum_steps,
+                                "consecutive_steps": consecutive,
+                                "release_tip_world_y_m": float(release_y),
+                                "inference_start_tip_world_y_m": previous_y,
+                                "tip_drop_m": float(release_y) - previous_y,
+                                "video": str(tip_drape_video_path),
+                            }
+                        )
+                        raise RuntimeError(
+                            "tip drape wait timed out before inference: "
+                            + json.dumps(
+                                tip_drape_report["samples"][-1],
+                                sort_keys=True,
+                            )
+                        )
+                Image.fromarray(
+                    observation["camera"]["rgb"].astype("uint8"), "RGB"
+                ).save(episode / "prompt_frame.png")
+                policy = policy_factory(
+                    config, checkpoint=checkpoint, device=device
+                )
+                metadata["checkpoint"] = str(policy.checkpoint)
+                metadata["checkpoint_sha256"] = policy.checkpoint_sha256
                 renderer_masks = _renderer_masks(observation["camera"])
                 last_renderer_masks = renderer_masks
                 opening_qa_frames = {0, steps // 2, steps - 1}
@@ -391,7 +504,7 @@ def run_demo(
                                 "scene_geometry", {}
                             ),
                         )
-                    if frame == 0:
+                    if frame == 0 and not tip_drape_enabled:
                         release_tip = getattr(
                             environment,
                             "release_initial_tip_guidance",
@@ -491,6 +604,8 @@ def run_demo(
                 predicted_file.close()
                 applied_file.close()
                 video.release()
+                if tip_drape_video is not None:
+                    tip_drape_video.release()
                 final_task_success = _task_success(
                     observation,
                     quality_by_frame,
@@ -507,6 +622,8 @@ def run_demo(
                 writer.update_metadata(
                     {
                         "stop_reason": stop_reason,
+                        "checkpoint": metadata["checkpoint"],
+                        "checkpoint_sha256": metadata["checkpoint_sha256"],
                         "frames_inferred": frames,
                         "video": str(video_path),
                         "perception_quality_by_frame": quality_by_frame,
@@ -522,6 +639,7 @@ def run_demo(
                         "sock_tip_geometry_by_frame": (
                             sock_tip_geometry_by_frame
                         ),
+                        "tip_drape_wait": tip_drape_report,
                         "task_success": final_task_success,
                     }
                 )
@@ -547,6 +665,9 @@ def run_demo(
         "episode": str(episode),
         "manifest": str(manifest),
         "video": str(video_path),
+        "tip_drape_video": (
+            str(tip_drape_video_path) if tip_drape_enabled else None
+        ),
         "frames": frames,
         "stop_reason": stop_reason,
     }
@@ -678,6 +799,123 @@ def _sock_tip_geometry_report(frame: int, geometry: Mapping) -> dict:
             "opening_ring_target_alignment"
         ),
     }
+
+
+def _tip_drape_sample(
+    step: int,
+    observation: Mapping,
+    config: Mapping,
+    *,
+    release_y: float,
+    previous_y: float,
+    settings: Mapping,
+) -> dict:
+    geometry = observation.get("diagnostics", {}).get("scene_geometry", {})
+    tip = _sock_tip_geometry_report(step, geometry)
+    tip_y = tip.get("sock_tip_world_y_m")
+    span_offset = tip.get("sock_tip_span_axis_offset_m")
+    cross_offset = tip.get("sock_tip_cross_axis_offset_m")
+    opening_depth = tip.get("sock_tip_opening_depth_m")
+    opening_span = geometry.get("opening_span_m")
+    values = (tip_y, span_offset, cross_offset, opening_depth, opening_span)
+    if any(value is None or not np.isfinite(float(value)) for value in values):
+        raise RuntimeError(
+            "tip drape wait requires finite tip Y, span offset, and opening span"
+        )
+    tip_y = float(tip_y)
+    span_offset = float(span_offset)
+    opening_span = float(opening_span)
+    minimum_drop = float(settings.get("minimum_tip_drop_m", 0.05))
+    minimum_below_opening = float(
+        settings.get("minimum_tip_below_opening_m", 0.0)
+    )
+    span_margin = float(settings.get("span_margin_m", 0.005))
+    tip_radius_allowance = float(settings.get("tip_radius_allowance_m", 0.0))
+    maximum_rise = float(settings.get("maximum_tip_rise_per_step_m", 0.002))
+    minimum_cross = float(
+        settings.get("minimum_tip_cross_axis_offset_m", float("-inf"))
+    )
+    maximum_cross = float(
+        settings.get("maximum_tip_cross_axis_offset_m", float("inf"))
+    )
+    minimum_depth = float(
+        settings.get("minimum_tip_opening_depth_m", float("-inf"))
+    )
+    maximum_depth = float(
+        settings.get("maximum_tip_opening_depth_m", float("inf"))
+    )
+    if (
+        minimum_drop < 0
+        or minimum_below_opening < 0
+        or span_margin < 0
+        or tip_radius_allowance < 0
+        or maximum_rise < 0
+        or minimum_cross > maximum_cross
+        or minimum_depth > maximum_depth
+        or opening_span <= 2 * span_margin
+    ):
+        raise ValueError("invalid tip drape wait geometry thresholds")
+    drop = float(release_y) - tip_y
+    opening_center_y = tip.get("opening_center_world_y_m")
+    if opening_center_y is None or not np.isfinite(float(opening_center_y)):
+        raise RuntimeError(
+            "tip drape wait requires a finite opening center world Y"
+        )
+    below_opening = float(opening_center_y) - tip_y
+    span_limit = opening_span * 0.5 - span_margin + tip_radius_allowance
+    grasp = _grasp_frame_report(observation, config)
+    cloth = _cloth_frame_report(observation, config, baseline=None)
+    stretch = cloth.get("stretch", {})
+    pose = config["scene"].get("initial_pose_contract", {})
+    rim_alignment = tip.get("opening_ring_target_alignment")
+    rim_sag = tip.get("opening_ring_maximum_sag_m")
+    rim_area = tip.get("opening_ring_area_retention")
+    rim_ok = (
+        rim_alignment is not None
+        and rim_sag is not None
+        and rim_area is not None
+        and float(rim_alignment)
+        >= float(pose.get("opening_ring_target_alignment_min", -1.0))
+        and float(rim_sag)
+        <= float(pose.get("opening_ring_maximum_sag_m", float("inf")))
+        and float(rim_area)
+        >= float(pose.get("opening_ring_area_retention_min", -1.0))
+    )
+    sample = {
+        **tip,
+        "step": int(step),
+        "release_tip_world_y_m": float(release_y),
+        "tip_drop_m": drop,
+        "tip_below_opening_m": below_opening,
+        "tip_y_change_m": tip_y - float(previous_y),
+        "opening_span_m": opening_span,
+        "span_limit_m": span_limit,
+        "drop_ok": drop >= minimum_drop,
+        "below_opening_ok": below_opening >= minimum_below_opening,
+        "span_ok": abs(span_offset) <= span_limit,
+        "cross_ok": minimum_cross <= float(cross_offset) <= maximum_cross,
+        "depth_ok": minimum_depth <= float(opening_depth) <= maximum_depth,
+        "descending_ok": tip_y - float(previous_y) <= maximum_rise,
+        "grasp_ok": bool(grasp.get("ok", False)),
+        "rim_ok": rim_ok,
+        "stretch_ok": bool(stretch.get("passes", False)),
+        "stretch": stretch,
+    }
+    sample["ok"] = all(
+        sample[name]
+        for name in (
+            "drop_ok",
+            "below_opening_ok",
+            "span_ok",
+            "cross_ok",
+            "depth_ok",
+            "descending_ok",
+            "grasp_ok",
+            "rim_ok",
+            "stretch_ok",
+        )
+    )
+    return sample
 
 
 def _measured_coverage(environment, camera: Mapping) -> Optional[float]:

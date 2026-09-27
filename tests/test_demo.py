@@ -13,6 +13,7 @@ from sock_dressing_simulation.demo import (
     _reference_action_at_frame,
     _sock_tip_geometry_report,
     _task_success,
+    _tip_drape_sample,
     _write_video_frame,
     run_demo,
 )
@@ -112,6 +113,50 @@ class _Policy:
         return {"action": np.full(18, 100.0)}
 
 
+def _tip_drape_observation(
+    tip_y=0.55,
+    span_offset=0.0,
+    cross_offset=-0.20,
+    opening_depth=-0.02,
+    opening_y=0.5,
+):
+    return {
+        "camera": {
+            "rgb": np.full((8, 8, 3), 10, np.uint8),
+            "sock_mask": np.eye(8, dtype=bool),
+            "leg_mask": np.fliplr(np.eye(8, dtype=bool)),
+        },
+        "recording_camera": {"rgb": np.full((8, 8, 3), 20, np.uint8)},
+        "angle": np.zeros(18),
+        "torque": np.zeros(18),
+        "external_torque": np.zeros(18),
+        "cloth": {},
+        "diagnostics": {
+            "grasp_state": [
+                {
+                    "side": side,
+                    "attached": True,
+                    "constraint_error": 0.0,
+                }
+                for side in ("left", "right")
+            ],
+            "scene_geometry": {
+                "sock_tip_center": [0.0, tip_y, 0.0],
+                "opening_center": [0.0, opening_y, 0.0],
+                "sock_tip_span_axis_offset_m": span_offset,
+                "sock_tip_cross_axis_offset_m": cross_offset,
+                "sock_tip_opening_depth_m": opening_depth,
+                "opening_span_m": 0.11,
+                "opening_ring_maximum_sag_m": 0.001,
+                "opening_ring_area_retention": 0.95,
+                "opening_target_normal_alignment": 1.0,
+                "opening_ring_target_alignment": 1.0,
+            },
+        },
+        "dressing_qa": _passing_dressing_qa(),
+    }
+
+
 def _passing_dressing_qa(**overrides):
     value = {
         "valid": True,
@@ -127,6 +172,161 @@ def _passing_dressing_qa(**overrides):
     }
     value.update(overrides)
     return value
+
+
+def test_tip_drape_sample_requires_drop_centered_span_and_physics_qa(monkeypatch):
+    config = load_config(Path("config/autonomous_real_only_plate_normal_taut_rim.yaml"))
+    monkeypatch.setattr(
+        SockDressingEnv,
+        "cloth_radius_qa",
+        staticmethod(lambda *args, **kwargs: {"passes": True}),
+    )
+
+    sample = _tip_drape_sample(
+        4,
+        _tip_drape_observation(
+            tip_y=0.45, span_offset=0.06, opening_y=0.50
+        ),
+        config,
+        release_y=0.52,
+        previous_y=0.46,
+        settings=config["inference"]["tip_drape_wait"],
+    )
+
+    assert sample["ok"]
+    assert sample["tip_drop_m"] == pytest.approx(0.07)
+    assert sample["tip_below_opening_m"] == pytest.approx(0.05)
+    assert sample["span_limit_m"] == pytest.approx(0.065)
+    assert sample["grasp_ok"]
+    assert sample["rim_ok"]
+    assert sample["stretch_ok"]
+    assert sample["cross_ok"]
+    assert sample["depth_ok"]
+
+    outside = _tip_drape_sample(
+        5,
+        _tip_drape_observation(
+            tip_y=0.44,
+            span_offset=0.01,
+            cross_offset=0.02,
+            opening_depth=0.09,
+            opening_y=0.50,
+        ),
+        config,
+        release_y=0.52,
+        previous_y=0.45,
+        settings=config["inference"]["tip_drape_wait"],
+    )
+    assert not outside["ok"]
+    assert not outside["cross_ok"]
+    assert not outside["depth_ok"]
+
+
+def test_demo_waits_for_tip_drape_before_policy_inference(tmp_path, monkeypatch):
+    config = load_config(Path("config/autonomous_real_only_plate_normal_taut_rim.yaml"))
+    config["assets"]["output_dir"] = str(tmp_path)
+    config["inference"]["recording_crop_xywh"] = None
+    config["inference"]["tip_drape_wait"].update(
+        minimum_tip_drop_m=0.01,
+        consecutive_steps=2,
+        maximum_steps=5,
+    )
+    events = []
+
+    class Environment(_Environment):
+        def __init__(self, config):
+            super().__init__(config)
+            self.tip_y = 0.65
+            self.released = False
+
+        def release_initial_tip_guidance(self):
+            events.append("release")
+            self.released = True
+
+        def observe(self):
+            if self.released:
+                self.tip_y -= 0.02
+                events.append("wait_observe")
+            return _tip_drape_observation(tip_y=self.tip_y, opening_y=0.70)
+
+    class Policy(_Policy):
+        def step(self, **kwargs):
+            events.append("policy")
+            return super().step(**kwargs)
+
+    monkeypatch.setattr(
+        SockDressingEnv,
+        "cloth_radius_qa",
+        staticmethod(lambda *args, **kwargs: {"passes": True}),
+    )
+    result = run_demo(
+        config,
+        prepared={"runtime_urdf": str(tmp_path / "robot.urdf")},
+        output_root=tmp_path / "episodes",
+        sock_points=[[1, 1]],
+        leg_points=[[3, 2]],
+        max_steps=1,
+        environment_factory=Environment,
+        perception_factory=_Perception,
+        policy_factory=Policy,
+    )
+
+    assert result["ok"]
+    assert events.index("release") < events.index("policy")
+    assert events.count("wait_observe") >= 2
+    metadata = json.loads(Path(result["episode"], "metadata.json").read_text())
+    assert metadata["tip_drape_wait"]["passed"]
+    assert metadata["tip_drape_wait"]["reason"] == "conditions_met"
+    assert Path(result["tip_drape_video"]).is_file()
+
+
+def test_demo_does_not_run_policy_when_tip_drape_times_out(tmp_path, monkeypatch):
+    config = load_config(Path("config/autonomous_real_only_plate_normal_taut_rim.yaml"))
+    config["assets"]["output_dir"] = str(tmp_path)
+    config["inference"]["recording_crop_xywh"] = None
+    config["inference"]["tip_drape_wait"].update(
+        minimum_tip_drop_m=0.05,
+        consecutive_steps=2,
+        maximum_steps=2,
+    )
+    policy_calls = []
+
+    class Environment(_Environment):
+        def release_initial_tip_guidance(self):
+            pass
+
+        def observe(self):
+            return _tip_drape_observation(tip_y=0.65)
+
+    class Policy(_Policy):
+        def step(self, **kwargs):
+            policy_calls.append(kwargs)
+            return super().step(**kwargs)
+
+    monkeypatch.setattr(
+        SockDressingEnv,
+        "cloth_radius_qa",
+        staticmethod(lambda *args, **kwargs: {"passes": True}),
+    )
+    result = run_demo(
+        config,
+        prepared={"runtime_urdf": str(tmp_path / "robot.urdf")},
+        output_root=tmp_path / "episodes",
+        sock_points=[[1, 1]],
+        leg_points=[[3, 2]],
+        max_steps=1,
+        environment_factory=Environment,
+        perception_factory=_Perception,
+        policy_factory=Policy,
+    )
+
+    assert not result["ok"]
+    assert result["frames"] == 0
+    assert result["stop_reason"].startswith("fail_closed: tip drape wait timed out")
+    assert policy_calls == []
+    metadata = json.loads(Path(result["episode"], "metadata.json").read_text())
+    assert not metadata["tip_drape_wait"]["passed"]
+    assert metadata["tip_drape_wait"]["reason"] == "timeout"
 
 
 def test_demo_records_bounded_closed_loop_actions(tmp_path):

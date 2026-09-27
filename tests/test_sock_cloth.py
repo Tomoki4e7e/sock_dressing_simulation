@@ -198,27 +198,40 @@ def test_taut_rim_profile_bends_sock_tip_toward_arm_loop_interior():
         Path("config/autonomous_real_only_plate_normal_taut_rim.yaml")
     )
 
-    assert config["scenario"]["sock"]["rest_bend_degrees"] == pytest.approx(75.0)
+    assert config["scenario"]["sock"]["rest_bend_degrees"] == pytest.approx(-105.0)
     assert config["scenario"]["sock"]["rest_bend_azimuth_degrees"] == pytest.approx(
         90.0
     )
     pose = config["scene"]["initial_pose_contract"]
     assert pose["sock_tip_span_axis_offset_max_m"] == pytest.approx(0.070)
-    assert pose["sock_tip_cross_axis_offset_min_m"] == pytest.approx(0.100)
-    assert pose["sock_tip_cross_axis_offset_max_m"] == pytest.approx(0.200)
-    assert pose["sock_tip_opening_depth_min_m"] == pytest.approx(0.050)
-    assert pose["sock_tip_opening_depth_max_m"] == pytest.approx(0.130)
-    assert pose["sock_tip_target_span_axis_offset_m"] == pytest.approx(0.048)
-    assert pose["sock_tip_target_cross_axis_offset_m"] == pytest.approx(0.142)
-    assert pose["sock_tip_target_opening_depth_m"] == pytest.approx(0.091)
+    assert pose["sock_tip_cross_axis_offset_min_m"] == pytest.approx(-0.080)
+    assert pose["sock_tip_cross_axis_offset_max_m"] == pytest.approx(-0.020)
+    assert pose["sock_tip_opening_depth_min_m"] == pytest.approx(-0.090)
+    assert pose["sock_tip_opening_depth_max_m"] == pytest.approx(-0.030)
+    assert pose["sock_tip_target_span_axis_offset_m"] == pytest.approx(0.0)
+    assert pose["sock_tip_target_cross_axis_offset_m"] == pytest.approx(-0.050)
+    assert pose["sock_tip_target_opening_depth_m"] == pytest.approx(-0.060)
     assert pose["opening_rotation_about_span_degrees"] == pytest.approx(30.0)
     assert pose["opening_target_normal_alignment_min"] == pytest.approx(0.98)
     assert pose["opening_ring_target_alignment_min"] == pytest.approx(0.98)
     assert pose["opening_plate_normal_alignment_min"] == pytest.approx(0.85)
     assert config["obi"]["expected"]["bend_compliance"] == pytest.approx(0.03)
-    assert config["obi"]["expected"]["strain_limit_iterations"] == 120
+    assert config["obi"]["expected"]["strain_limit_iterations"] == 160
     assert config["obi"]["expected"]["damping"] == pytest.approx(0.50)
     assert pose["sock_tip_guidance_maximum_correction_m"] == pytest.approx(0.300)
+    drape = config["inference"]["tip_drape_wait"]
+    assert drape["enabled"]
+    assert drape["minimum_tip_drop_m"] == pytest.approx(0.015)
+    assert drape["minimum_tip_below_opening_m"] == pytest.approx(0.020)
+    assert drape["span_margin_m"] == pytest.approx(0.005)
+    assert drape["tip_radius_allowance_m"] == pytest.approx(0.015)
+    assert drape["minimum_tip_cross_axis_offset_m"] == pytest.approx(-0.300)
+    assert drape["maximum_tip_cross_axis_offset_m"] == pytest.approx(-0.100)
+    assert drape["minimum_tip_opening_depth_m"] == pytest.approx(-0.120)
+    assert drape["maximum_tip_opening_depth_m"] == pytest.approx(0.030)
+    assert drape["maximum_tip_rise_per_step_m"] == pytest.approx(0.002)
+    assert drape["consecutive_steps"] == 3
+    assert drape["maximum_steps"] == 250
     baseline = pose["locked_pose_baseline"]
     assert baseline["human_root_position"][1] == pytest.approx(1.4800000191)
     assert baseline["chair_position"][1] == pytest.approx(0.4062173188)
