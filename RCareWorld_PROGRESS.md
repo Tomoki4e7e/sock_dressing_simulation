@@ -953,6 +953,45 @@ guidanceを解除する。先端のspan/cross/depth offsetをscene geometryへ�
     `task_success: false`
   - 動画: `demo.mp4`（1280x960、5 fps、250 frame、50秒）
 
+## 逆向き60度開口の重力垂下ゲート（2026-09-27）
+
+左右gripper先端間のspan軸まわりに、従来と逆向きへ開口を`60度`回転した条件で、
+先端guidance解除後の重力垂下ゲートを復元した。開口法線由来のcross/depth軸は
+逆回転に伴って重力方向から外れるため、逆向きprofileのゲート計測だけを
+span軸、world鉛直cross軸、水平depth軸からなる重力固定frameへ変更した。
+数値閾値は15 mm下降、開口下20 mm、cross `[-0.30, -0.10] m`、
+depth `[-0.12, 0.03] m`のまま維持した。
+
+rest bendは下降と左右gripper間保持を両立した`-105度 / 方位角150度`を採用した。
+大きなtip target offsetはguidance解除時の弾性反発を増やしたため不採用とし、
+span `0.0 m`、cross `-0.05 m`、depth `-0.06 m`の中央配置を維持した。
+
+検証結果:
+
+- Python regression: `119 passed`
+- inference doctor・lint: pass
+- gate probe:
+  `artifacts/phase4/opening-reverse-60deg-gravity-frame-probe/data_sock_sim_smoke/train/phase4_20260927T103531Z`
+  - 24同期step待機後にgate通過
+  - 先端下降量: `0.084885 m`
+- 20 step可視確認:
+  `artifacts/phase4/opening-reverse-60deg-gated-validation-20/data_sock_sim_smoke/train/phase4_20260927T103807Z`
+- 実世界データ学習済みSAMDAMSARNN、seed 0、250 step完全自律試験:
+  `artifacts/phase4/opening-reverse-60deg-gated-final-250/data_sock_sim_smoke/train/phase4_20260927T104849Z`
+  - guidance解除後74同期step（`1.48秒`）待機してgate通過
+  - gate時先端下降量: `0.158034 m`
+  - gate時offset: span `0.058453 m`、cross `-0.184942 m`、
+    depth `-0.094010 m`
+  - gate時stretch proxy: `1.395004`
+  - 開口―板法線alignment: `0.499997`（`cos 60度`）
+  - 開口―回転target alignment、リム―回転target alignment: `1.0`
+  - SAMDAMSARNN推論を250 frame完走、reference action blend: `0.0`
+  - coverage、連続stretch、foot contact、containment、cuff進行条件が
+    不合格のため`task_success: false`
+  - 垂下待機動画: `tip_drape_settle.mp4`
+    （1280x960、50 fps、74 frame、1.48秒）
+  - 推論動画: `demo.mp4`（1280x960、5 fps、250 frame、50秒）
+
 ## Dry-AIREC本体側への先端配置（2026-09-27）
 
 Tip Guidance解除前の先端targetを、開口基準のspan `0.0 m`、cross `-0.05 m`、

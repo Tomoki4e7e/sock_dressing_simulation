@@ -1,0 +1,39 @@
+extends: autonomous_real_only_plate_normal_taut_rim.yaml
+
+scenario:
+  sock:
+    # Compensate the mirrored cuff frame so the released distal rest shape
+    # bends through the arm loop instead of recoiling toward one gripper.
+    rest_bend_degrees: -105.0
+    rest_bend_azimuth_degrees: 150.0
+
+scene:
+  initial_pose_contract:
+    # Rotate by 60 degrees on the side opposite the prior toe-facing result.
+    opening_rotation_about_span_degrees: 60.0
+    opening_rotation_away_from_toe: true
+    # Reversing the cuff normal shifts the measured opening center by 2.9 mm
+    # beyond the inherited tolerance without moving the foot or sock targets.
+    foot_to_sock_tolerance_m: 0.035
+    # At 60 degrees, alignment with the original grasp-plate normal is cos(60)
+    # ~= 0.5. Target-normal QA remains strict for the reversed target itself.
+    opening_plate_normal_alignment_min: 0.48
+    opening_ring_plate_alignment_min: 0.48
+    # Keep guidance near the cuff center. Larger reverse-frame offsets stored
+    # enough elastic energy to throw the released tip outside the arm loop.
+    sock_tip_target_span_axis_offset_m: 0.000
+    sock_tip_target_cross_axis_offset_m: -0.050
+    sock_tip_target_opening_depth_m: -0.060
+
+inference:
+  # Keep the inherited fail-closed gravity-drape thresholds unchanged.
+  tip_drape_wait:
+    enabled: true
+    # Opening cross/depth axes rotate with the cuff. Use a gravity-fixed cross
+    # axis so the inherited corridor keeps its physical meaning at -60 degrees.
+    coordinate_frame: gravity_aligned
+  semantic_mask:
+    # The reversed sock becomes very small in the fixed learning camera. Keep
+    # exact renderer agreement as the authoritative mask check.
+    require_prompt_containment: false
+    sock_min_fraction: 0.00001

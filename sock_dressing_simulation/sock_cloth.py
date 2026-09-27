@@ -719,6 +719,7 @@ class SockClothAttr:
         self,
         max_distance_m: float,
         opening_rotation_degrees: float = 0.0,
+        rotate_away_from_toe: bool = False,
     ) -> None:
         distance = float(max_distance_m)
         rotation = float(opening_rotation_degrees)
@@ -732,6 +733,7 @@ class SockClothAttr:
             "AlignSockOpeningToGraspPlateAndGrasp",
             distance,
             rotation,
+            bool(rotate_away_from_toe),
         )
 
     def configure_initial_tip_guidance(

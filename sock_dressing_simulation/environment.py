@@ -926,6 +926,12 @@ class SockDressingEnv:
                                 0.0,
                             )
                         ),
+                        bool(
+                            pose_settings.get(
+                                "opening_rotation_away_from_toe",
+                                False,
+                            )
+                        ),
                     )
                 else:
                     final_geometry = self._request_scene_geometry()

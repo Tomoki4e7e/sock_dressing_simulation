@@ -816,6 +816,22 @@ def _tip_drape_sample(
     span_offset = tip.get("sock_tip_span_axis_offset_m")
     cross_offset = tip.get("sock_tip_cross_axis_offset_m")
     opening_depth = tip.get("sock_tip_opening_depth_m")
+    coordinate_frame = str(settings.get("coordinate_frame", "opening"))
+    if coordinate_frame == "gravity_aligned":
+        span_offset, cross_offset, opening_depth = (
+            _gravity_aligned_tip_offsets(geometry)
+        )
+        tip.update(
+            {
+                "sock_tip_span_axis_offset_m": span_offset,
+                "sock_tip_cross_axis_offset_m": cross_offset,
+                "sock_tip_opening_depth_m": opening_depth,
+            }
+        )
+    elif coordinate_frame != "opening":
+        raise ValueError(
+            "tip drape wait coordinate_frame must be opening or gravity_aligned"
+        )
     opening_span = geometry.get("opening_span_m")
     values = (tip_y, span_offset, cross_offset, opening_depth, opening_span)
     if any(value is None or not np.isfinite(float(value)) for value in values):
@@ -889,6 +905,7 @@ def _tip_drape_sample(
         "tip_below_opening_m": below_opening,
         "tip_y_change_m": tip_y - float(previous_y),
         "opening_span_m": opening_span,
+        "coordinate_frame": coordinate_frame,
         "span_limit_m": span_limit,
         "drop_ok": drop >= minimum_drop,
         "below_opening_ok": below_opening >= minimum_below_opening,
@@ -916,6 +933,52 @@ def _tip_drape_sample(
         )
     )
     return sample
+
+
+def _gravity_aligned_tip_offsets(geometry: Mapping) -> tuple:
+    names = (
+        "sock_tip_center",
+        "opening_center",
+        "left_grasp_position",
+        "right_grasp_position",
+        "opening_target_normal",
+    )
+    values = {
+        name: np.asarray(geometry.get(name), dtype=float)
+        for name in names
+    }
+    if any(
+        value.shape != (3,) or not np.all(np.isfinite(value))
+        for value in values.values()
+    ):
+        raise RuntimeError(
+            "gravity-aligned tip drape wait requires finite scene axes"
+        )
+    span_axis = values["right_grasp_position"] - values["left_grasp_position"]
+    span_norm = float(np.linalg.norm(span_axis))
+    if span_norm <= 1e-8:
+        raise RuntimeError(
+            "gravity-aligned tip drape wait requires separated grasp targets"
+        )
+    span_axis /= span_norm
+    cross_axis = np.asarray([0.0, 1.0, 0.0], dtype=float)
+    cross_axis -= np.dot(cross_axis, span_axis) * span_axis
+    cross_norm = float(np.linalg.norm(cross_axis))
+    if cross_norm <= 1e-8:
+        raise RuntimeError(
+            "gravity-aligned tip drape wait requires a nonvertical grasp span"
+        )
+    cross_axis /= cross_norm
+    depth_axis = np.cross(cross_axis, span_axis)
+    depth_axis /= float(np.linalg.norm(depth_axis))
+    if np.dot(depth_axis, values["opening_target_normal"]) < 0:
+        depth_axis = -depth_axis
+    offset = values["sock_tip_center"] - values["opening_center"]
+    return (
+        float(np.dot(offset, span_axis)),
+        float(np.dot(offset, cross_axis)),
+        float(np.dot(offset, depth_axis)),
+    )
 
 
 def _measured_coverage(environment, camera: Mapping) -> Optional[float]:

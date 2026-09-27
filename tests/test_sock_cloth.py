@@ -240,6 +240,30 @@ def test_taut_rim_profile_bends_sock_tip_toward_arm_loop_interior():
     assert config["scene"]["grasp_anchors"]["align_sock_to_gripper_plate"]
 
 
+def test_reverse_opening_profile_uses_gravity_aligned_tip_drape_gate():
+    config = load_config(
+        Path("config/autonomous_real_only_opening_reverse_60deg.yaml")
+    )
+    pose = config["scene"]["initial_pose_contract"]
+    sock = config["scenario"]["sock"]
+    drape = config["inference"]["tip_drape_wait"]
+
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(60.0)
+    assert pose["opening_rotation_away_from_toe"]
+    assert sock["rest_bend_degrees"] == pytest.approx(-105.0)
+    assert sock["rest_bend_azimuth_degrees"] == pytest.approx(150.0)
+    assert pose["sock_tip_target_span_axis_offset_m"] == pytest.approx(0.0)
+    assert pose["sock_tip_target_cross_axis_offset_m"] == pytest.approx(-0.050)
+    assert pose["sock_tip_target_opening_depth_m"] == pytest.approx(-0.060)
+    assert drape["enabled"]
+    assert drape["coordinate_frame"] == "gravity_aligned"
+    assert drape["minimum_tip_drop_m"] == pytest.approx(0.015)
+    assert drape["minimum_tip_cross_axis_offset_m"] == pytest.approx(-0.300)
+    assert drape["maximum_tip_cross_axis_offset_m"] == pytest.approx(-0.100)
+    assert drape["minimum_tip_opening_depth_m"] == pytest.approx(-0.120)
+    assert drape["maximum_tip_opening_depth_m"] == pytest.approx(0.030)
+
+
 def test_triaxial_offset_profile_only_adds_requested_pose_offsets():
     baseline = load_config(
         Path("config/autonomous_real_only_plate_normal_four_point.yaml")
@@ -775,7 +799,9 @@ def test_sock_cloth_commands_match_unity_contract():
     cloth.align_sock_opening_to_grasp_targets_and_grasp(
         [0.0, 0.5, 0.6], 0.03
     )
-    cloth.align_sock_opening_to_grasp_plate_and_grasp(0.03, 30.0)
+    cloth.align_sock_opening_to_grasp_plate_and_grasp(
+        0.03, 30.0, rotate_away_from_toe=True
+    )
     cloth.configure_initial_tip_guidance(0.048, 0.142, 0.091, 0.015)
     cloth.release_initial_tip_guidance()
     cloth.ignore_robot_human_rigid_collisions(1100)
@@ -859,7 +885,7 @@ def test_sock_cloth_commands_match_unity_contract():
             0.6,
             0.03,
         ),
-        (1200, "AlignSockOpeningToGraspPlateAndGrasp", 0.03, 30.0),
+        (1200, "AlignSockOpeningToGraspPlateAndGrasp", 0.03, 30.0, True),
         (
             1200,
             "ConfigureInitialTipGuidance",

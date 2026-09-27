@@ -143,6 +143,9 @@ def _tip_drape_observation(
             "scene_geometry": {
                 "sock_tip_center": [0.0, tip_y, 0.0],
                 "opening_center": [0.0, opening_y, 0.0],
+                "left_grasp_position": [-0.055, opening_y, 0.0],
+                "right_grasp_position": [0.055, opening_y, 0.0],
+                "opening_target_normal": [0.0, 0.0, 1.0],
                 "sock_tip_span_axis_offset_m": span_offset,
                 "sock_tip_cross_axis_offset_m": cross_offset,
                 "sock_tip_opening_depth_m": opening_depth,
@@ -220,6 +223,38 @@ def test_tip_drape_sample_requires_drop_centered_span_and_physics_qa(monkeypatch
     assert not outside["ok"]
     assert not outside["cross_ok"]
     assert not outside["depth_ok"]
+
+
+def test_tip_drape_sample_can_use_gravity_aligned_frame(monkeypatch):
+    config = load_config(Path("config/autonomous_real_only_plate_normal_taut_rim.yaml"))
+    settings = dict(config["inference"]["tip_drape_wait"])
+    settings["coordinate_frame"] = "gravity_aligned"
+    monkeypatch.setattr(
+        SockDressingEnv,
+        "cloth_radius_qa",
+        staticmethod(lambda *args, **kwargs: {"passes": True}),
+    )
+
+    sample = _tip_drape_sample(
+        4,
+        _tip_drape_observation(
+            tip_y=0.45,
+            span_offset=999.0,
+            cross_offset=999.0,
+            opening_depth=999.0,
+            opening_y=0.65,
+        ),
+        config,
+        release_y=0.52,
+        previous_y=0.46,
+        settings=settings,
+    )
+
+    assert sample["ok"]
+    assert sample["coordinate_frame"] == "gravity_aligned"
+    assert sample["sock_tip_span_axis_offset_m"] == pytest.approx(0.0)
+    assert sample["sock_tip_cross_axis_offset_m"] == pytest.approx(-0.20)
+    assert sample["sock_tip_opening_depth_m"] == pytest.approx(0.0)
 
 
 def test_demo_waits_for_tip_drape_before_policy_inference(tmp_path, monkeypatch):
