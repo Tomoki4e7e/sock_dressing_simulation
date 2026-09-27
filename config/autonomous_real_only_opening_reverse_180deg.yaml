@@ -1,0 +1,30 @@
+extends: autonomous_real_only_opening_reverse_60deg.yaml
+
+scenario:
+  sock:
+    # With the cuff flipped through 180 degrees, this gravity-following bend
+    # keeps the released distal body between the arms.
+    rest_bend_degrees: -105.0
+    rest_bend_azimuth_degrees: 90.0
+
+scene:
+  initial_pose_contract:
+    # At 180 degrees the two signed rotation candidates coincide, but retain
+    # the explicit away-from-toe contract for consistency with the 60-degree
+    # profile from which this pose continues.
+    opening_rotation_about_span_degrees: 180.0
+    opening_rotation_away_from_toe: true
+    # Preload the otherwise symmetric distal-tip release toward the branch
+    # whose restoring motion falls through the arm loop.
+    sock_tip_target_span_axis_offset_m: 0.020
+    # Flipping the cuff normal moves the measured opening center while the
+    # configured foot, grippers, and sock targets remain fixed.
+    foot_to_sock_tolerance_m: 0.060
+    # Alignment with the original grasp-plate normal is cos(180) = -1.
+    opening_plate_normal_alignment_min: -1.0
+    opening_ring_plate_alignment_min: -1.0
+    # The inward opening axis reverses at 180 degrees, so the same physical
+    # robot-side tip placement uses a positive local opening depth.
+    sock_tip_opening_depth_min_m: 0.030
+    sock_tip_opening_depth_max_m: 0.090
+    sock_tip_target_opening_depth_m: 0.060

@@ -872,6 +872,40 @@ alignmentを追加し、上向き開口をfail-closedにした。
     `task_success: false`
   - 動画: `demo.mp4`（1280x960、5 fps、250 frame、50秒）
 
+## 逆向き180度開口の重力垂下ゲート（2026-09-27）
+
+逆向き60度profileから同じspan軸まわりへさらに逆向き120度回し、合計180度の
+開口姿勢を追加した。反転した開口frameに合わせてtip depth targetを
+`+0.060 m`、初期許容域を`[+0.030, +0.090] m`へ反転した。
+rest bendは`-105度 / 方位角90度`とし、対称な解放軌道の反発方向を安定化するため
+tip span targetを`+0.020 m`へ微調整した。重力固定frameの垂下閾値、
+target-normal QA、4点把持およびstretch上限は緩和していない。
+
+検証結果:
+
+- Python regression: `120 passed`
+- inference doctor・lint: pass
+- gate probe:
+  `artifacts/phase4/opening-reverse-180deg-depth-flipped-az90-probe/data_sock_sim_smoke/train/phase4_20260927T145716Z`
+- 20 frame可視確認:
+  `artifacts/phase4/opening-reverse-180deg-gated-validation-20/data_sock_sim_smoke/train/phase4_20260927T150518Z`
+- 実世界データ学習済みSAMDAMSARNN、seed 0、250 frame完全自律試験:
+  `artifacts/phase4/opening-reverse-180deg-gated-final-250/data_sock_sim_smoke/train/phase4_20260927T160903Z`
+  - guidance解除後175同期step（`3.50秒`）待機してgate通過
+  - gate時先端下降量: `0.169225 m`
+  - gate時offset: span `-0.053061 m`、cross `-0.191032 m`、
+    depth `0.013015 m`
+  - gate時stretch proxy: `1.406141`
+  - 開口―板法線alignment: `-1.0`（`cos 180度`）
+  - 開口―回転target alignment、リム―回転target alignment: `1.0`
+  - SAMDAMSARNN推論を250 frame完走、`stop_reason=max_steps`、
+    reference action blend: `0.0`
+  - coverage、連続stretch、distal follow、containment、cuff進行、
+    cloth―foot侵入条件が不合格のため`task_success: false`
+  - 垂下待機動画: `tip_drape_settle.mp4`
+    （1280x960、50 fps、175 frame、3.50秒）
+  - 推論動画: `demo.mp4`（1280x960、5 fps、250 frame、50秒）
+
 ## 靴下先端の腕輪内配置（2026-09-26）
 
 靴下rest bendを符号付き角度と方位角で指定できるようにし、`+75度 / 方位角90度`
