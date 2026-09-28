@@ -293,6 +293,68 @@ def test_reverse_180_opening_profile_flips_tip_depth_contract():
     assert drape["maximum_tip_opening_depth_m"] == pytest.approx(0.030)
 
 
+def test_reverse_240_opening_profile_uses_equivalent_positive_120_rotation():
+    config = load_config(
+        Path("config/autonomous_real_only_opening_reverse_240deg.yaml")
+    )
+    pose = config["scene"]["initial_pose_contract"]
+    sock = config["scenario"]["sock"]
+    drape = config["inference"]["tip_drape_wait"]
+
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(120.0)
+    assert not pose["opening_rotation_away_from_toe"]
+    assert pose["opening_plate_normal_alignment_min"] == pytest.approx(-0.52)
+    assert pose["opening_ring_plate_alignment_min"] == pytest.approx(-0.52)
+    assert pose["opening_target_normal_alignment_min"] == pytest.approx(0.98)
+    assert pose["opening_ring_target_alignment_min"] == pytest.approx(0.98)
+    assert sock["rest_bend_degrees"] == pytest.approx(-105.0)
+    assert sock["rest_bend_azimuth_degrees"] == pytest.approx(30.0)
+    assert pose["sock_tip_target_span_axis_offset_m"] == pytest.approx(0.040)
+    assert pose["sock_tip_target_cross_axis_offset_m"] == pytest.approx(-0.050)
+    assert pose["sock_tip_target_opening_depth_m"] == pytest.approx(0.080)
+    assert drape["enabled"]
+    assert drape["coordinate_frame"] == "gravity_aligned"
+    assert drape["minimum_tip_drop_m"] == pytest.approx(0.015)
+    assert drape["minimum_tip_cross_axis_offset_m"] == pytest.approx(-0.300)
+    assert drape["maximum_tip_cross_axis_offset_m"] == pytest.approx(-0.100)
+    assert drape["minimum_tip_opening_depth_m"] == pytest.approx(-0.120)
+    assert drape["maximum_tip_opening_depth_m"] == pytest.approx(0.030)
+
+
+def test_reverse_120_close_profile_returns_rotation_and_moves_overview_camera():
+    config = load_config(
+        Path("config/autonomous_real_only_opening_reverse_120deg_close.yaml")
+    )
+    scene = config["scene"]
+    pose = scene["initial_pose_contract"]
+    sock = config["scenario"]["sock"]
+    drape = config["inference"]["tip_drape_wait"]
+
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(120.0)
+    assert pose["opening_rotation_away_from_toe"]
+    assert pose["opening_plate_normal_alignment_min"] == pytest.approx(-0.52)
+    assert pose["opening_ring_plate_alignment_min"] == pytest.approx(-0.52)
+    assert pose["opening_target_normal_alignment_min"] == pytest.approx(0.98)
+    assert pose["opening_ring_target_alignment_min"] == pytest.approx(0.98)
+    assert sock["rest_bend_degrees"] == pytest.approx(-105.0)
+    assert sock["rest_bend_azimuth_degrees"] == pytest.approx(120.0)
+    assert pose["sock_tip_target_span_axis_offset_m"] == pytest.approx(0.0)
+    assert pose["sock_tip_cross_axis_offset_min_m"] == pytest.approx(0.020)
+    assert pose["sock_tip_cross_axis_offset_max_m"] == pytest.approx(0.080)
+    assert pose["sock_tip_target_cross_axis_offset_m"] == pytest.approx(0.060)
+    assert pose["sock_tip_opening_depth_min_m"] == pytest.approx(-0.090)
+    assert pose["sock_tip_opening_depth_max_m"] == pytest.approx(-0.030)
+    assert pose["sock_tip_target_opening_depth_m"] == pytest.approx(-0.060)
+    assert drape["enabled"]
+    assert drape["coordinate_frame"] == "gravity_aligned"
+    assert scene["recording_camera_position"] == pytest.approx(
+        [-0.75, 0.73, -0.10]
+    )
+    assert scene["recording_camera_rotation"] == pytest.approx([10.0, 42.0, 0.0])
+    assert not scene["recording_camera_frame_opening"]
+    assert config["inference"]["recording_crop_xywh"] == [300, 330, 520, 390]
+
+
 def test_triaxial_offset_profile_only_adds_requested_pose_offsets():
     baseline = load_config(
         Path("config/autonomous_real_only_plate_normal_four_point.yaml")

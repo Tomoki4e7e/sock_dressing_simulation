@@ -1,0 +1,39 @@
+extends: autonomous_real_only_opening_reverse_240deg.yaml
+
+scenario:
+  sock:
+    # Returning 120 degrees from the reverse-240 pose restores this
+    # gravity-following rest-bend direction for the reverse-120 opening.
+    rest_bend_degrees: -105.0
+    rest_bend_azimuth_degrees: 120.0
+
+scene:
+  # Move the recording-only overview camera toward the cuff/toe while keeping
+  # the established oblique view clear of the robot forearms. The inference
+  # camera and learned-policy input remain unchanged.
+  recording_camera_position: [-0.75, 0.73, -0.10]
+  recording_camera_rotation: [10.0, 42.0, 0.0]
+  recording_camera_frame_opening: false
+  initial_pose_contract:
+    # Reverse 240 degrees followed by 120 degrees in the opposite direction
+    # leaves a cumulative reverse-120 opening.
+    opening_rotation_about_span_degrees: 120.0
+    opening_rotation_away_from_toe: true
+    # Returning past the 180-degree inversion restores the negative local
+    # depth convention for the same robot-side physical tip placement.
+    sock_tip_target_span_axis_offset_m: 0.0
+    # At reverse 120 degrees the negative opening-cross direction points
+    # upward, so flip this local coordinate to keep the tip world-down.
+    sock_tip_cross_axis_offset_min_m: 0.020
+    sock_tip_cross_axis_offset_max_m: 0.080
+    sock_tip_target_cross_axis_offset_m: 0.060
+    sock_tip_opening_depth_min_m: -0.090
+    sock_tip_opening_depth_max_m: -0.030
+    sock_tip_target_opening_depth_m: -0.060
+    # Alignment with the original grasp-plate normal is cos(120) = -0.5.
+    opening_plate_normal_alignment_min: -0.52
+    opening_ring_plate_alignment_min: -0.52
+
+inference:
+  # Enlarge the unobstructed center region containing the cuff and human toe.
+  recording_crop_xywh: [300, 330, 520, 390]
