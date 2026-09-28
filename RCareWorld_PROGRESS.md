@@ -978,6 +978,112 @@ depth `-0.060 m`へ調整した。重力固定frameの垂下閾値は緩和し�
   - 近接俯瞰推論動画: `demo.mp4`
     （1280x960、5 fps、250 frame、50秒）
 
+## 逆向き150度開口・近接俯瞰カメラ（2026-09-28）
+
+逆向き120度姿勢から、逆向き240度時と同じspan軸方向へさらに30度回し、
+累積逆向き150度とした。rest bendは`-150度 / 方位角100度`、tip targetは
+span `0.0 m`、cross `+0.060 m`、depth `-0.030 m`へ再調整した。
+Obi dampingは`0.55`、strain correctionは240回とし、重力固定frameの
+垂下判定値は緩和していない。近接俯瞰カメラ設定も逆向き120度から維持した。
+
+検証結果:
+
+- Python regression: `123 passed`
+- inference doctor・lint・`git diff --check`: pass
+- 20 frame可視確認:
+  `artifacts/phase4/opening-reverse-150deg-close-strain240-validation/data_sock_sim_smoke/train/phase4_20260928T074136Z`
+- 実世界データ学習済みSAMDAMSARNN、seed 0、250 frame完全自律試験:
+  `artifacts/phase4/opening-reverse-150deg-close-final-250-retry-2/data_sock_sim_smoke/train/phase4_20260928T075305Z`
+  - guidance解除後9同期step（`0.18秒`）待機してgate通過
+  - gate時先端下降量: `0.058929 m`
+  - gate時offset: span `-0.020312 m`、cross `-0.104964 m`、
+    depth `-0.006021 m`
+  - gate時stretch proxy: `1.399454`
+  - 開口―板法線alignment: `-0.866026`（`cos 150度`）
+  - 開口―回転target alignment、リム―回転target alignment: `1.0`
+  - 記録カメラ: position `[-0.75, 0.73, -0.10]`、
+    rotation `[10, 42, 0]`、crop `[300, 330, 520, 390]`
+  - SAMDAMSARNN推論を250 frame完走、`stop_reason=max_steps`、
+    reference action blend: `0.0`
+  - coverage、連続stretch、distal follow、containment、cuff進行、
+    cloth―foot侵入条件が不合格のため`task_success: false`
+  - 垂下待機動画: `tip_drape_settle.mp4`
+    （1280x960、50 fps、9 frame、0.18秒）
+  - 近接俯瞰推論動画: `demo.mp4`
+    （1280x960、5 fps、250 frame、50秒）
+
+## 逆向き90度開口・近接俯瞰カメラ（2026-09-28）
+
+累積逆向き150度から同じspan軸まわりに60度戻し、累積逆向き90度とした。
+rest bendは60度・120度profileの中間となる`-105度 / 方位角135度`、
+tip targetはspan `-0.025 m`、cross `+0.005 m`、depth `-0.060 m`へ
+調整した。重力固定frameの垂下判定値は緩和せず、近接俯瞰カメラも維持した。
+
+検証結果:
+
+- Python regression: `124 passed`
+- inference doctor・lint・`git diff --check`: pass
+- gate probe:
+  `artifacts/phase4/opening-reverse-90deg-close-span-preload-probe/data_sock_sim_smoke/train/phase4_20260928T085936Z`
+- 20 frame可視確認:
+  `artifacts/phase4/opening-reverse-90deg-close-validation-20-retry/data_sock_sim_smoke/train/phase4_20260928T090230Z`
+- 実世界データ学習済みSAMDAMSARNN、seed 0、250 frame完全自律試験:
+  `artifacts/phase4/opening-reverse-90deg-close-final-250-retry-2/data_sock_sim_smoke/train/phase4_20260928T090752Z`
+  - guidance解除後24同期step（`0.48秒`）待機してgate通過
+  - gate時先端下降量: `0.071362 m`
+  - gate時offset: span `0.024053 m`、cross `-0.104795 m`、
+    depth `-0.109869 m`
+  - gate時stretch proxy: `1.413945`
+  - 開口―板法線alignment: `-0.000003`（`cos 90度`）
+  - 開口―回転target alignment、リム―回転target alignment: `1.0`
+  - 記録カメラ: position `[-0.75, 0.73, -0.10]`、
+    rotation `[10, 42, 0]`、crop `[300, 330, 520, 390]`
+  - SAMDAMSARNN推論を250 frame完走、`stop_reason=max_steps`、
+    reference action blend: `0.0`
+  - coverageは合格したが、連続stretch、distal follow、containment、
+    cuff進行、cloth―foot侵入条件が不合格のため`task_success: false`
+  - 垂下待機動画: `tip_drape_settle.mp4`
+    （1280x960、50 fps、24 frame、0.48秒）
+  - 近接俯瞰推論動画: `demo.mp4`
+    （1280x960、5 fps、250 frame、50秒）
+
+## 逆向き270度開口・近接俯瞰カメラ（2026-09-28）
+
+累積逆向き90度から同じspan軸方向へさらに180度進め、累積逆向き270度とした。
+Playerの角度制約に合わせ、反対符号の90度
+（`opening_rotation_away_from_toe: false`）として表現した。
+rest bendは`-105度 / 方位角30度`、tip targetはspan `+0.060 m`、
+cross `-0.050 m`、depth `+0.030 m`へ調整した。重力固定frameの垂下判定値は
+緩和せず、近接俯瞰カメラも維持した。
+
+検証結果:
+
+- Python regression: `125 passed`
+- inference doctor・lint・`git diff --check`: pass
+- gate probe:
+  `artifacts/phase4/opening-reverse-270deg-close-tip-preload-probe/data_sock_sim_smoke/train/phase4_20260928T100748Z`
+- 20 frame可視確認:
+  `artifacts/phase4/opening-reverse-270deg-close-validation-20/data_sock_sim_smoke/train/phase4_20260928T100951Z`
+- 実世界データ学習済みSAMDAMSARNN、seed 0、250 frame完全自律試験:
+  `artifacts/phase4/opening-reverse-270deg-close-final-250/data_sock_sim_smoke/train/phase4_20260928T101301Z`
+  - guidance解除後4同期step（`0.08秒`）待機してgate通過
+  - gate時先端下降量: `0.091428 m`
+  - gate時offset: span `0.002523 m`、cross `-0.160296 m`、
+    depth `-0.009218 m`
+  - gate時stretch proxy: `1.398601`
+  - 開口―板法線alignment: `-0.000004`（`cos 270度`）
+  - 開口―回転target alignment、リム―回転target alignment: `1.0`
+  - 記録カメラ: position `[-0.75, 0.73, -0.10]`、
+    rotation `[10, 42, 0]`、crop `[300, 330, 520, 390]`
+  - SAMDAMSARNN推論を250 frame完走、`stop_reason=max_steps`、
+    reference action blend: `0.0`
+  - coverage、連続stretch、distal follow、containment、cuff進行、
+    cloth―foot侵入条件が不合格のため`task_success: false`
+  - 垂下待機動画: `tip_drape_settle.mp4`
+    （1280x960、50 fps、4 frame、0.08秒）
+  - 近接俯瞰推論動画: `demo.mp4`
+    （1280x960、5 fps、250 frame、50秒）
+
 ## 靴下先端の腕輪内配置（2026-09-26）
 
 靴下rest bendを符号付き角度と方位角で指定できるようにし、`+75度 / 方位角90度`

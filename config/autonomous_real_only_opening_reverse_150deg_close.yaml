@@ -1,0 +1,39 @@
+extends: autonomous_real_only_opening_reverse_120deg_close.yaml
+
+obi:
+  expected:
+    # Suppress the one-step release rebound and the following strain spike
+    # without changing any gravity-drape acceptance threshold.
+    damping: 0.55
+    # The rotated rest body needs additional correction passes to keep every
+    # initialization branch below the unchanged 1.5x stretch gate.
+    strain_limit_iterations: 240
+
+scenario:
+  sock:
+    # Aim the deep distal bend between the reverse-120 and reverse-180 rest
+    # directions so the reverse-150 body continues world-down after release.
+    rest_bend_degrees: -150.0
+    rest_bend_azimuth_degrees: 100.0
+
+scene:
+  initial_pose_contract:
+    opening_rotation_about_span_degrees: 150.0
+    opening_rotation_away_from_toe: true
+    # Keep positive local cross preload, but place the tip behind the rotated
+    # opening plane so its released bend settles inside the unchanged gate.
+    sock_tip_cross_axis_offset_min_m: 0.020
+    sock_tip_cross_axis_offset_max_m: 0.080
+    sock_tip_target_cross_axis_offset_m: 0.060
+    sock_tip_opening_depth_min_m: -0.050
+    sock_tip_opening_depth_max_m: -0.010
+    sock_tip_target_opening_depth_m: -0.030
+    # Alignment with the original grasp-plate normal is cos(150).
+    opening_plate_normal_alignment_min: -0.88
+    opening_ring_plate_alignment_min: -0.88
+
+inference:
+  tip_drape_wait:
+    # A valid release settles well before the inherited 250-step timeout. Fail
+    # closed earlier on alternate Obi initialization branches.
+    maximum_steps: 60

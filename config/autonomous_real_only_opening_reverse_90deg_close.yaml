@@ -1,0 +1,26 @@
+extends: autonomous_real_only_opening_reverse_120deg_close.yaml
+
+scenario:
+  sock:
+    # Interpolate the gravity-following rest direction between the established
+    # reverse-60 and reverse-120 profiles.
+    rest_bend_degrees: -105.0
+    rest_bend_azimuth_degrees: 135.0
+
+scene:
+  initial_pose_contract:
+    # Return 60 degrees from reverse-150 to cumulative reverse-90.
+    opening_rotation_about_span_degrees: 90.0
+    opening_rotation_away_from_toe: true
+    # Counter the released distal body's positive-span drift while preserving
+    # the inherited arm-loop allowance.
+    sock_tip_target_span_axis_offset_m: -0.025
+    sock_tip_cross_axis_offset_min_m: -0.025
+    sock_tip_cross_axis_offset_max_m: 0.035
+    sock_tip_target_cross_axis_offset_m: 0.005
+    sock_tip_opening_depth_min_m: -0.090
+    sock_tip_opening_depth_max_m: -0.030
+    sock_tip_target_opening_depth_m: -0.060
+    # Alignment with the original grasp-plate normal is cos(90) = 0.
+    opening_plate_normal_alignment_min: -0.02
+    opening_ring_plate_alignment_min: -0.02

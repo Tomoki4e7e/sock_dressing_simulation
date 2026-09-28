@@ -1,0 +1,26 @@
+extends: autonomous_real_only_opening_reverse_90deg_close.yaml
+
+scenario:
+  sock:
+    # Continue from the established reverse-240 gravity-following rest shape.
+    rest_bend_degrees: -105.0
+    rest_bend_azimuth_degrees: 30.0
+
+scene:
+  initial_pose_contract:
+    # Cumulative reverse-270 is the opposite-signed 90-degree orientation.
+    opening_rotation_about_span_degrees: 90.0
+    opening_rotation_away_from_toe: false
+    # Counter the negative-span release drift at this equivalent orientation.
+    sock_tip_target_span_axis_offset_m: 0.060
+    sock_tip_cross_axis_offset_min_m: -0.080
+    sock_tip_cross_axis_offset_max_m: -0.020
+    sock_tip_target_cross_axis_offset_m: -0.050
+    # Reduce the reverse-240 depth preload so release begins above the stable
+    # gravity corridor instead of rebounding upward.
+    sock_tip_opening_depth_min_m: 0.000
+    sock_tip_opening_depth_max_m: 0.060
+    sock_tip_target_opening_depth_m: 0.030
+    # Alignment with the original grasp-plate normal is cos(270) = 0.
+    opening_plate_normal_alignment_min: -0.02
+    opening_ring_plate_alignment_min: -0.02
