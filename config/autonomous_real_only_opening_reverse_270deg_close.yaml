@@ -1,26 +1,48 @@
 extends: autonomous_real_only_opening_reverse_90deg_close.yaml
 
+obi:
+  expected:
+    # Stabilize the inward rest bend after guidance release.
+    damping: 0.55
+    strain_limit_iterations: 240
+
 scenario:
   sock:
-    # Continue from the established reverse-240 gravity-following rest shape.
+    # Bend the distal body across the cuff so gravity catches the sock on the
+    # opening and extends it toward Dry-AIREC instead of away from the grippers.
     rest_bend_degrees: -105.0
-    rest_bend_azimuth_degrees: 30.0
+    rest_bend_azimuth_degrees: 180.0
 
 scene:
   initial_pose_contract:
     # Cumulative reverse-270 is the opposite-signed 90-degree orientation.
     opening_rotation_about_span_degrees: 90.0
     opening_rotation_away_from_toe: false
-    # Counter the negative-span release drift at this equivalent orientation.
-    sock_tip_target_span_axis_offset_m: 0.060
+    # Start on the cuff centerline so the inward rest bend settles between the
+    # grippers instead of selecting either lateral release branch.
+    sock_tip_target_span_axis_offset_m: 0.000
     sock_tip_cross_axis_offset_min_m: -0.080
     sock_tip_cross_axis_offset_max_m: -0.020
-    sock_tip_target_cross_axis_offset_m: -0.050
-    # Reduce the reverse-240 depth preload so release begins above the stable
-    # gravity corridor instead of rebounding upward.
-    sock_tip_opening_depth_min_m: 0.000
-    sock_tip_opening_depth_max_m: 0.060
-    sock_tip_target_opening_depth_m: 0.030
+    sock_tip_target_cross_axis_offset_m: -0.060
+    # Keep the released body inside the robot-side gravity corridor.
+    sock_tip_opening_depth_min_m: 0.010
+    sock_tip_opening_depth_max_m: 0.070
+    sock_tip_target_opening_depth_m: 0.040
     # Alignment with the original grasp-plate normal is cos(270) = 0.
     opening_plate_normal_alignment_min: -0.02
     opening_ring_plate_alignment_min: -0.02
+
+inference:
+  # The inward-hanging sock can occupy less than 0.01% of the fixed head view;
+  # exact renderer agreement remains authoritative for mask quality.
+  mask_min_fraction: 0.00001
+  tip_drape_wait:
+    # The finite-width tip centroid settles within one centimetre of the
+    # established robot-side corridor while the full body remains inward.
+    maximum_tip_cross_axis_offset_m: -0.090
+    # The 4 cm-radius tip still overlaps the 11 cm opening when its centroid
+    # settles slightly beyond the opening half-span.
+    tip_radius_allowance_m: 0.035
+    # Accept the deeper robot-side branch produced by the inward rest bend.
+    minimum_tip_opening_depth_m: -0.160
+    maximum_steps: 60

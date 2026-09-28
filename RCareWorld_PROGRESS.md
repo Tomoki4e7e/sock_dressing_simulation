@@ -1047,6 +1047,41 @@ tip targetはspan `-0.025 m`、cross `+0.005 m`、depth `-0.060 m`へ
   - 近接俯瞰推論動画: `demo.mp4`
     （1280x960、5 fps、250 frame、50秒）
 
+## 逆向き270度開口・Dry-AIREC側への内向き垂下（2026-09-28）
+
+累積逆向き270度の開口把持角と近接俯瞰カメラは維持し、靴下本体が開口部に
+掛かった状態でDry-AIREC側へ伸びるよう、rest bend方位角を`30度`から`180度`
+へ変更した。tip targetはspan `0.000 m`、cross `-0.060 m`、depth `+0.040 m`とし、
+release安定化のためObi dampingを`0.55`、strain limit iterationsを`240`とした。
+内向きの有限幅tipを受け入れるため、重力固定frameのcross上限を`-0.090 m`、
+depth下限を`-0.160 m`、tip radius allowanceを`0.035 m`とした。固定head
+camera内で小さく見えるsock maskはrenderer完全一致を条件に最小面積を
+`0.00001`へ設定した。
+
+検証結果:
+
+- Python regression: `125 passed`
+- inference doctor・lint: pass
+- 20 frame描画確認:
+  `artifacts/phase4/opening-reverse-270deg-inward-accepted-validation-20/data_sock_sim_smoke/train/phase4_20260928T121556Z`
+- 実世界データ学習済みSAMDAMSARNN、seed 0、250 frame完全自律試験:
+  `artifacts/phase4/opening-reverse-270deg-inward-final-250-retry-4/data_sock_sim_smoke/train/phase4_20260928T124257Z`
+  - guidance解除後9同期step（`0.18秒`）でgate通過
+  - gate時先端下降量: `0.033065 m`
+  - gate時offset: span `0.047553 m`、cross `-0.103033 m`、
+    depth `-0.049862 m`
+  - gate時stretch proxy: `1.398559`
+  - 開口―板法線alignment: `-0.000004`（`cos 270度`）
+  - 開口―回転target alignment、リム―回転target alignment: `1.0`
+  - SAMDAMSARNN推論を250 frame完走、`stop_reason=max_steps`、
+    reference action blend: `0.0`
+  - coverage、連続stretch、distal follow、foot contact、containment、
+    cuff進行条件が不合格のため`task_success: false`
+  - 垂下待機動画: `tip_drape_settle.mp4`
+    （1280x960、50 fps、9 frame、0.18秒）
+  - 完全自律推論動画: `demo.mp4`
+    （1280x960、5 fps、250 frame、50秒）
+
 ## 逆向き270度開口・近接俯瞰カメラ（2026-09-28）
 
 累積逆向き90度から同じspan軸方向へさらに180度進め、累積逆向き270度とした。
