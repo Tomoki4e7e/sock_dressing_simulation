@@ -1,5 +1,6 @@
 import csv
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -365,6 +366,124 @@ def test_demo_does_not_run_policy_when_tip_drape_times_out(tmp_path, monkeypatch
     metadata = json.loads(Path(result["episode"], "metadata.json").read_text())
     assert not metadata["tip_drape_wait"]["passed"]
     assert metadata["tip_drape_wait"]["reason"] == "timeout"
+
+
+@pytest.mark.parametrize(
+    ("alignment", "expected_ok"),
+    [(1.0, True), (0.5, False)],
+)
+def test_demo_prepares_signed_drape_before_policy_and_fails_closed(
+    tmp_path, monkeypatch, alignment, expected_ok
+):
+    config = load_config(
+        Path(
+            "config/"
+            "autonomous_real_only_opening_reverse_270deg_positive_180_drape.yaml"
+        )
+    )
+    config["assets"]["output_dir"] = str(tmp_path)
+    config["inference"]["recording_crop_xywh"] = None
+    config["inference"]["tip_drape_wait"]["consecutive_steps"] = 1
+    config["inference"]["pre_inference_drape"].update(
+        rotation_steps=2,
+        settle_steps=2,
+    )
+    events = []
+
+    @dataclass
+    class DrapeGeometry:
+        signed_opening_span_rotation_degrees: float
+        opening_target_normal_alignment: float
+        opening_ring_target_alignment: float
+        opening_body_barrier_maximum_penetration_m: float = 0.0
+        opening_body_barrier_violation_count: int = 0
+
+    class Environment(_Environment):
+        def __init__(self, environment_config):
+            super().__init__(environment_config)
+            self.rotation = 0.0
+
+        def release_initial_tip_guidance(self):
+            events.append("release")
+
+        def observe(self):
+            events.append("observe")
+            return _tip_drape_observation(
+                tip_y=0.2,
+                opening_y=0.5,
+            )
+
+        def arm_opening_body_barrier_predictive_skin(self, armed):
+            events.append(("barrier", armed))
+
+        def rotate_grasped_opening_about_span(self, delta):
+            events.append(("rotate", delta))
+            self.rotation += delta
+
+        def step_physics(self):
+            events.append("rotation_physics")
+
+        def frame_side_camera_on_sock(self, distance, reverse=False):
+            events.append("side_camera")
+            return {"distance_m": distance, "reverse": reverse}
+
+        def observe_drape_cameras(self):
+            events.append("settle")
+            rgb = np.zeros((8, 8, 3), dtype=np.uint8)
+            return {
+                "geometry": DrapeGeometry(
+                    self.rotation,
+                    alignment,
+                    alignment,
+                ),
+                "overview": {"rgb": rgb},
+                "side": {"rgb": rgb},
+            }
+
+    class Policy(_Policy):
+        def step(self, **kwargs):
+            events.append("policy")
+            return super().step(**kwargs)
+
+    monkeypatch.setattr(
+        SockDressingEnv,
+        "cloth_radius_qa",
+        staticmethod(lambda *args, **kwargs: {"passes": True}),
+    )
+    result = run_demo(
+        config,
+        prepared={"runtime_urdf": str(tmp_path / "robot.urdf")},
+        output_root=tmp_path / f"episodes-{alignment}",
+        sock_points=[[1, 1]],
+        leg_points=[[3, 2]],
+        max_steps=1,
+        environment_factory=Environment,
+        perception_factory=_Perception,
+        policy_factory=Policy,
+    )
+
+    assert result["ok"] is expected_ok
+    assert events.count("rotation_physics") == 2
+    assert [event for event in events if isinstance(event, tuple) and event[0] == "rotate"] == [
+        ("rotate", 90.0),
+        ("rotate", 90.0),
+    ]
+    metadata = json.loads(Path(result["episode"], "metadata.json").read_text())
+    report = metadata["pre_inference_drape"]
+    assert report["passed"] is expected_ok
+    assert report["final_geometry"][
+        "signed_opening_span_rotation_degrees"
+    ] == pytest.approx(180.0)
+    assert Path(result["pre_inference_drape_video"]).is_file()
+    if expected_ok:
+        assert events.index("policy") > max(
+            index for index, event in enumerate(events) if event == "settle"
+        )
+    else:
+        assert "policy" not in events
+        assert result["stop_reason"].startswith(
+            "fail_closed: pre-inference drape geometry QA failed"
+        )
 
 
 def test_demo_records_bounded_closed_loop_actions(tmp_path):

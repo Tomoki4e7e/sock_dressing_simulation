@@ -1242,6 +1242,32 @@ guidanceを解除する。先端のspan/cross/depth offsetをscene geometryへ�
     `task_success: false`
   - 動画: `demo.mp4`（1280x960、5 fps、250 frame、50秒）
 
+## reverse-270度からの正逆180度回転下垂（2026-09-29）
+
+現在のreverse-270度開口を起点に、左右gripper span軸まわりへ符号付き
+`1度/step`で180 step回転するdrape-only経路を追加した。SAMDAMSARNN、
+SAM2、Depth Anythingはロードせず、回転後の自由下垂だけを250 frame記録した。
+俯瞰cameraに加え、`cross(span axis, gravity)`方向から開口span軸に垂直な
+固定横cameraを同時撮影した。
+
+検証結果:
+
+- Development Player再build: pass
+- 短時間の+180度／-180度試験: pass
+- 両方向とも最終signed rotation: 指定値どおり
+- 開口・リムtarget alignment: `1.0`
+- 全下垂frameの開口部貫通: `0`
+- +180度:
+  `artifacts/phase4/opening-reverse-270deg-signed-180-drape-final/data_sock_sim_smoke/train/drape_positive_20260929T100902Z`
+  - 最終重力整合: `0.549059`
+  - `drape_overview.mp4`: 250 frame
+  - `drape_side.mp4`: 250 frame
+- -180度:
+  `artifacts/phase4/opening-reverse-270deg-signed-180-drape-final/data_sock_sim_smoke/train/drape_negative_20260929T101346Z`
+  - 最終重力整合: `0.386152`
+  - `drape_overview.mp4`: 250 frame
+  - `drape_side.mp4`: 250 frame
+
 ## 270度開口部の自己貫通防止（2026-09-29）
 
 青い開口矩形を描画だけでなく片側衝突障壁として扱い、開口リム以外の布粒子が

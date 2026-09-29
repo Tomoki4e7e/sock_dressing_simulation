@@ -1,0 +1,16 @@
+extends: autonomous_real_only_opening_reverse_270deg_close.yaml
+
+scene:
+  side_recording_camera_id: 1302
+
+inference:
+  # Reproduce drape_positive_20260929T100902Z before policy inference:
+  # release and settle the guided tip, rotate the grasped opening by +180
+  # degrees in 180 one-degree physics steps, then settle for 250 frames.
+  pre_inference_drape:
+    enabled: true
+    rotation_degrees: 180.0
+    rotation_steps: 180
+    settle_steps: 250
+    side_distance_m: 0.65
+    side_reverse: false

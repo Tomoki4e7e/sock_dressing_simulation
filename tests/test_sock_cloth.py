@@ -810,6 +810,8 @@ def test_sock_geometry_reports_particle_derived_hanging_direction():
     assert "private void UpdateOpeningBodyBarrierContacts()" in source
     assert "private void RecordOpeningBodyBarrierState()" in source
     assert "public void ArmOpeningBodyBarrierPredictiveSkin(" in source
+    assert "public void RotateGraspedOpeningAboutSpan(" in source
+    assert '"signed_opening_span_rotation_degrees"' in source
     assert "crossedFromInwardSide" in source
     assert "IsInsideOpeningBarrierRectangle(" in source
     assert source.count("initialTipGuidanceEnabled ||") >= 2
@@ -1055,6 +1057,7 @@ def test_sock_cloth_commands_match_unity_contract():
     )
     cloth.configure_initial_tip_guidance(0.048, 0.142, 0.091, 0.015)
     cloth.release_initial_tip_guidance()
+    cloth.rotate_grasped_opening_about_span(-1.0)
     cloth.ignore_robot_human_rigid_collisions(1100)
     cloth.ignore_non_gripper_robot_human_rigid_collisions(1100)
     cloth.configure_right_leg_colliders(2000, 0.8)
@@ -1149,6 +1152,7 @@ def test_sock_cloth_commands_match_unity_contract():
             1.0,
         ),
         (1200, "ReleaseInitialTipGuidance"),
+        (1200, "RotateGraspedOpeningAboutSpan", -1.0),
         (1200, "IgnoreRobotHumanRigidCollisions", 1100),
         (1200, "IgnoreNonGripperRobotHumanRigidCollisions", 1100),
         (1200, "ConfigureRightLegColliders", 2000, 0.8),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Callable, Mapping, Optional, Sequence
 
@@ -74,6 +75,19 @@ def run_demo(
     tip_drape_consecutive_steps = int(
         tip_drape_settings.get("consecutive_steps", 5)
     )
+    pre_drape_settings = dict(
+        settings.get("pre_inference_drape", {}) or {}
+    )
+    pre_drape_enabled = bool(pre_drape_settings.get("enabled", False))
+    pre_drape_rotation = float(
+        pre_drape_settings.get("rotation_degrees", 0.0)
+    )
+    pre_drape_rotation_steps = int(
+        pre_drape_settings.get("rotation_steps", 180)
+    )
+    pre_drape_settle_steps = int(
+        pre_drape_settings.get("settle_steps", 250)
+    )
     if (
         not 0 <= reference_blend <= 1
         or reference_hold < 1
@@ -83,6 +97,15 @@ def run_demo(
         or tip_drape_consecutive_steps < 1
     ):
         raise ValueError("invalid reference action projection settings")
+    if pre_drape_enabled and (
+        not tip_drape_enabled
+        or not np.isfinite(pre_drape_rotation)
+        or abs(pre_drape_rotation) > 180
+        or abs(pre_drape_rotation) < 1e-8
+        or pre_drape_rotation_steps < 1
+        or pre_drape_settle_steps < 1
+    ):
+        raise ValueError("invalid pre-inference drape settings")
     output = resolve_package_path(config["assets"]["output_dir"])
     metadata = {
         "phase": 4,
@@ -119,11 +142,20 @@ def run_demo(
     final_task_success = {}
     video_path = episode / "demo.mp4"
     tip_drape_video_path = episode / "tip_drape_settle.mp4"
+    pre_drape_video_path = episode / "pre_inference_drape.mp4"
     tip_drape_report = {
         "enabled": tip_drape_enabled,
         "passed": not tip_drape_enabled,
         "reason": "disabled" if not tip_drape_enabled else "not_started",
         "samples": [],
+    }
+    pre_drape_report = {
+        "enabled": pre_drape_enabled,
+        "passed": not pre_drape_enabled,
+        "reason": "disabled" if not pre_drape_enabled else "not_started",
+        "rotation_degrees": pre_drape_rotation,
+        "rotation_steps": pre_drape_rotation_steps,
+        "settle_steps": pre_drape_settle_steps,
     }
     configured_prompts = settings.get("prompts", {})
     if not sock_points:
@@ -247,6 +279,7 @@ def run_demo(
                 float(settings.get("rate_hz", 5.0)),
             )
             tip_drape_video = None
+            pre_drape_video = None
             predicted_file = (episode / "predicted_action.csv").open(
                 "w", newline="", encoding="utf-8"
             )
@@ -349,6 +382,176 @@ def run_demo(
                 )
                 if callable(arm_predictive_skin):
                     arm_predictive_skin(True)
+                if pre_drape_enabled:
+                    rotate_opening = getattr(
+                        environment,
+                        "rotate_grasped_opening_about_span",
+                        None,
+                    )
+                    step_physics = getattr(environment, "step_physics", None)
+                    frame_side_camera = getattr(
+                        environment, "frame_side_camera_on_sock", None
+                    )
+                    observe_drape = getattr(
+                        environment, "observe_drape_cameras", None
+                    )
+                    if not all(
+                        callable(method)
+                        for method in (
+                            rotate_opening,
+                            step_physics,
+                            frame_side_camera,
+                            observe_drape,
+                        )
+                    ):
+                        raise RuntimeError(
+                            "pre-inference drape requires signed rotation "
+                            "and dual-camera environment support"
+                        )
+                    rotation_delta = (
+                        pre_drape_rotation / pre_drape_rotation_steps
+                    )
+                    for _ in range(pre_drape_rotation_steps):
+                        rotate_opening(rotation_delta)
+                        step_physics()
+                    side_camera = frame_side_camera(
+                        float(pre_drape_settings.get("side_distance_m", 0.65)),
+                        reverse=bool(
+                            pre_drape_settings.get("side_reverse", False)
+                        ),
+                    )
+                    first_drape = observe_drape()
+                    pre_drape_video = _open_video(
+                        pre_drape_video_path,
+                        first_drape["overview"]["rgb"].shape,
+                        1.0 / float(
+                            config["obi"].get("timestep_s", 0.02)
+                        ),
+                    )
+                    drape_frames = []
+                    for settle_frame in range(pre_drape_settle_steps):
+                        drape_sample = (
+                            first_drape
+                            if settle_frame == 0
+                            else observe_drape()
+                        )
+                        _write_video_frame(
+                            pre_drape_video,
+                            drape_sample["overview"]["rgb"],
+                            settle_frame,
+                            crop_xywh=settings.get(
+                                "recording_crop_xywh"
+                            ),
+                        )
+                        drape_frames.append(
+                            asdict(drape_sample["geometry"])
+                        )
+                    pre_drape_video.release()
+                    pre_drape_video = None
+                    maximum_penetration = max(
+                        frame[
+                            "opening_body_barrier_maximum_penetration_m"
+                        ]
+                        for frame in drape_frames
+                    )
+                    maximum_violations = max(
+                        frame["opening_body_barrier_violation_count"]
+                        for frame in drape_frames
+                    )
+                    final_drape = drape_frames[-1]
+                    rotation_error = abs(
+                        final_drape[
+                            "signed_opening_span_rotation_degrees"
+                        ]
+                        - pre_drape_rotation
+                    )
+                    maximum_allowed_penetration = float(
+                        settings.get(
+                            "maximum_opening_body_penetration_m",
+                            0.0005,
+                        )
+                    )
+                    pre_drape_ok = bool(
+                        rotation_error <= 0.01
+                        and maximum_violations == 0
+                        and maximum_penetration
+                        <= maximum_allowed_penetration
+                        and final_drape[
+                            "opening_target_normal_alignment"
+                        ]
+                        >= 0.98
+                        and final_drape[
+                            "opening_ring_target_alignment"
+                        ]
+                        >= 0.98
+                    )
+                    pre_drape_report.update(
+                        {
+                            "passed": pre_drape_ok,
+                            "reason": (
+                                "conditions_met"
+                                if pre_drape_ok
+                                else "geometry_qa_failed"
+                            ),
+                            "rotation_delta_degrees": rotation_delta,
+                            "side_camera": side_camera,
+                            "maximum_opening_body_penetration_m": (
+                                maximum_penetration
+                            ),
+                            "maximum_opening_body_barrier_violation_count": (
+                                maximum_violations
+                            ),
+                            "final_geometry": final_drape,
+                            "video": str(pre_drape_video_path),
+                        }
+                    )
+                    if not pre_drape_ok:
+                        raise RuntimeError(
+                            "pre-inference drape geometry QA failed: "
+                            + json.dumps(
+                                pre_drape_report, sort_keys=True
+                            )
+                        )
+                    observation = environment.observe()
+                    post_drape_masks = _renderer_masks(
+                        observation["camera"]
+                    )
+                    if (
+                        config["rcareworld"].get("profile")
+                        == "custom_player"
+                        and post_drape_masks is not None
+                    ):
+                        sock_center = _mask_centroid_point(
+                            post_drape_masks["sock"]
+                        )
+                        leg_center = _mask_centroid_point(
+                            post_drape_masks["leg"]
+                        )
+                        sock_labels = [1, 0]
+                        leg_labels = [1, 0]
+                        sock_points = [
+                            sock_center,
+                            leg_center,
+                        ]
+                        leg_points = [
+                            leg_center,
+                            sock_center,
+                        ]
+                    metadata["prompt_points"] = {
+                        "sock": list(map(list, sock_points)),
+                        "leg": list(map(list, leg_points)),
+                        "sock_labels": (
+                            None
+                            if sock_labels is None
+                            else list(sock_labels)
+                        ),
+                        "leg_labels": (
+                            None
+                            if leg_labels is None
+                            else list(leg_labels)
+                        ),
+                    }
+                    metadata["diagnostics"] = observation["diagnostics"]
                 # The released tip settles before autonomous control starts.
                 # Use that post-settle state as the motion-following baseline;
                 # otherwise gravity-driven drape is incorrectly charged as
@@ -620,6 +823,8 @@ def run_demo(
                 video.release()
                 if tip_drape_video is not None:
                     tip_drape_video.release()
+                if pre_drape_video is not None:
+                    pre_drape_video.release()
                 final_task_success = _task_success(
                     observation,
                     quality_by_frame,
@@ -654,6 +859,7 @@ def run_demo(
                             sock_tip_geometry_by_frame
                         ),
                         "tip_drape_wait": tip_drape_report,
+                        "pre_inference_drape": pre_drape_report,
                         "task_success": final_task_success,
                     }
                 )
@@ -681,6 +887,9 @@ def run_demo(
         "video": str(video_path),
         "tip_drape_video": (
             str(tip_drape_video_path) if tip_drape_enabled else None
+        ),
+        "pre_inference_drape_video": (
+            str(pre_drape_video_path) if pre_drape_enabled else None
         ),
         "frames": frames,
         "stop_reason": stop_reason,

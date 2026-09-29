@@ -112,6 +112,7 @@ class SceneGeometry:
     opening_body_barrier_maximum_penetration_m: float = 0.0
     opening_body_barrier_correction_count: int = 0
     opening_body_barrier_maximum_applied_correction_m: float = 0.0
+    signed_opening_span_rotation_degrees: float = 0.0
     left_grasp_thickness_axis: Tuple[float, float, float] = (1.0, 0.0, 0.0)
     right_grasp_thickness_axis: Tuple[float, float, float] = (1.0, 0.0, 0.0)
     left_grasp_inward_axis: Tuple[float, float, float] = (0.0, 0.0, 1.0)
@@ -265,6 +266,9 @@ class SceneGeometry:
                 "opening_body_barrier_maximum_applied_correction_m", 0.0
             )
         )
+        signed_opening_span_rotation = float(
+            value.get("signed_opening_span_rotation_degrees", 0.0)
+        )
         if (
             not np.isfinite(distance)
             or distance < 0
@@ -329,6 +333,7 @@ class SceneGeometry:
             or barrier_correction_count < 0
             or not np.isfinite(barrier_maximum_applied_correction)
             or barrier_maximum_applied_correction < 0
+            or not np.isfinite(signed_opening_span_rotation)
         ):
             raise ValueError(
                 "scene distances and angles are invalid: "
@@ -409,6 +414,9 @@ class SceneGeometry:
             opening_body_barrier_correction_count=barrier_correction_count,
             opening_body_barrier_maximum_applied_correction_m=(
                 barrier_maximum_applied_correction
+            ),
+            signed_opening_span_rotation_degrees=(
+                signed_opening_span_rotation
             ),
             **vectors,
         )
@@ -832,6 +840,16 @@ class SockClothAttr:
 
     def release_initial_tip_guidance(self) -> None:
         self._send_data("ReleaseInitialTipGuidance")
+
+    def rotate_grasped_opening_about_span(
+        self, delta_degrees: float
+    ) -> None:
+        delta = float(delta_degrees)
+        if not np.isfinite(delta) or abs(delta) > 180:
+            raise ValueError(
+                "opening rotation delta must be finite and in [-180, 180]"
+            )
+        self._send_data("RotateGraspedOpeningAboutSpan", delta)
 
     def set_grasp_target_position(
         self, side: str, position: Sequence[float]

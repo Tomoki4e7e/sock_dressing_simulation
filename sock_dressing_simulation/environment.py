@@ -20,6 +20,7 @@ class SockDressingEnv:
         self.cloth = None
         self.camera = None
         self.recording_camera = None
+        self.side_recording_camera = None
         self.chair = []
         self.grasp_anchors = []
         self._grasp_attachment_report = []
@@ -433,6 +434,27 @@ class SockDressingEnv:
                 rotation=list(scene["recording_camera_rotation"]),
                 scale=[1.0, 1.0, 1.0],
             )
+        if scene.get("side_recording_camera_id") is not None:
+            self.side_recording_camera = self._env.InstanceObject(
+                name="Camera",
+                id=int(scene["side_recording_camera_id"]),
+                attr_type=attr.CameraAttr,
+            )
+            self.side_recording_camera.SetTransform(
+                position=list(
+                    scene.get(
+                        "side_recording_camera_position",
+                        scene["recording_camera_position"],
+                    )
+                ),
+                rotation=list(
+                    scene.get(
+                        "side_recording_camera_rotation",
+                        scene["recording_camera_rotation"],
+                    )
+                ),
+                scale=[1.0, 1.0, 1.0],
+            )
         self._env.step()
         camera_data = getattr(self.camera, "data", {}) if self.camera is not None else {}
         if self._camera_mount_report and camera_data:
@@ -577,6 +599,35 @@ class SockDressingEnv:
         self._env.step()
         return self.sock_cloth.scene_geometry()
 
+    def step_physics(self) -> None:
+        self._env.step()
+
+    def observe_drape_cameras(self) -> Dict[str, Any]:
+        if self.recording_camera is None or self.side_recording_camera is None:
+            raise RuntimeError(
+                "overview and side recording cameras are required"
+            )
+        camera = self.config["camera"]
+        width, height = int(camera["width"]), int(camera["height"])
+        fov = float(camera["fov"])
+        self.sock_cloth.request_scene_geometry()
+        self.recording_camera.GetRGB(width, height, fov)
+        self.side_recording_camera.GetRGB(width, height, fov)
+        self._env.step()
+        return {
+            "geometry": self.sock_cloth.scene_geometry(),
+            "overview": {
+                "rgb": self._decode(
+                    self.recording_camera.data["rgb"], "RGB"
+                )
+            },
+            "side": {
+                "rgb": self._decode(
+                    self.side_recording_camera.data["rgb"], "RGB"
+                )
+            },
+        }
+
     def _request_grasp_target_positions(self) -> tuple[np.ndarray, np.ndarray]:
         self.sock_cloth.request_scene_geometry()
         self._env.step()
@@ -637,6 +688,60 @@ class SockDressingEnv:
             "opening_normal": opening_normal.tolist(),
             "distance_m": distance,
             "lateral_m": lateral,
+            "reverse": bool(reverse),
+        }
+
+    def frame_side_camera_on_sock(
+        self,
+        distance_m: float,
+        reverse: bool = False,
+    ) -> Dict[str, Any]:
+        """Aim a camera horizontally, perpendicular to the opening span."""
+        if self.side_recording_camera is None:
+            raise RuntimeError("side recording camera is unavailable")
+        distance = float(distance_m)
+        if not np.isfinite(distance) or distance <= 0:
+            raise ValueError(
+                "side camera distance must be finite and positive"
+            )
+        geometry = self._request_scene_geometry()
+        opening = np.asarray(geometry.opening_center, dtype=float)
+        tip = np.asarray(geometry.sock_tip_center, dtype=float)
+        target = 0.5 * (opening + tip)
+        span = (
+            np.asarray(geometry.right_grasp_position, dtype=float)
+            - np.asarray(geometry.left_grasp_position, dtype=float)
+        )
+        span /= np.linalg.norm(span)
+        gravity = np.asarray([0.0, -1.0, 0.0], dtype=float)
+        view_axis = np.cross(span, gravity)
+        if np.linalg.norm(view_axis) <= 1e-8:
+            raise RuntimeError(
+                "opening span is parallel to gravity; side view is undefined"
+            )
+        view_axis /= np.linalg.norm(view_axis)
+        if reverse:
+            view_axis = -view_axis
+        position = target - view_axis * distance
+        forward = target - position
+        forward /= np.linalg.norm(forward)
+        pitch = -np.degrees(
+            np.arcsin(np.clip(forward[1], -1.0, 1.0))
+        )
+        yaw = np.degrees(np.arctan2(forward[0], forward[2]))
+        rotation = np.asarray([pitch, yaw, 0.0], dtype=float)
+        self.side_recording_camera.SetTransform(
+            position=position.tolist(),
+            rotation=rotation.tolist(),
+        )
+        self._env.step()
+        return {
+            "position": position.tolist(),
+            "rotation": rotation.tolist(),
+            "target": target.tolist(),
+            "view_axis": view_axis.tolist(),
+            "opening_span_axis": span.tolist(),
+            "distance_m": distance,
             "reverse": bool(reverse),
         }
 
@@ -1323,6 +1428,11 @@ class SockDressingEnv:
         self.sock_cloth.release_initial_tip_guidance()
         self._initial_tip_guidance_active = False
 
+    def rotate_grasped_opening_about_span(
+        self, delta_degrees: float
+    ) -> None:
+        self.sock_cloth.rotate_grasped_opening_about_span(delta_degrees)
+
     def arm_opening_body_barrier_predictive_skin(
         self, armed: bool = True
     ) -> None:
@@ -1523,6 +1633,11 @@ class SockDressingEnv:
             observation["recording_camera"] = self._capture_recording_camera()
         else:
             observation["recording_camera"] = None
+        observation["side_recording_camera"] = (
+            self._capture_side_recording_camera()
+            if self.side_recording_camera is not None
+            else None
+        )
         self._env.GetCurrentCollisionPairs()
         self._env.step()
         observation["collision_pairs"] = list(
@@ -1556,6 +1671,11 @@ class SockDressingEnv:
         recording = (
             self._capture_recording_camera()
             if self.recording_camera is not None
+            else None
+        )
+        side_recording = (
+            self._capture_side_recording_camera()
+            if self.side_recording_camera is not None
             else None
         )
         collision_pairs = sorted(
@@ -1609,6 +1729,7 @@ class SockDressingEnv:
             "cloth": cloth,
             "camera": camera,
             "recording_camera": recording,
+            "side_recording_camera": side_recording,
             "contact_force": contacts,
             "dressing_qa": dict(cloth.get("dressing_qa", {})),
             "collision_pairs": collision_pairs,
@@ -2759,6 +2880,19 @@ class SockDressingEnv:
         return {
             "rgb": self._decode(self.recording_camera.data["rgb"], "RGB"),
             "raw": dict(self.recording_camera.data),
+        }
+
+    def _capture_side_recording_camera(self) -> Dict[str, np.ndarray]:
+        camera = self.config["camera"]
+        width, height = int(camera["width"]), int(camera["height"])
+        fov = float(camera["fov"])
+        self.side_recording_camera.GetRGB(width, height, fov)
+        self._env.step()
+        return {
+            "rgb": self._decode(
+                self.side_recording_camera.data["rgb"], "RGB"
+            ),
+            "raw": dict(self.side_recording_camera.data),
         }
 
     def robot_signals(
