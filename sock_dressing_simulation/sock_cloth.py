@@ -108,6 +108,10 @@ class SceneGeometry:
     sock_tip_span_axis_offset_m: float = 0.0
     sock_tip_cross_axis_offset_m: float = 0.0
     sock_tip_opening_depth_m: float = 0.0
+    opening_body_barrier_violation_count: int = 0
+    opening_body_barrier_maximum_penetration_m: float = 0.0
+    opening_body_barrier_correction_count: int = 0
+    opening_body_barrier_maximum_applied_correction_m: float = 0.0
     left_grasp_thickness_axis: Tuple[float, float, float] = (1.0, 0.0, 0.0)
     right_grasp_thickness_axis: Tuple[float, float, float] = (1.0, 0.0, 0.0)
     left_grasp_inward_axis: Tuple[float, float, float] = (0.0, 0.0, 1.0)
@@ -247,6 +251,20 @@ class SceneGeometry:
         sock_tip_opening_depth = float(
             value.get("sock_tip_opening_depth_m", 0.0)
         )
+        barrier_violation_count = int(
+            value.get("opening_body_barrier_violation_count", 0)
+        )
+        barrier_maximum_penetration = float(
+            value.get("opening_body_barrier_maximum_penetration_m", 0.0)
+        )
+        barrier_correction_count = int(
+            value.get("opening_body_barrier_correction_count", 0)
+        )
+        barrier_maximum_applied_correction = float(
+            value.get(
+                "opening_body_barrier_maximum_applied_correction_m", 0.0
+            )
+        )
         if (
             not np.isfinite(distance)
             or distance < 0
@@ -305,6 +323,12 @@ class SceneGeometry:
             or not np.isfinite(sock_tip_span_axis_offset)
             or not np.isfinite(sock_tip_cross_axis_offset)
             or not np.isfinite(sock_tip_opening_depth)
+            or barrier_violation_count < 0
+            or not np.isfinite(barrier_maximum_penetration)
+            or barrier_maximum_penetration < 0
+            or barrier_correction_count < 0
+            or not np.isfinite(barrier_maximum_applied_correction)
+            or barrier_maximum_applied_correction < 0
         ):
             raise ValueError(
                 "scene distances and angles are invalid: "
@@ -378,6 +402,14 @@ class SceneGeometry:
             sock_tip_span_axis_offset_m=sock_tip_span_axis_offset,
             sock_tip_cross_axis_offset_m=sock_tip_cross_axis_offset,
             sock_tip_opening_depth_m=sock_tip_opening_depth,
+            opening_body_barrier_violation_count=barrier_violation_count,
+            opening_body_barrier_maximum_penetration_m=(
+                barrier_maximum_penetration
+            ),
+            opening_body_barrier_correction_count=barrier_correction_count,
+            opening_body_barrier_maximum_applied_correction_m=(
+                barrier_maximum_applied_correction
+            ),
             **vectors,
         )
 
@@ -678,6 +710,39 @@ class SockClothAttr:
             float(opening_rim_plane_stiffness),
             float(opening_rim_shape_stiffness),
             float(opening_rim_maximum_correction_m),
+        )
+
+    def configure_opening_body_barrier(
+        self,
+        *,
+        enabled: bool,
+        clearance_m: float,
+        stiffness: float,
+        maximum_correction_m: float,
+    ) -> None:
+        values = np.asarray(
+            [clearance_m, stiffness, maximum_correction_m], dtype=float
+        )
+        if (
+            not np.all(np.isfinite(values))
+            or clearance_m < 0
+            or not 0.0 <= stiffness <= 1.0
+            or maximum_correction_m <= 0
+        ):
+            raise ValueError("invalid opening body barrier configuration")
+        self._send_data(
+            "ConfigureOpeningBodyBarrier",
+            bool(enabled),
+            float(clearance_m),
+            float(stiffness),
+            float(maximum_correction_m),
+        )
+
+    def arm_opening_body_barrier_predictive_skin(
+        self, armed: bool = True
+    ) -> None:
+        self._send_data(
+            "ArmOpeningBodyBarrierPredictiveSkin", bool(armed)
         )
 
     def set_grasp_targets(self, left_id: int, right_id: int) -> None:

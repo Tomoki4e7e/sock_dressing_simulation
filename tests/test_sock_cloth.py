@@ -428,6 +428,16 @@ def test_reverse_270_close_profile_uses_equivalent_rotation_and_close_camera():
     assert config["obi"]["expected"]["bend_compliance"] == pytest.approx(0.03)
     assert config["obi"]["expected"]["self_collision"] is True
     assert config["obi"]["expected"]["strain_limit_iterations"] == 240
+    assert config["obi"]["expected"]["opening_body_barrier_enabled"] is True
+    assert config["obi"]["expected"][
+        "opening_body_barrier_clearance_m"
+    ] == pytest.approx(0.008)
+    assert config["obi"]["expected"][
+        "opening_body_barrier_stiffness"
+    ] == pytest.approx(1.0)
+    assert config["obi"]["expected"][
+        "opening_body_barrier_maximum_correction_m"
+    ] == pytest.approx(0.030)
     assert drape["consecutive_steps"] == 4
     assert drape["maximum_steps"] == 250
     assert config["inference"][
@@ -436,6 +446,9 @@ def test_reverse_270_close_profile_uses_equivalent_rotation_and_close_camera():
     assert config["inference"]["minimum_distal_response_fraction"] == pytest.approx(
         0.5
     )
+    assert config["inference"][
+        "maximum_opening_body_penetration_m"
+    ] == pytest.approx(0.0005)
     assert config["inference"]["mask_min_fraction"] == pytest.approx(0.00001)
     assert config["inference"]["mask_max_area_change"] == pytest.approx(1000.0)
     assert scene["recording_camera_position"] == pytest.approx(
@@ -793,6 +806,16 @@ def test_sock_geometry_reports_particle_derived_hanging_direction():
     assert "Vector3.Dot(footOffset, openingTargetNormal)" in source
     assert '"sock_body_direction", sockBodyDirection' in source
     assert '"sock_body_gravity_alignment", sockBodyGravityAlignment' in source
+    assert "private void EnforceOpeningBodyBarrier(bool resetMetrics = true)" in source
+    assert "private void UpdateOpeningBodyBarrierContacts()" in source
+    assert "private void RecordOpeningBodyBarrierState()" in source
+    assert "public void ArmOpeningBodyBarrierPredictiveSkin(" in source
+    assert "crossedFromInwardSide" in source
+    assert "IsInsideOpeningBarrierRectangle(" in source
+    assert source.count("initialTipGuidanceEnabled ||") >= 2
+    assert "EnforceOpeningBodyBarrier(false);" in source
+    assert '"opening_body_barrier_violation_count"' in source
+    assert '"opening_body_barrier_maximum_penetration_m"' in source
     assert "solver.positions[solverIndex] = aligned;" not in source
     assert "Vector3.Dot(point, axis)" in source
     assert "Physics.IgnoreCollision(robotCollider, humanCollider, true)" in source
@@ -847,6 +870,10 @@ def test_grasp_pins_small_inner_cuff_patches_and_leaves_rim_dynamic():
     assert "Mathf.Min(rawOpeningAxis.magnitude, slipOpeningSpan)" in source
     assert "grasp.target.TransformPoint(grasp.localOffsets[i])" in source
     assert "ApplyGraspCenterTranslation();" in source
+    translation = source.split(
+        "private void ApplyGraspCenterTranslation()", 1
+    )[1].split("private float[] RestDistancesFromOpening", 1)[0]
+    assert "solver.renderablePositions[solverIndex] +=" in translation
     assert "rest * stretchLimit" in source
     assert "? openingRimMaximumStretch" in source
     assert '"aligned_grasp_initialization"' in source
@@ -1009,6 +1036,13 @@ def test_sock_cloth_commands_match_unity_contract():
         cuff_insertion_depth_m=0.03,
         grasp_thickness_half_width_m=0.02,
     )
+    cloth.configure_opening_body_barrier(
+        enabled=True,
+        clearance_m=0.008,
+        stiffness=1.0,
+        maximum_correction_m=0.03,
+    )
+    cloth.arm_opening_body_barrier_predictive_skin()
     cloth.set_grasp_targets(2201, 2202)
     cloth.align_grasp_targets_to_opening()
     cloth.clamp_grasp_target_span(0.115)
@@ -1090,6 +1124,8 @@ def test_sock_cloth_commands_match_unity_contract():
             0.5,
             0.01,
         ),
+        (1200, "ConfigureOpeningBodyBarrier", True, 0.008, 1.0, 0.03),
+        (1200, "ArmOpeningBodyBarrierPredictiveSkin", True),
         (1200, "SetGraspTargets", 2201, 2202),
         (1200, "AlignGraspTargetsToOpening"),
         (1200, "ClampGraspTargetSpan", 0.115),

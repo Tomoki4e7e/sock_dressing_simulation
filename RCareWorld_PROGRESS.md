@@ -1242,6 +1242,40 @@ guidanceを解除する。先端のspan/cross/depth offsetをscene geometryへ�
     `task_success: false`
   - 動画: `demo.mp4`（1280x960、5 fps、250 frame、50秒）
 
+## 270度開口部の自己貫通防止（2026-09-29）
+
+青い開口矩形を描画だけでなく片側衝突障壁として扱い、開口リム以外の布粒子が
+内向き側から矩形面を横切った場合にのみ補正する。有限矩形への横方向進入を
+貫通と誤判定しないよう交差履歴を保持し、推論開始後は移動する把持目標に対して
+1粒子shell分の予測余裕を使用する。初期guidance中と下垂整定中は予測余裕を
+無効化し、初期形状および柔軟な鉛直下垂との競合を避けた。補正は構造伸び制約と
+反復し、補正後solver位置を描画・QA位置へ同期する。
+
+検証結果:
+
+- Development Player再build: pass
+- Python regression: `125 passed`
+- inference doctor・lint・`git diff --check`: pass
+- 80 step可視試験:
+  `artifacts/phase4/opening-reverse-270deg-opening-barrier-validation-80-postsolve/data_sock_sim_smoke/train/phase4_20260929T083923Z`
+  - 初期重力整合: `0.980691`
+  - 開口target alignment: `1.0`
+  - 初期stretch proxy: `1.399257`
+  - 全80 frameの開口部貫通: `0`
+- 実世界データ学習済みSAMDAMSARNN、seed 0、250 step完全自律試験:
+  `artifacts/phase4/opening-reverse-270deg-opening-barrier-final-250-postsolve/data_sock_sim_smoke/train/phase4_20260929T085346Z`
+  - 250 frame完走、停止理由: `max_steps`
+  - 初期重力整合: `0.963843`
+  - 開口・リムtarget alignment: `1.0`
+  - 初期stretch proxy: `1.401698`
+  - 全250 frameの開口部貫通: `0`
+  - 障壁補正あり: 209 frame、最大単回補正: `0.019717 m`
+  - distal response fraction: `0.368`（追従gateは不合格）
+  - stretch、追従、containment、cuff進行等の既存dressing gateが不合格のため
+    `task_success: false`
+  - 垂下待機動画: `tip_drape_settle.mp4`
+  - 推論動画: `demo.mp4`（1280x960、5 fps、250 frame、50秒）
+
 ## 逆向き270度開口・rest bend非依存の直線下垂（2026-09-28）
 
 累積逆向き270度の開口角とDry-AIREC側への下垂方向を維持したまま、

@@ -342,6 +342,20 @@ def run_demo(
                                 sort_keys=True,
                             )
                         )
+                arm_predictive_skin = getattr(
+                    environment,
+                    "arm_opening_body_barrier_predictive_skin",
+                    None,
+                )
+                if callable(arm_predictive_skin):
+                    arm_predictive_skin(True)
+                # The released tip settles before autonomous control starts.
+                # Use that post-settle state as the motion-following baseline;
+                # otherwise gravity-driven drape is incorrectly charged as
+                # grasp-follow error throughout the policy rollout.
+                cloth_following_baseline = _cloth_following_state(
+                    observation, config
+                )
                 Image.fromarray(
                     observation["camera"]["rgb"].astype("uint8"), "RGB"
                 ).save(episode / "prompt_frame.png")
@@ -739,6 +753,10 @@ def _save_opening_qa_snapshot(
             "sock_tip_span_axis_offset_m",
             "sock_tip_cross_axis_offset_m",
             "sock_tip_opening_depth_m",
+            "opening_body_barrier_violation_count",
+            "opening_body_barrier_maximum_penetration_m",
+            "opening_body_barrier_correction_count",
+            "opening_body_barrier_maximum_applied_correction_m",
             "plate_downward_alignment",
         )
     }
@@ -797,6 +815,18 @@ def _sock_tip_geometry_report(frame: int, geometry: Mapping) -> dict:
         ),
         "opening_ring_target_alignment": geometry.get(
             "opening_ring_target_alignment"
+        ),
+        "opening_body_barrier_violation_count": geometry.get(
+            "opening_body_barrier_violation_count"
+        ),
+        "opening_body_barrier_maximum_penetration_m": geometry.get(
+            "opening_body_barrier_maximum_penetration_m"
+        ),
+        "opening_body_barrier_correction_count": geometry.get(
+            "opening_body_barrier_correction_count"
+        ),
+        "opening_body_barrier_maximum_applied_correction_m": geometry.get(
+            "opening_body_barrier_maximum_applied_correction_m"
         ),
     }
 
@@ -865,6 +895,11 @@ def _tip_drape_sample(
     minimum_gravity_alignment = float(
         settings.get("minimum_sock_body_gravity_alignment", -1.0)
     )
+    maximum_barrier_penetration = float(
+        config["inference"].get(
+            "maximum_opening_body_penetration_m", float("inf")
+        )
+    )
     if (
         minimum_drop < 0
         or minimum_below_opening < 0
@@ -872,6 +907,7 @@ def _tip_drape_sample(
         or tip_radius_allowance < 0
         or maximum_rise < 0
         or not -1.0 <= minimum_gravity_alignment <= 1.0
+        or maximum_barrier_penetration < 0
         or minimum_cross > maximum_cross
         or minimum_depth > maximum_depth
         or opening_span <= 2 * span_margin
@@ -881,6 +917,16 @@ def _tip_drape_sample(
         gravity_alignment is not None
         and np.isfinite(float(gravity_alignment))
         and float(gravity_alignment) >= minimum_gravity_alignment
+    )
+    barrier_violation_count = int(
+        geometry.get("opening_body_barrier_violation_count", 0)
+    )
+    barrier_maximum_penetration = float(
+        geometry.get("opening_body_barrier_maximum_penetration_m", 0.0)
+    )
+    opening_body_penetration_ok = (
+        barrier_violation_count == 0
+        and barrier_maximum_penetration <= maximum_barrier_penetration
     )
     drop = float(release_y) - tip_y
     opening_center_y = tip.get("opening_center_world_y_m")
@@ -932,6 +978,8 @@ def _tip_drape_sample(
         ),
         "minimum_sock_body_gravity_alignment": minimum_gravity_alignment,
         "gravity_alignment_ok": gravity_alignment_ok,
+        "maximum_opening_body_penetration_m": maximum_barrier_penetration,
+        "opening_body_penetration_ok": opening_body_penetration_ok,
         "descending_ok": tip_y - float(previous_y) <= maximum_rise,
         "grasp_ok": bool(grasp.get("ok", False)),
         "rim_ok": rim_ok,
@@ -947,6 +995,7 @@ def _tip_drape_sample(
             "cross_ok",
             "depth_ok",
             "gravity_alignment_ok",
+            "opening_body_penetration_ok",
             "descending_ok",
             "grasp_ok",
             "rim_ok",
@@ -1151,11 +1200,37 @@ def _cloth_frame_report(
     minimum_direction_alignment = float(
         settings.get("minimum_distal_follow_direction_alignment", -1.0)
     )
+    geometry = observation.get("diagnostics", {}).get("scene_geometry", {})
+    barrier_enabled = bool(
+        obi_settings.get("opening_body_barrier_enabled", False)
+    )
+    barrier_violation_count = int(
+        geometry.get("opening_body_barrier_violation_count", 0)
+    )
+    barrier_maximum_penetration = float(
+        geometry.get("opening_body_barrier_maximum_penetration_m", 0.0)
+    )
+    maximum_barrier_penetration = float(
+        settings.get("maximum_opening_body_penetration_m", float("inf"))
+    )
+    opening_body_penetration_ok = (
+        not barrier_enabled
+        or (
+            barrier_violation_count == 0
+            and barrier_maximum_penetration <= maximum_barrier_penetration
+        )
+    )
     if baseline is None or current is None:
         return {
             "available": False,
             "ok": False,
             "stretch": stretch,
+            "opening_body_barrier_enabled": barrier_enabled,
+            "opening_body_barrier_violation_count": barrier_violation_count,
+            "opening_body_barrier_maximum_penetration_m": (
+                barrier_maximum_penetration
+            ),
+            "opening_body_penetration_ok": opening_body_penetration_ok,
             "maximum_distal_follow_error_m": maximum_error,
             "minimum_distal_follow_ratio": minimum_ratio,
         }
@@ -1215,7 +1290,11 @@ def _cloth_frame_report(
     )
     return {
         "available": True,
-        "ok": bool(stretch.get("passes", False)) and following_ok,
+        "ok": (
+            bool(stretch.get("passes", False))
+            and following_ok
+            and opening_body_penetration_ok
+        ),
         "stretch": stretch,
         "grasp_midpoint_displacement_m": grasp_displacement,
         "opening_center_displacement_m": float(np.linalg.norm(opening_delta)),
@@ -1232,6 +1311,21 @@ def _cloth_frame_report(
         "minimum_follow_displacement_m": minimum_displacement,
         "maximum_distal_follow_error_m": maximum_error,
         "minimum_distal_follow_ratio": minimum_ratio,
+        "opening_body_barrier_enabled": barrier_enabled,
+        "opening_body_barrier_violation_count": barrier_violation_count,
+        "opening_body_barrier_maximum_penetration_m": (
+            barrier_maximum_penetration
+        ),
+        "opening_body_barrier_correction_count": int(
+            geometry.get("opening_body_barrier_correction_count", 0)
+        ),
+        "opening_body_barrier_maximum_applied_correction_m": float(
+            geometry.get(
+                "opening_body_barrier_maximum_applied_correction_m", 0.0
+            )
+        ),
+        "maximum_opening_body_penetration_m": maximum_barrier_penetration,
+        "opening_body_penetration_ok": opening_body_penetration_ok,
     }
 
 
@@ -1307,10 +1401,24 @@ def _task_success(
         bool(response_samples)
         and distal_response_fraction >= minimum_response_fraction
     )
+    opening_body_barrier_required = bool(
+        obi_settings.get("opening_body_barrier_enabled", False)
+    )
+    opening_body_penetration_ok = (
+        not opening_body_barrier_required
+        or bool(
+            cloth_quality
+            and all(
+                item.get("opening_body_penetration_ok", False)
+                for item in cloth_quality
+            )
+        )
+    )
     if not continuous_cloth_required or not cloth_quality:
         continuous_stretch_ok = stretch_ok
         distal_follow_ok = True
         distal_response_ok = True
+        opening_body_penetration_ok = True
     grasp_quality = list(grasp_quality or ())
     continuous_grasp_required = (
         config["rcareworld"].get("profile") == "custom_player"
@@ -1545,6 +1653,7 @@ def _task_success(
         "initial_pose_ok": pose_ok,
         "final_stretch_ok": stretch_ok,
         "continuous_stretch_ok": continuous_stretch_ok,
+        "opening_body_penetration_ok": opening_body_penetration_ok,
         "distal_response_ok": distal_response_ok,
         "distal_follow_ok": distal_follow_ok,
         "foot_contact_ok": foot_contact_ok,
@@ -1661,6 +1770,24 @@ def _task_success(
         "cloth_qa": stretch,
         "stretch_ok": stretch_ok,
         "continuous_stretch_ok": continuous_stretch_ok,
+        "opening_body_penetration_ok": opening_body_penetration_ok,
+        "maximum_opening_body_penetration_m": max(
+            (
+                float(item["opening_body_barrier_maximum_penetration_m"])
+                for item in cloth_quality
+                if item.get("opening_body_barrier_maximum_penetration_m")
+                is not None
+            ),
+            default=None,
+        ),
+        "maximum_opening_body_barrier_violation_count": max(
+            (
+                int(item["opening_body_barrier_violation_count"])
+                for item in cloth_quality
+                if item.get("opening_body_barrier_violation_count") is not None
+            ),
+            default=None,
+        ),
         "distal_response_ok": distal_response_ok,
         "distal_response_fraction": distal_response_fraction,
         "minimum_distal_response_fraction": minimum_response_fraction,

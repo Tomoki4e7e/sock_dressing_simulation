@@ -322,6 +322,21 @@ class SockDressingEnv:
                 expected.get("opening_rim_maximum_correction_m", 0.01)
             ),
         )
+        self.sock_cloth.configure_opening_body_barrier(
+            enabled=bool(expected.get("opening_body_barrier_enabled", False)),
+            clearance_m=float(
+                expected.get(
+                    "opening_body_barrier_clearance_m",
+                    expected["particle_radius_m"],
+                )
+            ),
+            stiffness=float(
+                expected.get("opening_body_barrier_stiffness", 1.0)
+            ),
+            maximum_correction_m=float(
+                expected.get("opening_body_barrier_maximum_correction_m", 0.03)
+            ),
+        )
         self.sock_cloth.request_configuration()
         self.sock_cloth.request_registered_colliders()
         self._env.step()
@@ -1307,6 +1322,11 @@ class SockDressingEnv:
             return
         self.sock_cloth.release_initial_tip_guidance()
         self._initial_tip_guidance_active = False
+
+    def arm_opening_body_barrier_predictive_skin(
+        self, armed: bool = True
+    ) -> None:
+        self.sock_cloth.arm_opening_body_barrier_predictive_skin(armed)
 
     def _validate_simulator_joint_mapping(self) -> None:
         from .joints import JointMap

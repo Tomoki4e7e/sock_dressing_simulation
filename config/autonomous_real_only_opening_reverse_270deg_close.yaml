@@ -7,6 +7,10 @@ obi:
     bend_compliance: 0.03
     self_collision: true
     strain_limit_iterations: 240
+    opening_body_barrier_enabled: true
+    opening_body_barrier_clearance_m: 0.008
+    opening_body_barrier_stiffness: 1.0
+    opening_body_barrier_maximum_correction_m: 0.030
 
 scenario:
   sock:
@@ -65,3 +69,4 @@ inference:
     maximum_steps: 250
   minimum_distal_follow_direction_alignment: 0.0
   minimum_distal_response_fraction: 0.5
+  maximum_opening_body_penetration_m: 0.0005
