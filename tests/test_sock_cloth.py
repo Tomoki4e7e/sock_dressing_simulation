@@ -400,23 +400,44 @@ def test_reverse_270_close_profile_uses_equivalent_rotation_and_close_camera():
     assert pose["opening_ring_plate_alignment_min"] == pytest.approx(-0.02)
     assert pose["opening_target_normal_alignment_min"] == pytest.approx(0.98)
     assert pose["opening_ring_target_alignment_min"] == pytest.approx(0.98)
-    assert sock["rest_bend_degrees"] == pytest.approx(-105.0)
-    assert sock["rest_bend_azimuth_degrees"] == pytest.approx(180.0)
-    assert pose["sock_tip_target_span_axis_offset_m"] == pytest.approx(0.0)
-    assert pose["sock_tip_cross_axis_offset_min_m"] == pytest.approx(-0.080)
-    assert pose["sock_tip_target_cross_axis_offset_m"] == pytest.approx(-0.060)
-    assert pose["sock_tip_opening_depth_min_m"] == pytest.approx(0.010)
-    assert pose["sock_tip_opening_depth_max_m"] == pytest.approx(0.070)
-    assert pose["sock_tip_target_opening_depth_m"] == pytest.approx(0.040)
+    assert sock["rest_bend_start_m"] == pytest.approx(0.0)
+    assert sock["rest_bend_length_m"] == pytest.approx(0.0)
+    assert sock["rest_bend_degrees"] == pytest.approx(0.0)
+    assert sock["rest_bend_azimuth_degrees"] == pytest.approx(0.0)
+    assert pose["sock_tip_span_axis_offset_max_m"] == pytest.approx(0.060)
+    assert pose["sock_tip_target_span_axis_offset_m"] == pytest.approx(0.026)
+    assert pose["sock_tip_cross_axis_offset_min_m"] == pytest.approx(-0.250)
+    assert pose["sock_tip_cross_axis_offset_max_m"] == pytest.approx(-0.200)
+    assert pose["sock_tip_target_cross_axis_offset_m"] == pytest.approx(-0.229)
+    assert pose["sock_tip_guidance_weight_exponent"] == pytest.approx(0.10)
+    assert pose["sock_tip_opening_depth_min_m"] == pytest.approx(0.150)
+    assert pose["sock_tip_opening_depth_max_m"] == pytest.approx(0.200)
+    assert pose["sock_tip_target_opening_depth_m"] == pytest.approx(0.176)
     assert drape["enabled"]
     assert drape["coordinate_frame"] == "gravity_aligned"
-    assert drape["maximum_tip_cross_axis_offset_m"] == pytest.approx(-0.090)
-    assert drape["tip_radius_allowance_m"] == pytest.approx(0.035)
-    assert drape["minimum_tip_opening_depth_m"] == pytest.approx(-0.160)
-    assert config["obi"]["expected"]["damping"] == pytest.approx(0.55)
+    assert drape["require_tip_drop"] is False
+    assert drape["minimum_tip_drop_m"] == pytest.approx(0.0)
+    assert drape["minimum_tip_below_opening_m"] == pytest.approx(0.150)
+    assert drape["maximum_tip_cross_axis_offset_m"] == pytest.approx(-0.150)
+    assert drape["tip_radius_allowance_m"] == pytest.approx(0.050)
+    assert drape["minimum_tip_opening_depth_m"] == pytest.approx(-0.080)
+    assert drape["maximum_tip_opening_depth_m"] == pytest.approx(0.080)
+    assert drape["maximum_tip_rise_per_step_m"] == pytest.approx(0.010)
+    assert drape["minimum_sock_body_gravity_alignment"] == pytest.approx(0.8)
+    assert config["obi"]["expected"]["damping"] == pytest.approx(0.40)
+    assert config["obi"]["expected"]["bend_compliance"] == pytest.approx(0.03)
+    assert config["obi"]["expected"]["self_collision"] is True
     assert config["obi"]["expected"]["strain_limit_iterations"] == 240
-    assert drape["maximum_steps"] == 60
+    assert drape["consecutive_steps"] == 4
+    assert drape["maximum_steps"] == 250
+    assert config["inference"][
+        "minimum_distal_follow_direction_alignment"
+    ] == pytest.approx(0.0)
+    assert config["inference"]["minimum_distal_response_fraction"] == pytest.approx(
+        0.5
+    )
     assert config["inference"]["mask_min_fraction"] == pytest.approx(0.00001)
+    assert config["inference"]["mask_max_area_change"] == pytest.approx(1000.0)
     assert scene["recording_camera_position"] == pytest.approx(
         [-0.75, 0.73, -0.10]
     )
@@ -760,6 +781,7 @@ def test_sock_geometry_reports_particle_derived_hanging_direction():
     assert "private Vector3 SockTipCenter()" in source
     assert "maximumDistance - distances[i] <= distalTolerance" in source
     assert "public void ConfigureInitialTipGuidance(" in source
+    assert "Mathf.Pow(weight, initialTipGuidanceWeightExponent)" in source
     assert "private void EnforceInitialTipGuidance()" in source
     assert "public void ReleaseInitialTipGuidance()" in source
     assert "targetMidpoint - toeTarget" in source
@@ -1088,6 +1110,7 @@ def test_sock_cloth_commands_match_unity_contract():
             0.142,
             0.091,
             0.015,
+            1.0,
         ),
         (1200, "ReleaseInitialTipGuidance"),
         (1200, "IgnoreRobotHumanRigidCollisions", 1100),

@@ -154,6 +154,7 @@ def _tip_drape_observation(
                 "opening_ring_area_retention": 0.95,
                 "opening_target_normal_alignment": 1.0,
                 "opening_ring_target_alignment": 1.0,
+                "sock_body_gravity_alignment": 0.95,
             },
         },
         "dressing_qa": _passing_dressing_qa(),
@@ -205,6 +206,7 @@ def test_tip_drape_sample_requires_drop_centered_span_and_physics_qa(monkeypatch
     assert sample["stretch_ok"]
     assert sample["cross_ok"]
     assert sample["depth_ok"]
+    assert sample["gravity_alignment_ok"]
 
     outside = _tip_drape_sample(
         5,
@@ -255,6 +257,7 @@ def test_tip_drape_sample_can_use_gravity_aligned_frame(monkeypatch):
     assert sample["sock_tip_span_axis_offset_m"] == pytest.approx(0.0)
     assert sample["sock_tip_cross_axis_offset_m"] == pytest.approx(-0.20)
     assert sample["sock_tip_opening_depth_m"] == pytest.approx(0.0)
+    assert sample["sock_body_gravity_alignment"] == pytest.approx(0.95)
 
 
 def test_demo_waits_for_tip_drape_before_policy_inference(tmp_path, monkeypatch):
@@ -546,8 +549,11 @@ def test_cloth_frame_report_rejects_distal_end_that_does_not_follow_grasps():
     )
 
     assert following["following_ok"]
+    assert following["responding_ok"]
     assert following["distal_follow_ratio"] == pytest.approx(0.9)
+    assert following["distal_follow_direction_alignment"] == pytest.approx(1.0)
     assert not collapsed["following_ok"]
+    assert not collapsed["responding_ok"]
     assert collapsed["distal_follow_ratio"] == 0.0
     assert anchored_on_foot["following_ok"]
     assert anchored_on_foot["foot_contact_allows_distal_anchoring"]
@@ -637,6 +643,7 @@ def test_task_success_requires_observed_foot_contact(monkeypatch):
                         "maximum": [0.1, 0.1, 0.2],
                     },
                 },
+                "responding_ok": True,
                 "following_ok": True,
             }
         ],
@@ -779,6 +786,7 @@ def test_task_success_rejects_invalid_final_dressing_state(
                         "maximum": [0.1, 0.1, 0.2],
                     },
                 },
+                "responding_ok": True,
                 "following_ok": True,
             }
         ],

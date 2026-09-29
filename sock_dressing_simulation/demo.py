@@ -842,6 +842,7 @@ def _tip_drape_sample(
     span_offset = float(span_offset)
     opening_span = float(opening_span)
     minimum_drop = float(settings.get("minimum_tip_drop_m", 0.05))
+    require_drop = bool(settings.get("require_tip_drop", True))
     minimum_below_opening = float(
         settings.get("minimum_tip_below_opening_m", 0.0)
     )
@@ -860,17 +861,27 @@ def _tip_drape_sample(
     maximum_depth = float(
         settings.get("maximum_tip_opening_depth_m", float("inf"))
     )
+    gravity_alignment = geometry.get("sock_body_gravity_alignment")
+    minimum_gravity_alignment = float(
+        settings.get("minimum_sock_body_gravity_alignment", -1.0)
+    )
     if (
         minimum_drop < 0
         or minimum_below_opening < 0
         or span_margin < 0
         or tip_radius_allowance < 0
         or maximum_rise < 0
+        or not -1.0 <= minimum_gravity_alignment <= 1.0
         or minimum_cross > maximum_cross
         or minimum_depth > maximum_depth
         or opening_span <= 2 * span_margin
     ):
         raise ValueError("invalid tip drape wait geometry thresholds")
+    gravity_alignment_ok = (
+        gravity_alignment is not None
+        and np.isfinite(float(gravity_alignment))
+        and float(gravity_alignment) >= minimum_gravity_alignment
+    )
     drop = float(release_y) - tip_y
     opening_center_y = tip.get("opening_center_world_y_m")
     if opening_center_y is None or not np.isfinite(float(opening_center_y)):
@@ -907,11 +918,20 @@ def _tip_drape_sample(
         "opening_span_m": opening_span,
         "coordinate_frame": coordinate_frame,
         "span_limit_m": span_limit,
-        "drop_ok": drop >= minimum_drop,
+        "drop_ok": not require_drop or drop >= minimum_drop,
+        "tip_drop_required": require_drop,
         "below_opening_ok": below_opening >= minimum_below_opening,
         "span_ok": abs(span_offset) <= span_limit,
         "cross_ok": minimum_cross <= float(cross_offset) <= maximum_cross,
         "depth_ok": minimum_depth <= float(opening_depth) <= maximum_depth,
+        "sock_body_gravity_alignment": (
+            float(gravity_alignment)
+            if gravity_alignment is not None
+            and np.isfinite(float(gravity_alignment))
+            else None
+        ),
+        "minimum_sock_body_gravity_alignment": minimum_gravity_alignment,
+        "gravity_alignment_ok": gravity_alignment_ok,
         "descending_ok": tip_y - float(previous_y) <= maximum_rise,
         "grasp_ok": bool(grasp.get("ok", False)),
         "rim_ok": rim_ok,
@@ -926,6 +946,7 @@ def _tip_drape_sample(
             "span_ok",
             "cross_ok",
             "depth_ok",
+            "gravity_alignment_ok",
             "descending_ok",
             "grasp_ok",
             "rim_ok",
@@ -1127,6 +1148,9 @@ def _cloth_frame_report(
     minimum_ratio = float(
         settings.get("minimum_distal_follow_ratio", 0.5)
     )
+    minimum_direction_alignment = float(
+        settings.get("minimum_distal_follow_direction_alignment", -1.0)
+    )
     if baseline is None or current is None:
         return {
             "available": False,
@@ -1158,19 +1182,35 @@ def _cloth_frame_report(
         if follow_displacement >= minimum_displacement
         else None
     )
+    follow_direction_alignment = (
+        float(np.dot(toe_delta, follow_reference))
+        / (toe_displacement * follow_displacement)
+        if follow_displacement >= minimum_displacement
+        and toe_displacement > 1e-8
+        else None
+    )
     foot_contact = any(
         2101 <= int(item.get("collider_id", -1)) <= 2105
         for item in observation.get("contact_force", ())
     )
-    following_ok = (
+    responding_ok = (
         True
         if follow_ratio is None
         else (
             foot_contact
             or (
-                follow_error <= maximum_error
-                and follow_ratio >= minimum_ratio
+                follow_ratio >= minimum_ratio
+                and follow_direction_alignment is not None
+                and follow_direction_alignment >= minimum_direction_alignment
             )
+        )
+    )
+    following_ok = (
+        responding_ok
+        and (
+            follow_ratio is None
+            or foot_contact
+            or follow_error <= maximum_error
         )
     )
     return {
@@ -1182,6 +1222,11 @@ def _cloth_frame_report(
         "toe_center_displacement_m": toe_displacement,
         "distal_follow_error_m": follow_error,
         "distal_follow_ratio": follow_ratio,
+        "distal_follow_direction_alignment": follow_direction_alignment,
+        "minimum_distal_follow_direction_alignment": (
+            minimum_direction_alignment
+        ),
+        "responding_ok": responding_ok,
         "following_ok": following_ok,
         "foot_contact_allows_distal_anchoring": foot_contact,
         "minimum_follow_displacement_m": minimum_displacement,
@@ -1246,9 +1291,26 @@ def _task_success(
         cloth_quality
         and all(item.get("following_ok", False) for item in cloth_quality)
     )
+    response_samples = [
+        item for item in cloth_quality if item.get("responding_ok") is not None
+    ]
+    distal_response_fraction = (
+        sum(bool(item["responding_ok"]) for item in response_samples)
+        / len(response_samples)
+        if response_samples
+        else 0.0
+    )
+    minimum_response_fraction = float(
+        config["inference"].get("minimum_distal_response_fraction", 0.5)
+    )
+    distal_response_ok = (
+        bool(response_samples)
+        and distal_response_fraction >= minimum_response_fraction
+    )
     if not continuous_cloth_required or not cloth_quality:
         continuous_stretch_ok = stretch_ok
         distal_follow_ok = True
+        distal_response_ok = True
     grasp_quality = list(grasp_quality or ())
     continuous_grasp_required = (
         config["rcareworld"].get("profile") == "custom_player"
@@ -1483,6 +1545,7 @@ def _task_success(
         "initial_pose_ok": pose_ok,
         "final_stretch_ok": stretch_ok,
         "continuous_stretch_ok": continuous_stretch_ok,
+        "distal_response_ok": distal_response_ok,
         "distal_follow_ok": distal_follow_ok,
         "foot_contact_ok": foot_contact_ok,
         "rigid_collision_ok": rigid_collision_ok,
@@ -1598,6 +1661,9 @@ def _task_success(
         "cloth_qa": stretch,
         "stretch_ok": stretch_ok,
         "continuous_stretch_ok": continuous_stretch_ok,
+        "distal_response_ok": distal_response_ok,
+        "distal_response_fraction": distal_response_fraction,
+        "minimum_distal_response_fraction": minimum_response_fraction,
         "distal_follow_ok": distal_follow_ok,
         "maximum_distal_follow_error_m": max(
             (

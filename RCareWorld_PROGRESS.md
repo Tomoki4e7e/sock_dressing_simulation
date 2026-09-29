@@ -1082,6 +1082,48 @@ camera内で小さく見えるsock maskはrenderer完全一致を条件に最小
   - 完全自律推論動画: `demo.mp4`
     （1280x960、5 fps、250 frame、50秒）
 
+## 逆向き270度開口・鉛直下垂と把持追従（2026-09-29）
+
+右向きの初期preloadを除去し、rest bendなしの直線meshが開口部から重力方向へ
+自然に垂れるよう、tip targetを開口frameのspan `+0.026 m`、cross
+`-0.229 m`、depth `+0.176 m`へ変更した。これは約`0.29 m`のworld-down
+vectorに対応する。guidance weight exponentは`0.10`、Obi dampingは`0.40`、
+bend complianceは`0.03`とし、永久的な形状拘束は追加していない。
+
+下垂gateには`minimum_sock_body_gravity_alignment: 0.8`と4連続step判定を追加した。
+把持端の移動に対する先端変位率と移動方向alignmentもframeごとに記録し、全frameの
+50%以上が応答すれば合格する`distal_response_ok`を追加した。柔軟な布の位相遅れを
+許容しつつ、先端がworld-spaceに静止する異常を検出する。
+
+検証結果:
+
+- Python regression: `125 passed`
+- inference doctor・lint・`git diff --check`: pass
+- 20 frame描画確認:
+  `artifacts/phase4/opening-reverse-270deg-vertical-dynamics-accepted-validation-20/data_sock_sim_smoke/train/phase4_20260928T180859Z`
+  - 初期靴下軸―重力alignment: `0.996505`
+  - 20 frame中18 frameで把持端への動的応答が合格
+  - 開口―板法線alignment: `-0.000004`（`cos 270度`）
+- 実世界データ学習済みSAMDAMSARNN、seed 0、250 frame完全自律試験:
+  `artifacts/phase4/opening-reverse-270deg-vertical-dynamics-final-250-retry/data_sock_sim_smoke/train/phase4_20260928T183636Z`
+  - guidance解除後10同期step（`0.20秒`）で4連続gate通過
+  - gate時靴下軸―重力alignment: `0.985090`
+  - gate時offset: span `0.008000 m`、cross `-0.278348 m`、
+    depth `0.042994 m`
+  - gate時stretch proxy: `1.396510`（上限`1.5`）
+  - 把持端への動的応答合格率: `0.856`、`distal_response_ok: true`
+  - 最大distal follow error: `0.178855 m`
+    （旧設定の約`0.41 m`から改善）
+  - 開口―板法線alignment: `-0.000004`、target/rim alignment: `1.0`
+  - SAMDAMSARNN推論を250 frame完走、`stop_reason=max_steps`、
+    reference action blend: `0.0`
+  - 連続stretch、厳格なdistal follow、foot contact、最終containment、
+    cuff進行が不合格のため`task_success: false`
+  - 垂下待機動画: `tip_drape_settle.mp4`
+    （1280x960、50 fps、10 frame、0.20秒）
+  - 完全自律推論動画: `demo.mp4`
+    （1280x960、5 fps、250 frame、50秒）
+
 ## 逆向き270度開口・近接俯瞰カメラ（2026-09-28）
 
 累積逆向き90度から同じspan軸方向へさらに180度進め、累積逆向き270度とした。
@@ -1199,6 +1241,46 @@ guidanceを解除する。先端のspan/cross/depth offsetをscene geometryへ�
   - stretch、containment、cuff進行、cloth―foot侵入条件が不合格のため
     `task_success: false`
   - 動画: `demo.mp4`（1280x960、5 fps、250 frame、50秒）
+
+## 逆向き270度開口・rest bend非依存の直線下垂（2026-09-28）
+
+累積逆向き270度の開口角とDry-AIREC側への下垂方向を維持したまま、
+`rest_bend_start_m`、`rest_bend_length_m`、`rest_bend_degrees`、
+`rest_bend_azimuth_degrees`をすべて`0`にした。初期guidanceはspan
+`+0.255 m`、cross `-0.060 m`、depth `+0.041 m`とし、weight exponent
+`0.05`で直線rest meshの大部分をほぼ剛体的に初期回転してから推論前に解除する。
+Obi dampingは`0.55`、bend complianceは`0.01`、strain limit iterationsは
+`240`を採用した。
+
+検証結果:
+
+- Development Player再build: pass
+- Python regression: `125 passed`
+- inference doctor・lint・`git diff --check`: pass
+- 20 frame描画確認:
+  `artifacts/phase4/opening-reverse-270deg-straight-accepted-v3-validation-20/data_sock_sim_smoke/train/phase4_20260928T153811Z`
+  - 基準mask: 角度`-0.1497度`、elongation `5.0931`、
+    straightness `0.1103`
+  - 採用mask: 角度`-0.4809度`、elongation `3.7166`、
+    straightness `0.1264`
+- 実世界データ学習済みSAMDAMSARNN、seed 0、250 frame完全自律試験:
+  `artifacts/phase4/opening-reverse-270deg-straight-final-250/data_sock_sim_smoke/train/phase4_20260928T154323Z`
+  - 初期mask: 角度`0.9484度`、elongation `3.5136`、
+    straightness `0.1299`（採用条件を満たす）
+  - guidance解除後2同期step（`0.04秒`）でgate通過
+  - gate時先端下降量: `0.043063 m`
+  - gate時offset: span `0.227727 m`、cross `-0.120157 m`、
+    depth `0.002692 m`
+  - gate時stretch proxy: `1.402683`（上限`1.5`）
+  - 開口―板法線alignment: `-0.000004`（`cos 270度`）
+  - 開口―回転target alignment、リム―回転target alignment: `1.0`
+  - SAMDAMSARNN推論を250 frame完走、`stop_reason=max_steps`、
+    reference action blend: `0.0`
+  - 着衣成功条件は未達のため`task_success: false`
+  - 垂下待機動画: `tip_drape_settle.mp4`
+    （1280x960、50 fps、2 frame、0.04秒）
+  - 完全自律推論動画: `demo.mp4`
+    （1280x960、5 fps、250 frame、50秒）
 
 ## 逆向き60度開口の重力垂下ゲート（2026-09-27）
 

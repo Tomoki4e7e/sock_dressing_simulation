@@ -955,6 +955,12 @@ class SockDressingEnv:
                                 0.02,
                             )
                         ),
+                        float(
+                            pose_settings.get(
+                                "sock_tip_guidance_weight_exponent",
+                                1.0,
+                            )
+                        ),
                     )
                     self._initial_tip_guidance_active = True
                 self.sock_cloth.request_grasp_state()

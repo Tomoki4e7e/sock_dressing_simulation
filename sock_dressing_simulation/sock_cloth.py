@@ -742,6 +742,7 @@ class SockClothAttr:
         cross_axis_offset_m: float,
         opening_depth_m: float,
         maximum_correction_m: float,
+        guidance_weight_exponent: float = 1.0,
     ) -> None:
         values = np.asarray(
             (
@@ -749,12 +750,18 @@ class SockClothAttr:
                 cross_axis_offset_m,
                 opening_depth_m,
                 maximum_correction_m,
+                guidance_weight_exponent,
             ),
             dtype=float,
         )
-        if not np.all(np.isfinite(values)) or values[3] <= 0:
+        if (
+            not np.all(np.isfinite(values))
+            or values[3] <= 0
+            or values[4] <= 0
+        ):
             raise ValueError(
-                "initial tip guidance values must be finite with positive correction"
+                "initial tip guidance values must be finite with positive "
+                "correction and weight exponent"
             )
         self._send_data("ConfigureInitialTipGuidance", *values.tolist())
 
