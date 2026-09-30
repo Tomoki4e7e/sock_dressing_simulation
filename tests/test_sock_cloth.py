@@ -647,7 +647,7 @@ def test_front_right_camera_profile_preserves_autonomous_drape_contract():
         scene["camera_parent_link"]
         == "head/see3cam_left/camera_color_frame"
     )
-    assert scene["camera_local_position"] == pytest.approx([0.0, 0.0, 0.0])
+    assert scene["camera_local_position"] == pytest.approx([0.0, 0.0, 0.1])
     assert scene["camera_local_rotation"] == pytest.approx([40.0, 0.0, 0.0])
     assert config["inference"]["record_inference_camera_video"]
     assert pose["down_m"] is None

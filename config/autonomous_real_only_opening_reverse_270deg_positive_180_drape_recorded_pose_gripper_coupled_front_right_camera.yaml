@@ -5,7 +5,9 @@ extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_recorded
 # That physical eye is the robot-centric left See3CAM link.
 scene:
   camera_parent_link: "head/see3cam_left/camera_color_frame"
-  camera_local_position: [0.0, 0.0, 0.0]
+  # Move 10 cm along the camera optical axis so the grippers and toe have
+  # approximately the same image scale as the real camera-right reference.
+  camera_local_position: [0.0, 0.0, 0.1]
   # The original +20-degree pitch left the post-drape sock about 207 pixels
   # below the real camera-right reference. The additional downward pitch
   # centers the same physical scene without changing its pose.
