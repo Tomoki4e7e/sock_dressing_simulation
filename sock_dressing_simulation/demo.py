@@ -1148,6 +1148,8 @@ def _tip_drape_sample(
     grasp = _grasp_frame_report(observation, config)
     cloth = _cloth_frame_report(observation, config, baseline=None)
     stretch = cloth.get("stretch", {})
+    stretch_required = bool(settings.get("require_stretch", True))
+    stretch_ok = bool(stretch.get("passes", False))
     pose = config["scene"].get("initial_pose_contract", {})
     rim_alignment = tip.get("opening_ring_target_alignment")
     rim_sag = tip.get("opening_ring_maximum_sag_m")
@@ -1192,7 +1194,9 @@ def _tip_drape_sample(
         "descending_ok": tip_y - float(previous_y) <= maximum_rise,
         "grasp_ok": bool(grasp.get("ok", False)),
         "rim_ok": rim_ok,
-        "stretch_ok": bool(stretch.get("passes", False)),
+        "stretch_required": stretch_required,
+        "stretch_ok": stretch_ok,
+        "stretch_gate_ok": not stretch_required or stretch_ok,
         "stretch": stretch,
     }
     sample["ok"] = all(
@@ -1208,7 +1212,7 @@ def _tip_drape_sample(
             "descending_ok",
             "grasp_ok",
             "rim_ok",
-            "stretch_ok",
+            "stretch_gate_ok",
         )
     )
     return sample

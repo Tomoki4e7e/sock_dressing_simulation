@@ -228,6 +228,35 @@ def test_tip_drape_sample_requires_drop_centered_span_and_physics_qa(monkeypatch
     assert not outside["depth_ok"]
 
 
+def test_tip_drape_sample_can_report_stretch_without_gating(monkeypatch):
+    config = load_config(
+        Path("config/autonomous_real_only_plate_normal_taut_rim.yaml")
+    )
+    settings = dict(config["inference"]["tip_drape_wait"])
+    settings["require_stretch"] = False
+    monkeypatch.setattr(
+        SockDressingEnv,
+        "cloth_radius_qa",
+        staticmethod(lambda *args, **kwargs: {"passes": False}),
+    )
+
+    sample = _tip_drape_sample(
+        4,
+        _tip_drape_observation(
+            tip_y=0.45, span_offset=0.06, opening_y=0.50
+        ),
+        config,
+        release_y=0.52,
+        previous_y=0.46,
+        settings=settings,
+    )
+
+    assert sample["ok"]
+    assert not sample["stretch_required"]
+    assert not sample["stretch_ok"]
+    assert sample["stretch_gate_ok"]
+
+
 def test_tip_drape_sample_can_use_gravity_aligned_frame(monkeypatch):
     config = load_config(Path("config/autonomous_real_only_plate_normal_taut_rim.yaml"))
     settings = dict(config["inference"]["tip_drape_wait"])

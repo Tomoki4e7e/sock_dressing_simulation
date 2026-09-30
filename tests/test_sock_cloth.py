@@ -586,6 +586,51 @@ def test_reverse_270_gripper_coupled_preserves_opening_and_drape_contract():
     assert pre_drape["settle_steps"] == 250
 
 
+def test_reverse_270_recorded_pose_gripper_coupled_contract():
+    config = load_config(
+        Path(
+            "config/autonomous_real_only_opening_reverse_270deg_"
+            "positive_180_drape_recorded_pose_gripper_coupled.yaml"
+        )
+    )
+    foot = config["scenario"]["foot"]
+    pose = config["scene"]["initial_pose_contract"]
+    baseline = pose["locked_pose_baseline"]
+    pre_drape = config["inference"]["pre_inference_drape"]
+
+    assert pose["down_m"] is None
+    assert pose["enforce"] is False
+    assert pose["right_toe_offset_world_m"] == [0.0, 0.0, 0.0]
+    assert pose["locked_pose_tolerance_m"] == pytest.approx(0.002)
+    assert baseline["human_root_position"] == pytest.approx(
+        [0.0599999987, 1.4800000191, -0.7200000286]
+    )
+    assert baseline["chair_position"] == pytest.approx(
+        [-0.0735720247, 0.4527513087, -0.3992611766]
+    )
+    assert baseline["human_anchor_position"] == pytest.approx(
+        [-0.0735720247, 0.7027513087, -0.3992611766]
+    )
+    assert baseline["right_toe_position"] == pytest.approx(
+        [-0.1332971752, 0.4642206430, 0.5865817070]
+    )
+    assert foot["plantarflexion_degrees"] == pytest.approx(20.0)
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(90.0)
+    assert not pose["opening_rotation_away_from_toe"]
+    assert pre_drape["enabled"]
+    assert pre_drape["rotation_degrees"] == pytest.approx(180.0)
+    assert pre_drape["rotation_steps"] == 180
+    assert pre_drape["settle_steps"] == 250
+    assert config["inference"]["tip_drape_wait"]["enabled"]
+    assert not config["inference"]["tip_drape_wait"]["require_stretch"]
+    assert config["inference"]["physics_steps_per_action"] == 20
+    assert config["inference"]["reference_actions"] is None
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+    assert config["joints"]["max_delta"] == pytest.approx(
+        [0.005] * 8 + [0.0025] + [0.005] * 8 + [0.0025]
+    )
+
+
 def test_reverse_150_close_profile_advances_rotation_and_preserves_camera():
     config = load_config(
         Path("config/autonomous_real_only_opening_reverse_150deg_close.yaml")
@@ -672,6 +717,35 @@ def test_human_chair_locked_profile_restores_recorded_world_coordinates():
         [-0.1310119629, 0.5210645795, 0.6446849108]
     )
     assert pose["right_toe_offset_world_m"] == [0.05, -0.05, 0.0]
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+
+
+def test_toe_left_down_recorded_pose_profile_restores_world_coordinates():
+    config = load_config(
+        Path(
+            "config/"
+            "autonomous_real_only_toe_left_down_recorded_pose.yaml"
+        )
+    )
+    pose = config["scene"]["initial_pose_contract"]
+    baseline = pose["locked_pose_baseline"]
+
+    assert baseline["human_root_position"] == pytest.approx(
+        [0.0599999987, 1.4800000191, -0.7200000286]
+    )
+    assert baseline["chair_position"] == pytest.approx(
+        [-0.0735720247, 0.4527513087, -0.3992611766]
+    )
+    assert baseline["human_anchor_position"] == pytest.approx(
+        [-0.0735720247, 0.7027513087, -0.3992611766]
+    )
+    assert baseline["right_toe_position"] == pytest.approx(
+        [-0.1332971752, 0.4642206430, 0.5865817070]
+    )
+    assert pose["enforce"] is False
+    assert pose["locked_pose_tolerance_m"] == pytest.approx(0.002)
+    assert pose["right_toe_offset_world_m"] == [0.05, -0.05, 0.0]
+    assert config["inference"]["reference_actions"] is None
     assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
 
 
