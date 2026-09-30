@@ -43,6 +43,9 @@ scene:
   human_position: [0.06, 1.48, -0.72]
   sock_position: [-0.14, 0.53, 0.68]
   sock_rotation: [0.0, 0.0, 0.0]
+  # ID 2099 renders a right-lower-leg/foot subset of the canonical skinned
+  # human mesh. Keep it separate from the physical contact proxies below.
+  human_leg_mask_ids: [2099]
   human_foot_collider_ids: [2101, 2102, 2103, 2104, 2105]
   contact_proxy_ids: [2101, 2102, 2103, 2104, 2105, 2201, 2202, 2301]
   enable_human_obi_collider: true

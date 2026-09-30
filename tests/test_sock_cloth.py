@@ -647,8 +647,8 @@ def test_front_right_camera_profile_preserves_autonomous_drape_contract():
         scene["camera_parent_link"]
         == "head/see3cam_left/camera_color_frame"
     )
-    assert scene["camera_local_position"] == pytest.approx([0.0, 0.0, 0.1])
-    assert scene["camera_local_rotation"] == pytest.approx([40.0, 0.0, 0.0])
+    assert scene["camera_local_position"] == pytest.approx([0.0, -0.04, 0.1])
+    assert scene["camera_local_rotation"] == pytest.approx([60.0, 0.0, 0.0])
     assert config["inference"]["record_inference_camera_video"]
     assert pose["down_m"] is None
     assert pose["locked_pose_baseline"]["chair_position"] == pytest.approx(
@@ -1144,6 +1144,30 @@ def test_right_leg_colliders_follow_actual_bones():
     assert "toe + new Vector3(0, 0, -0.15f)" not in source
     assert "configuredFootColliderCrossSectionScale" in source
     assert "ScaleFootCrossSection" in source
+
+
+def test_right_leg_mask_uses_canonical_skin_without_changing_box_colliders():
+    source = Path(
+        "RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs"
+    ).read_text()
+    create_region = source[
+        source.index("private void CreateRegion("):
+        source.index("private float ReadParticleRadius()")
+    ]
+    config = load_config(Path("config/custom_player.yaml"))
+
+    assert "BoxCollider box = item.AddComponent<BoxCollider>();" in create_region
+    assert "obiCollider.sourceCollider = box;" in create_region
+    assert "EnsureRightLegMaskRenderer();" in source
+    assert "BuildRightLegMaskMesh(" in create_region
+    assert "source.boneWeights" in create_region
+    assert "bones[index].IsChildOf(rightLowerLeg)" in create_region
+    assert "SkinnedMeshRenderer renderer" in create_region
+    assert "renderer.bones = source.bones;" in create_region
+    assert "renderer.rootBone = source.rootBone;" in create_region
+    assert "attr.ID = RightLegMaskId;" in create_region
+    assert "CreateRoundedMaskProxy" not in source
+    assert config["scene"]["human_leg_mask_ids"] == [2099]
 
 
 def test_human_task_pose_preserves_rig_bone_lengths():

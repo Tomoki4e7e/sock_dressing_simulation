@@ -2852,13 +2852,18 @@ class SockDressingEnv:
         sock_mask = self._amodal_mask(
             int(self.config["assets"]["sock_id"]), width, height, fov
         )
-        foot_ids = [
-            int(value) for value in scene.get("human_foot_collider_ids", [])
+        leg_mask_ids = [
+            int(value) for value in scene.get("human_leg_mask_ids", [])
         ]
-        if not foot_ids and scene.get("human_id") is not None:
-            foot_ids = [int(scene["human_id"])]
+        if not leg_mask_ids:
+            leg_mask_ids = [
+                int(value)
+                for value in scene.get("human_foot_collider_ids", [])
+            ]
+        if not leg_mask_ids and scene.get("human_id") is not None:
+            leg_mask_ids = [int(scene["human_id"])]
         leg_mask = np.zeros((height, width), dtype=bool)
-        for target_id in foot_ids:
+        for target_id in leg_mask_ids:
             leg_mask |= self._amodal_mask(target_id, width, height, fov)
         return {
             "rgb": rgb,
@@ -2867,7 +2872,10 @@ class SockDressingEnv:
             "leg_mask": leg_mask,
             "instance_mask": instance_mask,
             "simulation_frame": dict(self._env.data).get("frame"),
-            "leg_mask_is_whole_human_proxy": not bool(scene.get("human_foot_collider_ids")),
+            "leg_mask_is_whole_human_proxy": not bool(
+                scene.get("human_leg_mask_ids")
+                or scene.get("human_foot_collider_ids")
+            ),
             "raw": dict(self.camera.data),
         }
 
