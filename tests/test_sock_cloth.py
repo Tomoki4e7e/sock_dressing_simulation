@@ -661,6 +661,29 @@ def test_front_right_camera_profile_preserves_autonomous_drape_contract():
     assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
 
 
+def test_wide_opening_profile_expands_span_within_safety_limit():
+    config = load_config(
+        Path(
+            "config/autonomous_real_only_opening_reverse_270deg_"
+            "positive_180_drape_recorded_pose_gripper_coupled_"
+            "front_right_camera_wide_opening.yaml"
+        )
+    )
+    scene = config["scene"]
+
+    assert scene["grasp_alignment"]["target_span_m"] == pytest.approx(0.115)
+    assert config["obi"]["expected"]["slip_opening_span_m"] == pytest.approx(
+        0.115
+    )
+    assert scene["initial_pose_contract"][
+        "maximum_opening_span_m"
+    ] == pytest.approx(0.12)
+    assert scene["grasp_alignment"]["target_span_m"] < scene[
+        "initial_pose_contract"
+    ]["maximum_opening_span_m"]
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+
+
 def test_reverse_150_close_profile_advances_rotation_and_preserves_camera():
     config = load_config(
         Path("config/autonomous_real_only_opening_reverse_150deg_close.yaml")
