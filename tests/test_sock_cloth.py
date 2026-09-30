@@ -631,6 +631,36 @@ def test_reverse_270_recorded_pose_gripper_coupled_contract():
     )
 
 
+def test_front_right_camera_profile_preserves_autonomous_drape_contract():
+    config = load_config(
+        Path(
+            "config/autonomous_real_only_opening_reverse_270deg_"
+            "positive_180_drape_recorded_pose_gripper_coupled_"
+            "front_right_camera.yaml"
+        )
+    )
+    scene = config["scene"]
+    pose = scene["initial_pose_contract"]
+    pre_drape = config["inference"]["pre_inference_drape"]
+
+    assert (
+        scene["camera_parent_link"]
+        == "head/see3cam_left/camera_color_frame"
+    )
+    assert scene["camera_local_position"] == pytest.approx([0.0, 0.0, 0.0])
+    assert scene["camera_local_rotation"] == pytest.approx([40.0, 0.0, 0.0])
+    assert config["inference"]["record_inference_camera_video"]
+    assert pose["down_m"] is None
+    assert pose["locked_pose_baseline"]["chair_position"] == pytest.approx(
+        [-0.0735720247, 0.4527513087, -0.3992611766]
+    )
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(90.0)
+    assert not pose["opening_rotation_away_from_toe"]
+    assert pre_drape["enabled"]
+    assert pre_drape["rotation_degrees"] == pytest.approx(180.0)
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+
+
 def test_reverse_150_close_profile_advances_rotation_and_preserves_camera():
     config = load_config(
         Path("config/autonomous_real_only_opening_reverse_150deg_close.yaml")

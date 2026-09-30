@@ -67,6 +67,9 @@ def run_demo(
     )
     reference_pull = float(settings.get("reference_cartesian_pull_m", 0.0))
     physics_steps_per_action = int(settings.get("physics_steps_per_action", 1))
+    record_inference_camera_video = bool(
+        settings.get("record_inference_camera_video", False)
+    )
     tip_drape_settings = dict(settings.get("tip_drape_wait", {}) or {})
     tip_drape_enabled = bool(tip_drape_settings.get("enabled", False))
     tip_drape_maximum_steps = int(
@@ -141,6 +144,7 @@ def run_demo(
     sock_tip_geometry_by_frame = []
     final_task_success = {}
     video_path = episode / "demo.mp4"
+    inference_camera_video_path = episode / "inference_camera.mp4"
     tip_drape_video_path = episode / "tip_drape_settle.mp4"
     pre_drape_video_path = episode / "pre_inference_drape.mp4"
     tip_drape_report = {
@@ -277,6 +281,15 @@ def run_demo(
                 video_path,
                 video_camera["rgb"].shape,
                 float(settings.get("rate_hz", 5.0)),
+            )
+            inference_camera_video = (
+                _open_video(
+                    inference_camera_video_path,
+                    observation["camera"]["rgb"].shape,
+                    float(settings.get("rate_hz", 5.0)),
+                )
+                if record_inference_camera_video
+                else None
             )
             tip_drape_video = None
             pre_drape_video = None
@@ -735,6 +748,12 @@ def run_demo(
                         frame,
                         crop_xywh=settings.get("recording_crop_xywh"),
                     )
+                    if inference_camera_video is not None:
+                        _write_video_frame(
+                            inference_camera_video,
+                            observation["camera"]["rgb"],
+                            frame,
+                        )
                     if cartesian_reference is not None:
                         applied = np.asarray(observation["angle"], dtype=float)
                     applied_writer.writerow(applied.tolist())
@@ -821,6 +840,8 @@ def run_demo(
                 predicted_file.close()
                 applied_file.close()
                 video.release()
+                if inference_camera_video is not None:
+                    inference_camera_video.release()
                 if tip_drape_video is not None:
                     tip_drape_video.release()
                 if pre_drape_video is not None:
@@ -845,6 +866,11 @@ def run_demo(
                         "checkpoint_sha256": metadata["checkpoint_sha256"],
                         "frames_inferred": frames,
                         "video": str(video_path),
+                        "inference_camera_video": (
+                            str(inference_camera_video_path)
+                            if record_inference_camera_video
+                            else None
+                        ),
                         "perception_quality_by_frame": quality_by_frame,
                         "coverage_by_frame": coverage_by_frame,
                         "grasp_quality_by_frame": grasp_quality_by_frame,
@@ -885,6 +911,11 @@ def run_demo(
         "episode": str(episode),
         "manifest": str(manifest),
         "video": str(video_path),
+        "inference_camera_video": (
+            str(inference_camera_video_path)
+            if record_inference_camera_video
+            else None
+        ),
         "tip_drape_video": (
             str(tip_drape_video_path) if tip_drape_enabled else None
         ),

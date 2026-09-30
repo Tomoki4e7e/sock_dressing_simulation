@@ -518,6 +518,7 @@ def test_demo_prepares_signed_drape_before_policy_and_fails_closed(
 def test_demo_records_bounded_closed_loop_actions(tmp_path):
     config = load_config()
     config["assets"]["output_dir"] = str(tmp_path)
+    config["inference"]["record_inference_camera_video"] = True
     result = run_demo(
         config,
         prepared={"runtime_urdf": str(tmp_path / "robot.urdf")},
@@ -544,6 +545,10 @@ def test_demo_records_bounded_closed_loop_actions(tmp_path):
     assert metadata["video_camera"]["source"] == "recording_camera"
     assert metadata["video_camera"]["position"] == [-1.8, 1.05, -1.5]
     assert Path(result["video"]).is_file()
+    assert Path(result["inference_camera_video"]).is_file()
+    assert metadata["inference_camera_video"] == result[
+        "inference_camera_video"
+    ]
 
 
 def test_reference_actions_are_linearly_interpolated_across_demo_frames():
