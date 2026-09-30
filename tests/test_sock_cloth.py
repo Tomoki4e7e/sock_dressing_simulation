@@ -459,6 +459,104 @@ def test_reverse_270_close_profile_uses_equivalent_rotation_and_close_camera():
     assert config["inference"]["recording_crop_xywh"] == [300, 330, 520, 390]
 
 
+def test_reverse_270_positive_drape_lowered_toe_up_profile_contract():
+    config = load_config(
+        Path(
+            "config/"
+            "autonomous_real_only_opening_reverse_270deg_positive_180_drape_"
+            "lower5cm_toe20deg.yaml"
+        )
+    )
+    foot = config["scenario"]["foot"]
+    pose = config["scene"]["initial_pose_contract"]
+    baseline = pose["locked_pose_baseline"]
+    pre_drape = config["inference"]["pre_inference_drape"]
+
+    assert foot["rotation"] == pytest.approx([20.0, 0.0, 0.0])
+    assert foot["plantarflexion_degrees"] == pytest.approx(20.0)
+    assert pose["down_m"] == pytest.approx(0.05)
+    assert baseline["human_root_position"][1] == pytest.approx(1.4800000191)
+    assert baseline["chair_position"][1] - pose["down_m"] == pytest.approx(
+        0.3562173188
+    )
+    assert baseline["human_anchor_position"][1] - pose["down_m"] == pytest.approx(
+        0.6062172587
+    )
+    assert baseline["right_toe_position"] == pytest.approx(
+        [-0.1826222241, 0.4936948466, 0.5976466234]
+    )
+    assert baseline["right_toe_position"][1] - pose["down_m"] == pytest.approx(
+        0.4436948466
+    )
+    assert pose["sock_tip_cross_axis_offset_max_m"] == pytest.approx(-0.190)
+    assert pre_drape["enabled"]
+    assert pre_drape["rotation_degrees"] == pytest.approx(180.0)
+    assert pre_drape["rotation_steps"] == 180
+    assert pre_drape["settle_steps"] == 250
+    assert config["inference"]["mask_min_fraction"] == pytest.approx(0.0000001)
+    assert config["inference"]["semantic_mask"][
+        "sock_min_fraction"
+    ] == pytest.approx(0.0000001)
+
+
+def test_reverse_270_natural_hang_changes_only_sock_physics_contract():
+    config = load_config(
+        Path(
+            "config/"
+            "autonomous_real_only_opening_reverse_270deg_positive_180_drape_"
+            "lower5cm_toe20deg_natural_hang.yaml"
+        )
+    )
+    sock = config["scenario"]["sock"]
+    obi = config["obi"]["expected"]
+    pose = config["scene"]["initial_pose_contract"]
+    pre_drape = config["inference"]["pre_inference_drape"]
+
+    assert sock["rest_bend_start_m"] == pytest.approx(0.03)
+    assert sock["rest_bend_length_m"] == pytest.approx(0.18)
+    assert sock["rest_bend_degrees"] == pytest.approx(45.0)
+    assert sock["rest_bend_azimuth_degrees"] == pytest.approx(0.0)
+    assert obi["damping"] == pytest.approx(0.95)
+    assert obi["bend_compliance"] == pytest.approx(0.03)
+    assert pose["sock_tip_opening_depth_min_m"] == pytest.approx(0.085)
+    assert pose["sock_tip_cross_axis_offset_max_m"] == pytest.approx(-0.150)
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(90.0)
+    assert not pose["opening_rotation_away_from_toe"]
+    assert pre_drape["enabled"]
+    assert pre_drape["rotation_degrees"] == pytest.approx(180.0)
+    assert pre_drape["rotation_steps"] == 180
+    assert pre_drape["settle_steps"] == 250
+
+
+def test_reverse_270_frame_zero_catch_preserves_pose_and_drape_contract():
+    config = load_config(
+        Path(
+            "config/"
+            "autonomous_real_only_opening_reverse_270deg_positive_180_drape_"
+            "lower5cm_toe20deg_frame_zero_catch.yaml"
+        )
+    )
+    sock = config["scenario"]["sock"]
+    foot = config["scenario"]["foot"]
+    pose = config["scene"]["initial_pose_contract"]
+    pre_drape = config["inference"]["pre_inference_drape"]
+
+    assert sock["rest_bend_start_m"] == pytest.approx(0.03)
+    assert sock["rest_bend_length_m"] == pytest.approx(0.18)
+    assert sock["rest_bend_degrees"] == pytest.approx(45.0)
+    assert sock["rest_bend_azimuth_degrees"] == pytest.approx(180.0)
+    assert config["obi"]["expected"]["damping"] == pytest.approx(0.95)
+    assert config["obi"]["expected"]["bend_compliance"] == pytest.approx(0.10)
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(90.0)
+    assert not pose["opening_rotation_away_from_toe"]
+    assert pose["down_m"] == pytest.approx(0.05)
+    assert foot["plantarflexion_degrees"] == pytest.approx(20.0)
+    assert pre_drape["enabled"]
+    assert pre_drape["rotation_degrees"] == pytest.approx(180.0)
+    assert pre_drape["rotation_steps"] == 180
+    assert pre_drape["settle_steps"] == 250
+
+
 def test_reverse_150_close_profile_advances_rotation_and_preserves_camera():
     config = load_config(
         Path("config/autonomous_real_only_opening_reverse_150deg_close.yaml")

@@ -1,0 +1,21 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_lower5cm_toe20deg.yaml
+
+scenario:
+  sock:
+    # Reproduce the downward rest shape used by the visual reference episode.
+    rest_bend_start_m: 0.03
+    rest_bend_length_m: 0.18
+    rest_bend_degrees: 30.0
+    rest_bend_azimuth_degrees: 0.0
+
+scene:
+  initial_pose_contract:
+    # This bent rest shape settles 6.6 mm shallower than the straight-mesh
+    # initialization while remaining on the intended positive-depth side.
+    sock_tip_opening_depth_min_m: 0.130
+    sock_tip_cross_axis_offset_max_m: -0.150
+
+obi:
+  expected:
+    damping: 0.95
+    bend_compliance: 0.03

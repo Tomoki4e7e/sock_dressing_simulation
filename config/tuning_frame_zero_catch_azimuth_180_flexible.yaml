@@ -1,0 +1,7 @@
+extends: tuning_frame_zero_catch_azimuth_180.yaml
+
+obi:
+  expected:
+    # Let gravity straighten the reversed rest bend after it has routed the
+    # distal body around the opening edge.
+    bend_compliance: 0.10

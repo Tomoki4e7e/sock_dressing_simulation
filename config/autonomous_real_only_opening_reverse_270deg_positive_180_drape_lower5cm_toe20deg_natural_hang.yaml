@@ -1,0 +1,26 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_lower5cm_toe20deg.yaml
+
+scenario:
+  sock:
+    # Bias the free body downward from a straight 3 cm cuff, matching the
+    # naturally hanging reference instead of relying on transient guidance.
+    rest_bend_start_m: 0.03
+    rest_bend_length_m: 0.18
+    rest_bend_degrees: 45.0
+    rest_bend_azimuth_degrees: 0.0
+
+obi:
+  expected:
+    # Suppress cuff-rotation overshoot while retaining enough flexibility for
+    # the gently bent rest mesh to straighten under gravity.
+    damping: 0.95
+    bend_compliance: 0.03
+
+scene:
+  initial_pose_contract:
+    # The bent rest mesh remains on the intended positive side; allow the
+    # reproducible 95 mm settled depth observed after the full 250-step wait.
+    sock_tip_opening_depth_min_m: 0.085
+    # Match the existing gravity-aligned tip-drape corridor; the bent rest
+    # shape can initialize closer to this robot-side edge before release.
+    sock_tip_cross_axis_offset_max_m: -0.150

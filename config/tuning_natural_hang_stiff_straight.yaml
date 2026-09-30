@@ -1,0 +1,8 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_lower5cm_toe20deg.yaml
+
+obi:
+  expected:
+    # Match the stable reference hang while retaining the current straight
+    # rest mesh so this candidate isolates flexibility and damping.
+    damping: 0.95
+    bend_compliance: 0.01
