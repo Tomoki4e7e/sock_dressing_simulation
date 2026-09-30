@@ -1,0 +1,18 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_lower5cm_toe20deg_frame_zero_catch.yaml
+
+joints:
+  # Bound the autonomous target change so the hanging body can follow the
+  # grasped cuff without changing the policy trajectory.
+  max_delta: [0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.0025, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.0025]
+
+obi:
+  expected:
+    # Restore close-family bend transmission and remove excessive velocity
+    # damping while preserving the frame-zero-catch rest shape.
+    bend_compliance: 0.03
+    damping: 0.40
+
+inference:
+  # Give the distal cloth two simulated intervals per baseline interval to
+  # settle toward each bounded gripper command.
+  physics_steps_per_action: 20

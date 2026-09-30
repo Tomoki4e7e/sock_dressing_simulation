@@ -1,0 +1,10 @@
+extends: tuning_gripper_coupled_stiff.yaml
+
+joints:
+  # Limit each policy update to a rate the hanging body can follow without
+  # changing the policy, opening pose, or pre-inference drape trajectory.
+  max_delta: [0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.0025, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.0025]
+
+obi:
+  expected:
+    damping: 0.40

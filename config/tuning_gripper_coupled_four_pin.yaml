@@ -1,0 +1,11 @@
+extends: tuning_gripper_coupled_settled.yaml
+
+scene:
+  initial_pose_contract:
+    required_grasp_particles_per_side: 4
+
+obi:
+  expected:
+    # Distribute cuff motion over the full rectangular jaw patch, matching the
+    # stable opening in the reference while leaving the distal body deformable.
+    maximum_grasp_particles_per_side: 4

@@ -1,0 +1,8 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_lower5cm_toe20deg_frame_zero_catch.yaml
+
+obi:
+  expected:
+    # Transmit cuff motion through the hanging body while retaining enough
+    # flexibility for the fixed pre-inference drape to settle.
+    bend_compliance: 0.05
+    damping: 0.55

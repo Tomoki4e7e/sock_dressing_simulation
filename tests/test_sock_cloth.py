@@ -557,6 +557,35 @@ def test_reverse_270_frame_zero_catch_preserves_pose_and_drape_contract():
     assert pre_drape["settle_steps"] == 250
 
 
+def test_reverse_270_gripper_coupled_preserves_opening_and_drape_contract():
+    config = load_config(
+        Path(
+            "config/"
+            "autonomous_real_only_opening_reverse_270deg_positive_180_drape_"
+            "lower5cm_toe20deg_gripper_coupled.yaml"
+        )
+    )
+    sock = config["scenario"]["sock"]
+    obi = config["obi"]["expected"]
+    pose = config["scene"]["initial_pose_contract"]
+    pre_drape = config["inference"]["pre_inference_drape"]
+
+    assert sock["rest_bend_degrees"] == pytest.approx(45.0)
+    assert sock["rest_bend_azimuth_degrees"] == pytest.approx(180.0)
+    assert obi["bend_compliance"] == pytest.approx(0.03)
+    assert obi["damping"] == pytest.approx(0.40)
+    assert config["inference"]["physics_steps_per_action"] == 20
+    assert config["joints"]["max_delta"] == pytest.approx(
+        [0.005] * 8 + [0.0025] + [0.005] * 8 + [0.0025]
+    )
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(90.0)
+    assert not pose["opening_rotation_away_from_toe"]
+    assert pre_drape["enabled"]
+    assert pre_drape["rotation_degrees"] == pytest.approx(180.0)
+    assert pre_drape["rotation_steps"] == 180
+    assert pre_drape["settle_steps"] == 250
+
+
 def test_reverse_150_close_profile_advances_rotation_and_preserves_camera():
     config = load_config(
         Path("config/autonomous_real_only_opening_reverse_150deg_close.yaml")
