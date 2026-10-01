@@ -91,11 +91,16 @@ def run_demo(
     pre_drape_settle_steps = int(
         pre_drape_settings.get("settle_steps", 250)
     )
+    post_drape_prompt_mode = str(
+        settings.get("post_pre_drape_prompt_mode", "dual_centroid")
+    )
     if (
         not 0 <= reference_blend <= 1
         or reference_hold < 1
         or physics_steps_per_action < 1
         or reference_interpolation not in {"hold", "linear"}
+        or post_drape_prompt_mode
+        not in {"dual_centroid", "single_centroid"}
         or tip_drape_maximum_steps < 1
         or tip_drape_consecutive_steps < 1
     ):
@@ -130,6 +135,7 @@ def run_demo(
             "interpolation": reference_interpolation,
             "cartesian_pull_m": reference_pull,
         },
+        "post_pre_drape_prompt_mode": post_drape_prompt_mode,
     }
     stop_reason = "max_steps"
     frames = 0
@@ -540,16 +546,31 @@ def run_demo(
                         leg_center = _mask_centroid_point(
                             post_drape_masks["leg"]
                         )
-                        sock_labels = [1, 0]
-                        leg_labels = [1, 0]
-                        sock_points = [
-                            sock_center,
-                            leg_center,
-                        ]
-                        leg_points = [
-                            leg_center,
-                            sock_center,
-                        ]
+                        if post_drape_prompt_mode == "single_centroid":
+                            sock_labels = [1]
+                            leg_labels = [1]
+                            sock_points = [sock_center]
+                            leg_points = [leg_center]
+                        else:
+                            sock_labels = [1, 0]
+                            leg_labels = [1, 0]
+                            sock_points = [
+                                sock_center,
+                                leg_center,
+                            ]
+                            leg_points = [
+                                leg_center,
+                                sock_center,
+                            ]
+                    if post_drape_prompt_mode == "single_centroid":
+                        # A post-drape renderer mask can be unavailable when
+                        # the cuff is partially outside the inference camera.
+                        # In that case, remove the inherited cross-negative
+                        # point from the last valid centroid prompts as well.
+                        sock_points = [sock_points[0]]
+                        leg_points = [leg_points[0]]
+                        sock_labels = [1]
+                        leg_labels = [1]
                     metadata["prompt_points"] = {
                         "sock": list(map(list, sock_points)),
                         "leg": list(map(list, leg_points)),
@@ -565,6 +586,15 @@ def run_demo(
                         ),
                     }
                     metadata["diagnostics"] = observation["diagnostics"]
+                    writer.update_metadata(
+                        {
+                            "prompt_points": metadata["prompt_points"],
+                            "diagnostics": metadata["diagnostics"],
+                            "post_pre_drape_prompt_mode": (
+                                post_drape_prompt_mode
+                            ),
+                        }
+                    )
                 # The released tip settles before autonomous control starts.
                 # Use that post-settle state as the motion-following baseline;
                 # otherwise gravity-driven drape is incorrectly charged as

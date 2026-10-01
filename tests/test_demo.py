@@ -417,6 +417,7 @@ def test_demo_prepares_signed_drape_before_policy_and_fails_closed(
         rotation_steps=2,
         settle_steps=2,
     )
+    config["inference"]["post_pre_drape_prompt_mode"] = "single_centroid"
     events = []
 
     @dataclass
@@ -505,6 +506,7 @@ def test_demo_prepares_signed_drape_before_policy_and_fails_closed(
     ] == pytest.approx(180.0)
     assert Path(result["pre_inference_drape_video"]).is_file()
     if expected_ok:
+        assert metadata["post_pre_drape_prompt_mode"] == "single_centroid"
         assert events.index("policy") > max(
             index for index, event in enumerate(events) if event == "settle"
         )

@@ -1,0 +1,8 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_recorded_pose_gripper_coupled_front_right_camera_frame_zero_physics.yaml
+
+# Restore the observation frame used by the policy-compatible frame-zero-catch
+# rollout while retaining the recorded pose and the isolated cloth-physics fix.
+scene:
+  camera_parent_link: "head/see3cam_right/camera_color_frame"
+  camera_local_position: [0.0, 0.0, 0.0]
+  camera_local_rotation: [20.0, 0.0, 0.0]

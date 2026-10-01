@@ -661,6 +661,118 @@ def test_front_right_camera_profile_preserves_autonomous_drape_contract():
     assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
 
 
+def test_front_right_frame_zero_physics_preserves_policy_only_drape_contract():
+    config = load_config(
+        Path(
+            "config/autonomous_real_only_opening_reverse_270deg_"
+            "positive_180_drape_recorded_pose_gripper_coupled_"
+            "front_right_camera_frame_zero_physics.yaml"
+        )
+    )
+    scene = config["scene"]
+    pose = scene["initial_pose_contract"]
+    pre_drape = config["inference"]["pre_inference_drape"]
+
+    assert (
+        scene["camera_parent_link"]
+        == "head/see3cam_left/camera_color_frame"
+    )
+    assert scene["camera_local_position"] == pytest.approx([0.0, -0.04, 0.1])
+    assert scene["camera_local_rotation"] == pytest.approx([60.0, 0.0, 0.0])
+    assert config["obi"]["expected"]["bend_compliance"] == pytest.approx(0.10)
+    assert config["obi"]["expected"]["damping"] == pytest.approx(0.95)
+    assert config["inference"]["physics_steps_per_action"] == 10
+    assert config["inference"]["reference_actions"] is None
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+    assert config["inference"]["reference_cartesian_pull_m"] == pytest.approx(0.0)
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(90.0)
+    assert not pose["opening_rotation_away_from_toe"]
+    assert pre_drape["enabled"]
+    assert pre_drape["rotation_degrees"] == pytest.approx(180.0)
+    assert pre_drape["rotation_steps"] == 180
+    assert pre_drape["settle_steps"] == 250
+
+
+def test_head_camera_frame_zero_physics_restores_policy_observation_contract():
+    config = load_config(
+        Path(
+            "config/autonomous_real_only_opening_reverse_270deg_"
+            "positive_180_drape_recorded_pose_gripper_coupled_"
+            "head_camera_frame_zero_physics.yaml"
+        )
+    )
+    scene = config["scene"]
+    pose = scene["initial_pose_contract"]
+    pre_drape = config["inference"]["pre_inference_drape"]
+
+    assert (
+        scene["camera_parent_link"]
+        == "head/see3cam_right/camera_color_frame"
+    )
+    assert scene["camera_local_position"] == pytest.approx([0.0, 0.0, 0.0])
+    assert scene["camera_local_rotation"] == pytest.approx([20.0, 0.0, 0.0])
+    assert config["obi"]["expected"]["bend_compliance"] == pytest.approx(0.10)
+    assert config["obi"]["expected"]["damping"] == pytest.approx(0.95)
+    assert config["inference"]["physics_steps_per_action"] == 10
+    assert config["inference"]["record_inference_camera_video"]
+    assert config["inference"]["reference_actions"] is None
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+    assert config["inference"]["reference_cartesian_pull_m"] == pytest.approx(0.0)
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(90.0)
+    assert not pose["opening_rotation_away_from_toe"]
+    assert pre_drape["enabled"]
+    assert pre_drape["rotation_degrees"] == pytest.approx(180.0)
+    assert pre_drape["rotation_steps"] == 180
+    assert pre_drape["settle_steps"] == 250
+
+
+def test_single_centroid_profile_changes_only_post_drape_prompt_contract():
+    config = load_config(
+        Path(
+            "config/autonomous_real_only_opening_reverse_270deg_"
+            "positive_180_drape_recorded_pose_gripper_coupled_"
+            "head_camera_frame_zero_physics_single_centroid.yaml"
+        )
+    )
+    pose = config["scene"]["initial_pose_contract"]
+    pre_drape = config["inference"]["pre_inference_drape"]
+
+    assert (
+        config["inference"]["post_pre_drape_prompt_mode"]
+        == "single_centroid"
+    )
+    assert config["inference"]["reference_actions"] is None
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+    assert config["inference"]["reference_cartesian_pull_m"] == pytest.approx(0.0)
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(90.0)
+    assert not pose["opening_rotation_away_from_toe"]
+    assert pre_drape["rotation_degrees"] == pytest.approx(180.0)
+
+
+def test_fast_policy_profile_restores_autonomous_absolute_target_rate():
+    config = load_config(
+        Path(
+            "config/autonomous_real_only_opening_reverse_270deg_"
+            "positive_180_drape_recorded_pose_gripper_coupled_"
+            "head_camera_frame_zero_physics_single_centroid_fast_policy.yaml"
+        )
+    )
+
+    assert config["joints"]["max_delta"] == pytest.approx(
+        [0.02] * 7
+        + [0.005, 0.0025]
+        + [0.02] * 7
+        + [0.005, 0.0025]
+    )
+    assert config["inference"]["post_pre_drape_prompt_mode"] == "single_centroid"
+    assert config["inference"]["reference_actions"] is None
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+    assert config["inference"]["reference_cartesian_pull_m"] == pytest.approx(0.0)
+    assert config["inference"]["pre_inference_drape"][
+        "rotation_degrees"
+    ] == pytest.approx(180.0)
+
+
 def test_wide_opening_profile_expands_span_within_safety_limit():
     config = load_config(
         Path(
