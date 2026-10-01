@@ -826,6 +826,34 @@ def test_conservative_human_chair_offset_preserves_policy_contract():
     assert expected["opening_rim_shape_stiffness"] == pytest.approx(1.0)
 
 
+def test_left_camera_profile_changes_only_inference_view_contract():
+    config = load_config(
+        Path(
+            "config/autonomous_real_only_opening_reverse_270deg_"
+            "positive_180_drape_recorded_pose_gripper_coupled_"
+            "head_camera_frame_zero_physics_single_centroid_fast_policy_"
+            "human_chair_away2cm_down7cm_left_camera.yaml"
+        )
+    )
+    scene = config["scene"]
+    pose = scene["initial_pose_contract"]
+    expected = config["obi"]["expected"]
+
+    assert scene["camera_parent_link"] == (
+        "head/see3cam_left/camera_color_frame"
+    )
+    assert scene["camera_local_position"] == pytest.approx([0.0, -0.04, 0.1])
+    assert scene["camera_local_rotation"] == pytest.approx([60.0, 0.0, 0.0])
+    assert scene["recording_camera_id"] == 1301
+    assert pose["away_from_robot_m"] == pytest.approx(0.02)
+    assert pose["down_m"] == pytest.approx(0.07)
+    assert expected["opening_rim_span_maximum_stretch"] == pytest.approx(1.20)
+    assert expected["opening_rim_span_shape_stiffness"] == pytest.approx(0.25)
+    assert config["inference"]["reference_actions"] is None
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+    assert config["inference"]["record_inference_camera_video"]
+
+
 def test_wide_opening_profile_expands_span_within_safety_limit():
     config = load_config(
         Path(
