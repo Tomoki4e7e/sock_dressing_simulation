@@ -819,6 +819,11 @@ def test_conservative_human_chair_offset_preserves_policy_contract():
     assert config["inference"]["reference_actions"] is None
     assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
     assert config["inference"]["reference_cartesian_pull_m"] == pytest.approx(0.0)
+    expected = config["obi"]["expected"]
+    assert expected["opening_rim_span_maximum_stretch"] == pytest.approx(1.20)
+    assert expected["opening_rim_span_shape_stiffness"] == pytest.approx(0.25)
+    assert expected.get("opening_rim_maximum_stretch", 1.05) == pytest.approx(1.05)
+    assert expected["opening_rim_shape_stiffness"] == pytest.approx(1.0)
 
 
 def test_wide_opening_profile_expands_span_within_safety_limit():
@@ -1043,6 +1048,13 @@ def test_sock_opening_alignment_writes_solver_local_particle_positions():
     assert "OpeningRingPlaneMetrics(" in source
     assert "EnforceOpeningRimPlane();" in source
     assert "openingRimMaximumStretch" in source
+    assert "openingRimSpanMaximumStretch" in source
+    assert "openingRimSpanShapeStiffness" in source
+    assert "IsOpeningRimSpanParticle(item.Key)" in source
+    assert "IsOpeningRimSpanEdge(edge.x, edge.y)" in source
+    assert "Mathf.Abs(delta.x) >= Mathf.Abs(delta.y)" in source
+    assert '"opening_rim_span_maximum_stretch"' in source
+    assert '"opening_rim_span_shape_stiffness"' in source
     assert 'Grasp("left", leftTargetId, maxDistance);' in source
     assert 'Grasp("right", rightTargetId, maxDistance);' in source
 
@@ -1291,7 +1303,8 @@ def test_grasp_pins_small_inner_cuff_patches_and_leaves_rim_dynamic():
     )[1].split("private float[] RestDistancesFromOpening", 1)[0]
     assert "solver.renderablePositions[solverIndex] +=" in translation
     assert "rest * stretchLimit" in source
-    assert "? openingRimMaximumStretch" in source
+    assert ": openingRimMaximumStretch" in source
+    assert "? openingRimSpanMaximumStretch" in source
     assert '"aligned_grasp_initialization"' in source
     assert "StructuralRestLength(" in source
     assert "if (pinned.Count == 0)" in source
@@ -1475,6 +1488,8 @@ def test_sock_cloth_commands_match_unity_contract():
         maximum_particles_per_side=2,
         cuff_insertion_depth_m=0.03,
         grasp_thickness_half_width_m=0.02,
+        opening_rim_span_maximum_stretch=1.20,
+        opening_rim_span_shape_stiffness=0.25,
     )
     cloth.configure_opening_body_barrier(
         enabled=True,
@@ -1564,6 +1579,8 @@ def test_sock_cloth_commands_match_unity_contract():
             0.75,
             0.5,
             0.01,
+            1.20,
+            0.25,
         ),
         (1200, "ConfigureOpeningBodyBarrier", True, 0.008, 1.0, 0.03),
         (1200, "ArmOpeningBodyBarrierPredictiveSkin", True),

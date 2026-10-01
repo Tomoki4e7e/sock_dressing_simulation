@@ -669,6 +669,8 @@ class SockClothAttr:
         opening_rim_plane_stiffness: float = 0.75,
         opening_rim_shape_stiffness: float = 0.5,
         opening_rim_maximum_correction_m: float = 0.01,
+        opening_rim_span_maximum_stretch: float = 1.05,
+        opening_rim_span_shape_stiffness: float = 0.5,
     ) -> None:
         values = np.asarray(
             [
@@ -683,6 +685,8 @@ class SockClothAttr:
                 opening_rim_plane_stiffness,
                 opening_rim_shape_stiffness,
                 opening_rim_maximum_correction_m,
+                opening_rim_span_maximum_stretch,
+                opening_rim_span_shape_stiffness,
             ],
             dtype=float,
         )
@@ -698,8 +702,10 @@ class SockClothAttr:
             or int(slip_consecutive_steps) < 1
             or int(maximum_particles_per_side) < 2
             or not 1.0 <= opening_rim_maximum_stretch <= 1.5
+            or not 1.0 <= opening_rim_span_maximum_stretch <= 1.5
             or not 0.0 <= opening_rim_plane_stiffness <= 1.0
             or not 0.0 <= opening_rim_shape_stiffness <= 1.0
+            or not 0.0 <= opening_rim_span_shape_stiffness <= 1.0
             or opening_rim_maximum_correction_m <= 0
         ):
             raise ValueError("invalid grasp/slip configuration")
@@ -718,6 +724,8 @@ class SockClothAttr:
             float(opening_rim_plane_stiffness),
             float(opening_rim_shape_stiffness),
             float(opening_rim_maximum_correction_m),
+            float(opening_rim_span_maximum_stretch),
+            float(opening_rim_span_shape_stiffness),
         )
 
     def configure_opening_body_barrier(

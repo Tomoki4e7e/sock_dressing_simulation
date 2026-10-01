@@ -322,6 +322,12 @@ class SockDressingEnv:
             opening_rim_maximum_correction_m=float(
                 expected.get("opening_rim_maximum_correction_m", 0.01)
             ),
+            opening_rim_span_maximum_stretch=float(
+                expected.get("opening_rim_span_maximum_stretch", 1.05)
+            ),
+            opening_rim_span_shape_stiffness=float(
+                expected.get("opening_rim_span_shape_stiffness", 0.5)
+            ),
         )
         self.sock_cloth.configure_opening_body_barrier(
             enabled=bool(expected.get("opening_body_barrier_enabled", False)),
