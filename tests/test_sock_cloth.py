@@ -773,6 +773,54 @@ def test_fast_policy_profile_restores_autonomous_absolute_target_rate():
     ] == pytest.approx(180.0)
 
 
+def test_human_chair_offset_changes_only_locked_pose_translation_contract():
+    config = load_config(
+        Path(
+            "config/autonomous_real_only_opening_reverse_270deg_"
+            "positive_180_drape_recorded_pose_gripper_coupled_"
+            "head_camera_frame_zero_physics_single_centroid_fast_policy_"
+            "human_chair_away3cm_down8cm.yaml"
+        )
+    )
+    pose = config["scene"]["initial_pose_contract"]
+
+    assert pose["away_from_robot_m"] == pytest.approx(0.03)
+    assert pose["down_m"] == pytest.approx(0.08)
+    assert pose["right_toe_offset_world_m"] == pytest.approx([0.0, 0.0, 0.0])
+    assert pose["locked_pose_tolerance_m"] == pytest.approx(0.002)
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(90.0)
+    assert not pose["opening_rotation_away_from_toe"]
+    assert config["inference"]["pre_inference_drape"][
+        "rotation_degrees"
+    ] == pytest.approx(180.0)
+    assert config["inference"]["post_pre_drape_prompt_mode"] == "single_centroid"
+    assert config["inference"]["reference_actions"] is None
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+    assert config["inference"]["reference_cartesian_pull_m"] == pytest.approx(0.0)
+
+
+def test_conservative_human_chair_offset_preserves_policy_contract():
+    config = load_config(
+        Path(
+            "config/autonomous_real_only_opening_reverse_270deg_"
+            "positive_180_drape_recorded_pose_gripper_coupled_"
+            "head_camera_frame_zero_physics_single_centroid_fast_policy_"
+            "human_chair_away2cm_down7cm.yaml"
+        )
+    )
+    pose = config["scene"]["initial_pose_contract"]
+
+    assert pose["away_from_robot_m"] == pytest.approx(0.02)
+    assert pose["down_m"] == pytest.approx(0.07)
+    assert pose["right_toe_offset_world_m"] == pytest.approx([0.0, 0.0, 0.0])
+    assert config["inference"]["pre_inference_drape"][
+        "rotation_degrees"
+    ] == pytest.approx(180.0)
+    assert config["inference"]["reference_actions"] is None
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+    assert config["inference"]["reference_cartesian_pull_m"] == pytest.approx(0.0)
+
+
 def test_wide_opening_profile_expands_span_within_safety_limit():
     config = load_config(
         Path(

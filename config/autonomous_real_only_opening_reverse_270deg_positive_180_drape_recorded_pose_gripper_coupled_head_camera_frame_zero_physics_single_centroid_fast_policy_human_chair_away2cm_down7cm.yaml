@@ -1,0 +1,8 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_recorded_pose_gripper_coupled_head_camera_frame_zero_physics_single_centroid_fast_policy.yaml
+
+scene:
+  initial_pose_contract:
+    # Conservative neighbor of the prior 3 cm / 8 cm grid winner. Keep the
+    # translated foot closer to the checkpoint's original image distribution.
+    away_from_robot_m: 0.02
+    down_m: 0.07

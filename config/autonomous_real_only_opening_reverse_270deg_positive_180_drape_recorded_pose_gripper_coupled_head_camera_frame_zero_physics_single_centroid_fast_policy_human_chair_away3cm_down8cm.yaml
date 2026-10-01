@@ -1,0 +1,9 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_recorded_pose_gripper_coupled_head_camera_frame_zero_physics_single_centroid_fast_policy.yaml
+
+scene:
+  initial_pose_contract:
+    # Translate the recorded human and chair as one locked assembly. This
+    # places the toe near the fast policy's measured 100-step opening endpoint
+    # without changing the foot articulation, opening, drape, or policy.
+    away_from_robot_m: 0.03
+    down_m: 0.08
