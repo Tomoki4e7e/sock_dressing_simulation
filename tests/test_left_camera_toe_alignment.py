@@ -39,6 +39,25 @@ def test_alignment_measurement_reports_signed_center_error(tmp_path):
     assert measurement["absolute_error_px"] == pytest.approx(24.5)
 
 
+def test_leg_axis_measurement_reports_tilt_from_image_vertical():
+    mask = np.zeros((200, 200), dtype=np.uint8)
+    for y in range(10, 190):
+        x = int(round(70 + 0.2 * (y - 10)))
+        mask[y, x - 3 : x + 4] = 255
+
+    measurement = toe_search.leg_axis_measurement(mask)
+
+    assert measurement["leg_axis_pca_degrees"] == pytest.approx(
+        np.degrees(np.arctan(0.2)), abs=0.5
+    )
+    assert measurement["leg_axis_ridge_degrees"] == pytest.approx(
+        np.degrees(np.arctan(0.2)), abs=0.5
+    )
+    assert measurement["leg_axis_agreement_degrees"] < 1.0
+    assert measurement["leg_axis_anisotropy"] > 5.0
+    assert measurement["leg_axis_valid"]
+
+
 def test_alignment_candidates_refine_around_coarse_winner():
     assert toe_search.candidate_values(range(-3, 4)) == [
         -3.0,
@@ -62,6 +81,9 @@ def test_alignment_ranking_requires_pose_and_minimizes_pixel_error():
         "pose_screening_ok": True,
         "frames": 1,
         "stop_reason": "max_steps",
+        "leg_axis_valid": True,
+        "leg_axis_pca_degrees": 1.0,
+        "leg_axis_agreement_degrees": 0.2,
         "absolute_error_px": 4.0,
         "right_cm": 1.0,
         "camera_yaw_degrees": 0.0,
@@ -75,9 +97,15 @@ def test_alignment_ranking_requires_pose_and_minimizes_pixel_error():
         "pose_screening_ok": False,
         "absolute_error_px": 0.0,
     }
+    tilted = {
+        **centered,
+        "leg_axis_pca_degrees": 8.0,
+        "absolute_error_px": 0.0,
+    }
 
     assert toe_search.ranking_key(centered) > toe_search.ranking_key(offset)
     assert toe_search.ranking_key(offset) > toe_search.ranking_key(invalid)
+    assert toe_search.ranking_key(centered) > toe_search.ranking_key(tilted)
 
 
 def test_candidate_config_preserves_left_camera_and_down8_contract(tmp_path):
@@ -130,3 +158,74 @@ def test_selected_toe_centered_profile_keeps_minimal_adjustments():
     assert pose["right_from_robot_m"] == pytest.approx(0.03)
     assert config["inference"]["reference_actions"] is None
     assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+
+
+def test_vertical_foot_axis_profile_preserves_opening_and_drape():
+    config = load_config(
+        Path(
+            "config/autonomous_real_only_opening_reverse_270deg_"
+            "positive_180_drape_recorded_pose_gripper_coupled_"
+            "head_camera_frame_zero_physics_single_centroid_fast_policy_"
+            "human_chair_away2cm_down8cm_left_camera_foot_axis_vertical.yaml"
+        )
+    )
+    scene = config["scene"]
+    pose = scene["initial_pose_contract"]
+    drape = config["inference"]["pre_inference_drape"]
+
+    assert scene["camera_parent_link"] == (
+        "head/see3cam_left/camera_color_frame"
+    )
+    assert scene["camera_local_position"] == pytest.approx([0.0, -0.04, 0.1])
+    assert scene["camera_local_rotation"] == pytest.approx(
+        [60.0, -12.0, 0.0]
+    )
+    assert pose["away_from_robot_m"] == pytest.approx(0.02)
+    assert pose["down_m"] == pytest.approx(0.08)
+    assert pose["right_from_robot_m"] == pytest.approx(0.0225)
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(90.0)
+    assert not pose["opening_rotation_away_from_toe"]
+    assert drape["rotation_degrees"] == pytest.approx(180.0)
+    assert drape["rotation_steps"] == 180
+    assert drape["settle_steps"] == 250
+
+
+def test_opening_preserved_profile_changes_only_grasp_span_contract():
+    baseline_path = Path(
+        "config/autonomous_real_only_opening_reverse_270deg_"
+        "positive_180_drape_recorded_pose_gripper_coupled_"
+        "head_camera_frame_zero_physics_single_centroid_fast_policy_"
+        "human_chair_away2cm_down8cm_left_camera_foot_axis_vertical.yaml"
+    )
+    tuned_path = baseline_path.with_name(
+        baseline_path.stem + "_opening_preserved.yaml"
+    )
+    baseline = load_config(baseline_path)
+    tuned = load_config(tuned_path)
+
+    assert tuned["scenario"]["sock"] == baseline["scenario"]["sock"]
+    assert tuned["scene"]["camera_parent_link"] == baseline["scene"][
+        "camera_parent_link"
+    ]
+    assert tuned["scene"]["camera_local_position"] == baseline["scene"][
+        "camera_local_position"
+    ]
+    assert tuned["scene"]["camera_local_rotation"] == baseline["scene"][
+        "camera_local_rotation"
+    ]
+    assert tuned["scene"]["initial_pose_contract"] == baseline["scene"][
+        "initial_pose_contract"
+    ]
+    assert tuned["inference"]["pre_inference_drape"] == baseline["inference"][
+        "pre_inference_drape"
+    ]
+    assert tuned["scene"]["grasp_alignment"]["target_span_m"] == pytest.approx(
+        0.115
+    )
+    expected = tuned["obi"]["expected"]
+    assert expected["slip_minimum_opening_span_m"] == pytest.approx(0.092)
+    assert expected["slip_opening_span_m"] == pytest.approx(0.115)
+    assert tuned["inference"]["minimum_opening_span_m"] == pytest.approx(0.09)
+    assert tuned["inference"][
+        "minimum_opening_ring_area_retention"
+    ] == pytest.approx(0.95)

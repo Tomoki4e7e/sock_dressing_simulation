@@ -1,0 +1,10 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_recorded_pose_gripper_coupled_head_camera_frame_zero_physics_single_centroid_fast_policy_human_chair_away2cm_down7cm_left_camera.yaml
+
+# Preserve the left See3CAM, opening orientation and pre-inference drape while
+# aligning the frame-zero leg-mask long axis with the image vertical.
+scene:
+  camera_local_rotation: [60.0, -12.0, 0.0]
+  initial_pose_contract:
+    away_from_robot_m: 0.02
+    down_m: 0.08
+    right_from_robot_m: 0.0225

@@ -607,6 +607,7 @@ def test_grasp_frame_report_checks_both_attachment_and_opening_edges():
                 "right_grasp_position": [0.0, 0.1, 0.0],
                 "right_opening_edge": [0.0, 0.11, 0.0],
                 "opening_span_m": 0.11,
+                "opening_ring_area_retention": 0.97,
             },
         }
     }
@@ -617,6 +618,10 @@ def test_grasp_frame_report_checks_both_attachment_and_opening_edges():
     assert report["attached_sides"] == ["left", "right"]
     assert report["maximum_edge_error_m"] == 0.01
     assert report["opening_span_m"] == 0.11
+    assert report["opening_ring_area_retention"] == 0.97
+    assert report["left_grasp_position"] == [0.0, 0.0, 0.0]
+    assert report["right_grasp_position"] == [0.0, 0.1, 0.0]
+    assert report["left_minus_right_vertical_m"] == pytest.approx(-0.1)
 
 
 def test_grasp_frame_report_uses_pin_error_when_target_has_local_offset():
@@ -862,6 +867,65 @@ def test_task_success_requires_observed_foot_contact(monkeypatch):
     )
     assert not wide_opening["success"]
     assert not wide_opening["continuous_opening_span_ok"]
+
+    config["inference"]["minimum_opening_span_m"] = 0.09
+    config["inference"]["minimum_opening_ring_area_retention"] = 0.95
+    narrow_opening = _task_success(
+        observation,
+        [{"ok": True}],
+        [0.0, 0.2],
+        config,
+        foot_contact_ids_by_frame=[[2104]],
+        **{
+            **kwargs,
+            "grasp_quality": [
+                {
+                    "ok": True,
+                    "attached_grippers": 2,
+                    "maximum_edge_error_m": 0.01,
+                    "opening_span_m": 0.08,
+                    "opening_ring_area_retention": 0.94,
+                    "left_minus_right_vertical_m": 0.01,
+                }
+            ],
+        },
+    )
+    assert not narrow_opening["continuous_opening_span_ok"]
+    assert narrow_opening["minimum_opening_span_m"] == pytest.approx(0.08)
+    assert narrow_opening[
+        "minimum_opening_ring_area_retention"
+    ] == pytest.approx(0.94)
+
+    crossed_grasps = _task_success(
+        observation,
+        [{"ok": True}],
+        [0.0, 0.2],
+        config,
+        foot_contact_ids_by_frame=[[2104]],
+        **{
+            **kwargs,
+            "grasp_quality": [
+                {
+                    "ok": True,
+                    "attached_grippers": 2,
+                    "maximum_edge_error_m": 0.01,
+                    "opening_span_m": 0.10,
+                    "opening_ring_area_retention": 0.97,
+                    "left_minus_right_vertical_m": 0.01,
+                },
+                {
+                    "ok": True,
+                    "attached_grippers": 2,
+                    "maximum_edge_error_m": 0.01,
+                    "opening_span_m": 0.10,
+                    "opening_ring_area_retention": 0.97,
+                    "left_minus_right_vertical_m": -0.01,
+                },
+            ],
+        },
+    )
+    assert not crossed_grasps["continuous_opening_span_ok"]
+    assert not crossed_grasps["grasp_vertical_order_preserved"]
 
 
 @pytest.mark.parametrize(

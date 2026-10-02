@@ -660,6 +660,7 @@ class SockClothAttr:
         rotational_compliance: float,
         break_threshold: float,
         slip_constraint_error_m: float,
+        slip_minimum_opening_span_m: float,
         slip_opening_span_m: float,
         slip_consecutive_steps: int,
         maximum_particles_per_side: int,
@@ -678,6 +679,7 @@ class SockClothAttr:
                 rotational_compliance,
                 break_threshold,
                 slip_constraint_error_m,
+                slip_minimum_opening_span_m,
                 slip_opening_span_m,
                 cuff_insertion_depth_m,
                 grasp_thickness_half_width_m,
@@ -696,7 +698,9 @@ class SockClothAttr:
             or rotational_compliance <= 0
             or break_threshold <= 0
             or slip_constraint_error_m <= 0
+            or slip_minimum_opening_span_m < 0
             or slip_opening_span_m <= 0
+            or slip_minimum_opening_span_m > slip_opening_span_m
             or cuff_insertion_depth_m <= 0
             or grasp_thickness_half_width_m <= 0
             or int(slip_consecutive_steps) < 1
@@ -715,6 +719,7 @@ class SockClothAttr:
             float(rotational_compliance),
             float(break_threshold),
             float(slip_constraint_error_m),
+            float(slip_minimum_opening_span_m),
             float(slip_opening_span_m),
             int(slip_consecutive_steps),
             int(maximum_particles_per_side),

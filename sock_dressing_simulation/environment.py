@@ -301,6 +301,9 @@ class SockDressingEnv:
             rotational_compliance=float(expected["grasp_rotational_compliance"]),
             break_threshold=float(expected["grasp_break_threshold"]),
             slip_constraint_error_m=float(expected["slip_constraint_error_m"]),
+            slip_minimum_opening_span_m=float(
+                expected.get("slip_minimum_opening_span_m", 0.0)
+            ),
             slip_opening_span_m=float(expected["slip_opening_span_m"]),
             slip_consecutive_steps=int(expected["slip_consecutive_steps"]),
             maximum_particles_per_side=int(

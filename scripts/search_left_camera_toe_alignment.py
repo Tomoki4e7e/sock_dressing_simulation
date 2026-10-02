@@ -79,6 +79,51 @@ def toe_tip_x_from_mask(
     return float(np.median(tip_xs))
 
 
+def leg_axis_measurement(mask: np.ndarray) -> Dict[str, float]:
+    values = np.asarray(mask)
+    if values.ndim != 2:
+        raise ValueError("leg mask must be a 2-D array")
+    ys, xs = np.nonzero(values > 0)
+    if xs.size < 30:
+        raise ValueError("leg mask has too few foreground pixels")
+    points = np.column_stack((xs.astype(float), ys.astype(float)))
+    covariance = np.cov(points, rowvar=False)
+    eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+    order = np.argsort(eigenvalues)
+    principal = eigenvectors[:, order[-1]]
+    if principal[1] < 0:
+        principal = -principal
+    minor = max(float(eigenvalues[order[-2]]), 1e-12)
+    anisotropy = float(eigenvalues[order[-1]]) / minor
+    pca_degrees = float(
+        np.degrees(np.arctan2(principal[0], principal[1]))
+    )
+
+    minimum_y = int(ys.min())
+    maximum_y = int(ys.max())
+    edges = np.linspace(minimum_y, maximum_y + 1, 41)
+    ridge_x = []
+    ridge_y = []
+    for lower, upper in zip(edges[:-1], edges[1:]):
+        selected = (ys >= lower) & (ys < upper)
+        if int(selected.sum()) < 3:
+            continue
+        ridge_x.append(float(np.median(xs[selected])))
+        ridge_y.append(float(np.median(ys[selected])))
+    if len(ridge_x) < 3:
+        raise ValueError("leg mask has too few populated ridge bands")
+    slope, _intercept = np.polyfit(ridge_y, ridge_x, 1)
+    ridge_degrees = float(np.degrees(np.arctan(float(slope))))
+    agreement = abs(pca_degrees - ridge_degrees)
+    return {
+        "leg_axis_pca_degrees": pca_degrees,
+        "leg_axis_ridge_degrees": ridge_degrees,
+        "leg_axis_agreement_degrees": agreement,
+        "leg_axis_anisotropy": anisotropy,
+        "leg_axis_valid": bool(anisotropy >= 5.0 and agreement <= 2.0),
+    }
+
+
 def alignment_measurement(mask_path: Path) -> Dict[str, float]:
     mask = np.asarray(Image.open(mask_path).convert("L"))
     toe_x = toe_tip_x_from_mask(mask)
@@ -91,6 +136,7 @@ def alignment_measurement(mask_path: Path) -> Dict[str, float]:
         "center_x_px": center_x,
         "signed_error_px": signed_error,
         "absolute_error_px": abs(signed_error),
+        **leg_axis_measurement(mask),
     }
 
 
@@ -263,13 +309,19 @@ def _run_candidate(
 
 
 def ranking_key(result: Mapping[str, Any]) -> tuple:
+    axis_error = abs(float(result.get("leg_axis_pca_degrees", 1e9)))
+    toe_error = float(result.get("absolute_error_px", 1e9))
     return (
         int(bool(result.get("pose_screening_ok", False))),
         int(
             result.get("frames") == 1
             and result.get("stop_reason") == "max_steps"
         ),
-        -float(result.get("absolute_error_px", 1e9)),
+        int(bool(result.get("leg_axis_valid", False))),
+        int(axis_error <= 3.0 and toe_error <= 25.0),
+        -axis_error,
+        -toe_error,
+        -float(result.get("leg_axis_agreement_degrees", 1e9)),
         -abs(float(result.get("camera_yaw_degrees", 0.0))),
         -abs(float(result.get("right_cm", 0.0))),
     )
@@ -310,13 +362,21 @@ def main() -> int:
         type=parse_float_values,
         default=[-3, -2, -1, 0, 1, 2, 3],
     )
+    parser.add_argument("--yaw-right-values", type=parse_float_values)
     parser.add_argument("--fine-step-cm", type=float, default=0.5)
+    parser.add_argument("--fine-yaw-step-degrees", type=float, default=1.0)
     parser.add_argument("--yaw-threshold-px", type=float, default=20.0)
+    parser.add_argument("--axis-threshold-degrees", type=float, default=3.0)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--no-resume", action="store_true")
     args = parser.parse_args()
-    if args.fine_step_cm <= 0 or args.yaw_threshold_px < 0:
-        parser.error("fine step must be positive and threshold non-negative")
+    if (
+        args.fine_step_cm <= 0
+        or args.fine_yaw_step_degrees <= 0
+        or args.yaw_threshold_px < 0
+        or args.axis_threshold_degrees < 0
+    ):
+        parser.error("fine steps must be positive and thresholds non-negative")
     output_root = args.output_root.expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True)
     base_config = args.config.expanduser().resolve()
@@ -350,15 +410,22 @@ def main() -> int:
     )
     best = fine[0] if fine else coarse_best
     yaw: list[Dict[str, Any]] = []
-    if float(best.get("absolute_error_px", 1e9)) > args.yaw_threshold_px:
+    yaw_fine: list[Dict[str, Any]] = []
+    if (
+        float(best.get("absolute_error_px", 1e9)) > args.yaw_threshold_px
+        or abs(float(best.get("leg_axis_pca_degrees", 1e9)))
+        > args.axis_threshold_degrees
+    ):
         yaw = _run_stage(
             "yaw",
             [
-                Candidate(
-                    float(best["right_cm"]),
-                    float(value),
+                Candidate(float(right), float(yaw_value))
+                for right in (
+                    args.yaw_right_values
+                    if args.yaw_right_values is not None
+                    else [float(best["right_cm"])]
                 )
-                for value in args.yaw_values
+                for yaw_value in args.yaw_values
             ],
             output_root,
             base_config,
@@ -367,12 +434,35 @@ def main() -> int:
         )
         if yaw and ranking_key(yaw[0]) > ranking_key(best):
             best = yaw[0]
+        yaw_fine = _run_stage(
+            "yaw_fine",
+            [
+                Candidate(
+                    float(best["right_cm"]),
+                    float(value),
+                )
+                for value in (
+                    float(best["camera_yaw_degrees"])
+                    - args.fine_yaw_step_degrees,
+                    float(best["camera_yaw_degrees"]),
+                    float(best["camera_yaw_degrees"])
+                    + args.fine_yaw_step_degrees,
+                )
+            ],
+            output_root,
+            base_config,
+            args.seed,
+            resume,
+        )
+        if yaw_fine and ranking_key(yaw_fine[0]) > ranking_key(best):
+            best = yaw_fine[0]
 
     summary = {
         "base_config": str(base_config),
         "coarse": coarse,
         "fine": fine,
         "yaw": yaw,
+        "yaw_fine": yaw_fine,
         "best": best,
     }
     _write_json(output_root / "alignment_search.json", summary)

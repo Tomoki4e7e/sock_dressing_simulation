@@ -1402,6 +1402,21 @@ def _grasp_frame_report(observation: Mapping, config: Mapping) -> dict:
         )
     if opening_span is not None:
         opening_span = float(opening_span)
+    grasp_positions = {}
+    for side in ("left", "right"):
+        value = np.asarray(
+            geometry.get(f"{side}_grasp_position", ()), dtype=float
+        )
+        if value.shape == (3,) and np.all(np.isfinite(value)):
+            grasp_positions[side] = value
+    vertical_difference = None
+    if len(grasp_positions) == 2:
+        vertical_difference = float(
+            grasp_positions["left"][1] - grasp_positions["right"][1]
+        )
+    area_retention = geometry.get("opening_ring_area_retention")
+    if area_retention is not None:
+        area_retention = float(area_retention)
     return {
         "available": available,
         "attached_grippers": len(attached_sides),
@@ -1410,6 +1425,18 @@ def _grasp_frame_report(observation: Mapping, config: Mapping) -> dict:
         "target_to_edge_distances_m": target_to_edge,
         "maximum_edge_error_m": max(errors.values()) if errors else None,
         "opening_span_m": opening_span,
+        "opening_ring_area_retention": area_retention,
+        "left_grasp_position": (
+            grasp_positions["left"].tolist()
+            if "left" in grasp_positions
+            else None
+        ),
+        "right_grasp_position": (
+            grasp_positions["right"].tolist()
+            if "right" in grasp_positions
+            else None
+        ),
+        "left_minus_right_vertical_m": vertical_difference,
         "threshold_m": maximum_error,
         "ok": (
             available
@@ -1712,8 +1739,49 @@ def _task_success(
         for item in grasp_quality
         if item.get("opening_span_m") is not None
     ]
+    minimum_opening_span = float(
+        config["inference"].get("minimum_opening_span_m", 0.0)
+    )
+    area_retentions = [
+        float(item["opening_ring_area_retention"])
+        for item in grasp_quality
+        if item.get("opening_ring_area_retention") is not None
+    ]
+    minimum_area_retention = float(
+        config["inference"].get(
+            "minimum_opening_ring_area_retention", 0.0
+        )
+    )
+    vertical_differences = [
+        float(item["left_minus_right_vertical_m"])
+        for item in grasp_quality
+        if item.get("left_minus_right_vertical_m") is not None
+    ]
+    crossing_tolerance = float(
+        config["inference"].get("grasp_vertical_crossing_tolerance_m", 0.0)
+    )
+    opening_minimum_ok = bool(
+        opening_spans and min(opening_spans) >= minimum_opening_span
+    )
+    opening_area_ok = bool(
+        not area_retentions
+        or min(area_retentions) >= minimum_area_retention
+    )
+    grasp_vertical_order_ok = True
+    if vertical_differences:
+        baseline_vertical = vertical_differences[0]
+        if abs(baseline_vertical) > crossing_tolerance:
+            baseline_sign = np.sign(baseline_vertical)
+            grasp_vertical_order_ok = all(
+                baseline_sign * value >= -crossing_tolerance
+                for value in vertical_differences
+            )
     continuous_opening_span_ok = bool(
-        opening_spans and max(opening_spans) <= maximum_opening_span
+        opening_spans
+        and max(opening_spans) <= maximum_opening_span
+        and opening_minimum_ok
+        and opening_area_ok
+        and grasp_vertical_order_ok
     )
     maximum_bounds_span = float(
         config["scene"]
@@ -1954,6 +2022,23 @@ def _task_success(
         ),
         "maximum_opening_span_m": (
             max(opening_spans) if opening_spans else None
+        ),
+        "minimum_opening_span_m": (
+            min(opening_spans) if opening_spans else None
+        ),
+        "minimum_allowed_opening_span_m": minimum_opening_span,
+        "minimum_opening_ring_area_retention": (
+            min(area_retentions) if area_retentions else None
+        ),
+        "minimum_allowed_opening_ring_area_retention": minimum_area_retention,
+        "grasp_vertical_order_preserved": grasp_vertical_order_ok,
+        "maximum_grasp_vertical_order_change_m": (
+            max(
+                abs(value - vertical_differences[0])
+                for value in vertical_differences
+            )
+            if vertical_differences
+            else None
         ),
         "maximum_allowed_opening_span_m": maximum_opening_span,
         "continuous_opening_span_ok": continuous_opening_span_ok,

@@ -1323,7 +1323,12 @@ def test_grasp_pins_small_inner_cuff_patches_and_leaves_rim_dynamic():
     assert "EnforceGraspParticlePositions();" in source
     assert "EnforceGraspTargetOrientations();" in source
     assert "Vector3.ProjectOnPlane(" in source
-    assert "Mathf.Min(rawOpeningAxis.magnitude, slipOpeningSpan)" in source
+    assert "Mathf.Clamp(" in source
+    assert "slipMinimumOpeningSpan" in source
+    assert "graspLockedOpeningAxis = targetOpeningAxis;" in source
+    assert "preferredAxis = graspLockedOpeningAxis" in source
+    assert "rawOpeningAxis.magnitude" in source
+    assert "slipOpeningSpan" in source
     assert "grasp.target.TransformPoint(grasp.localOffsets[i])" in source
     assert "ApplyGraspCenterTranslation();" in source
     translation = source.split(
@@ -1511,6 +1516,7 @@ def test_sock_cloth_commands_match_unity_contract():
         rotational_compliance=1000000.0,
         break_threshold=20.0,
         slip_constraint_error_m=0.20,
+        slip_minimum_opening_span_m=0.09,
         slip_opening_span_m=0.11,
         slip_consecutive_steps=2,
         maximum_particles_per_side=2,
@@ -1598,6 +1604,7 @@ def test_sock_cloth_commands_match_unity_contract():
             1000000.0,
             20.0,
             0.20,
+            0.09,
             0.11,
             2,
             2,
@@ -1807,6 +1814,7 @@ def test_grasp_configuration_rejects_invalid_thresholds():
             rotational_compliance=0.01,
             break_threshold=10,
             slip_constraint_error_m=0,
+            slip_minimum_opening_span_m=0.09,
             slip_opening_span_m=0.085,
             slip_consecutive_steps=3,
             maximum_particles_per_side=2,
