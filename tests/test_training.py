@@ -137,7 +137,11 @@ def test_domain_audit_maps_foot_and_leg_and_requires_head_mount(tmp_path):
     (simulation / "depth_mask" / "leg_depth").mkdir(parents=True)
     shutil.rmtree(simulation / "depth_mask" / "foot_depth")
     for index in range(3):
-        Image.fromarray(np.eye(8, 9, dtype=np.uint8) * 100).save(
+        leg_depth = np.zeros((8, 9), dtype=np.uint8)
+        leg_depth[np.arange(8), np.arange(8)] = (
+            np.arange(8, dtype=np.uint8) * 10 + 20 + index
+        )
+        Image.fromarray(leg_depth).save(
             simulation / "depth_mask" / "leg_depth" / f"{index}.png"
         )
     (simulation / "metadata.json").write_text(
@@ -149,3 +153,12 @@ def test_domain_audit_maps_foot_and_leg_and_requires_head_mount(tmp_path):
     assert report["ok"]
     assert report["simulation"][0]["limb_alias"] == "leg"
     assert report["simulation"][0]["camera_mount"]["mode"] == "robot_link"
+    real_depth = report["real"][0]["modalities"]["limb_depth"]
+    simulation_depth = report["simulation"][0]["modalities"]["limb_depth"]
+    assert real_depth["foreground_standard_deviation"] == 0.0
+    assert simulation_depth["foreground_standard_deviation"] > 0.0
+    assert simulation_depth["foreground_dynamic_range"] > 0.0
+    assert simulation_depth["temporal_absolute_change"] > 0.0
+    difference = report["differences"]["limb_depth.foreground_dynamic_range"]
+    assert difference["simulation"] > difference["real"]
+    assert difference["relative_absolute"] > 0.0

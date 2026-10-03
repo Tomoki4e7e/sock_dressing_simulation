@@ -1,0 +1,14 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_recorded_pose_gripper_coupled_head_camera_frame_zero_physics_single_centroid_fast_policy_human_chair_away2cm_down8cm_left_camera_foot_axis_vertical_opening_preserved.yaml
+
+# Lower only the seated human/chair task pose and point the toes farther down.
+# Camera, lateral pose, grasp, opening orientation and drape remain inherited.
+scenario:
+  foot:
+    plantarflexion_degrees: 30.0
+
+scene:
+  initial_pose_contract:
+    down_m: 0.12
+
+inference:
+  minimum_grasp_toe_vertical_clearance_m: 0.0

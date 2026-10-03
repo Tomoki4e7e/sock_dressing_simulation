@@ -608,6 +608,7 @@ def test_grasp_frame_report_checks_both_attachment_and_opening_edges():
                 "right_opening_edge": [0.0, 0.11, 0.0],
                 "opening_span_m": 0.11,
                 "opening_ring_area_retention": 0.97,
+                "right_toe_position": [0.0, -0.02, 0.0],
             },
         }
     }
@@ -622,6 +623,7 @@ def test_grasp_frame_report_checks_both_attachment_and_opening_edges():
     assert report["left_grasp_position"] == [0.0, 0.0, 0.0]
     assert report["right_grasp_position"] == [0.0, 0.1, 0.0]
     assert report["left_minus_right_vertical_m"] == pytest.approx(-0.1)
+    assert report["grasp_toe_vertical_clearance_m"] == pytest.approx(0.02)
 
 
 def test_grasp_frame_report_uses_pin_error_when_target_has_local_offset():
@@ -927,6 +929,43 @@ def test_task_success_requires_observed_foot_contact(monkeypatch):
     assert not crossed_grasps["continuous_opening_span_ok"]
     assert not crossed_grasps["grasp_vertical_order_preserved"]
 
+    config["inference"]["minimum_grasp_toe_vertical_clearance_m"] = 0.0
+    below_toe = _task_success(
+        observation,
+        [{"ok": True}],
+        [0.0, 0.2],
+        config,
+        foot_contact_ids_by_frame=[[2104]],
+        **{
+            **kwargs,
+            "grasp_quality": [
+                {
+                    "ok": True,
+                    "attached_grippers": 2,
+                    "maximum_edge_error_m": 0.01,
+                    "opening_span_m": 0.10,
+                    "opening_ring_area_retention": 0.97,
+                    "left_minus_right_vertical_m": 0.01,
+                    "grasp_toe_vertical_clearance_m": 0.01,
+                },
+                {
+                    "ok": True,
+                    "attached_grippers": 2,
+                    "maximum_edge_error_m": 0.01,
+                    "opening_span_m": 0.10,
+                    "opening_ring_area_retention": 0.97,
+                    "left_minus_right_vertical_m": 0.01,
+                    "grasp_toe_vertical_clearance_m": -0.005,
+                },
+            ],
+        },
+    )
+    assert not below_toe["grasp_toe_clearance_ok"]
+    assert below_toe[
+        "minimum_grasp_toe_vertical_clearance_m"
+    ] == pytest.approx(-0.005)
+    assert below_toe["first_grasp_below_toe_frame"] == 1
+
 
 @pytest.mark.parametrize(
     ("override", "failed_gate"),
@@ -1064,6 +1103,80 @@ def test_task_success_rejects_robot_human_penetration(monkeypatch):
     assert report["maximum_enabled_robot_human_penetration_m"] == pytest.approx(
         0.006
     )
+
+
+def test_task_success_reports_gripper_foot_region_passage(monkeypatch):
+    config = load_config(Path("config/custom_player.yaml"))
+    config["inference"]["maximum_gripper_foot_region_penetration_m"] = 0.001
+    observation = {
+        "diagnostics": {
+            "grasp_attachments": [
+                {"side": "left", "verified": True},
+                {"side": "right", "verified": True},
+            ]
+        },
+        "cloth": {},
+    }
+    monkeypatch.setattr(
+        SockDressingEnv,
+        "cloth_radius_qa",
+        staticmethod(lambda *args, **kwargs: {"passes": True}),
+    )
+
+    report = _task_success(
+        observation,
+        [{"ok": True}],
+        [0.0, 0.2],
+        config,
+        application={"initial_pose_contract": {"ok": True}},
+        grasp_quality=[
+            {
+                "ok": True,
+                "attached_grippers": 2,
+                "maximum_edge_error_m": 0.01,
+            }
+        ],
+        rigid_collision_qa_by_frame=[
+            {
+                "ignored_pair_count": 0,
+                "maximum_penetration_m": 0.0002,
+                "penetrating_pairs": [
+                    {
+                        "human_region": "forefoot",
+                        "ignored": False,
+                        "penetration_m": 0.0002,
+                        "robot_collider_path": "robot/left_gripper/finger",
+                    }
+                ],
+            },
+            {
+                "ignored_pair_count": 0,
+                "maximum_penetration_m": 0.0012,
+                "penetrating_pairs": [
+                    {
+                        "human_region": "ankle",
+                        "ignored": False,
+                        "penetration_m": 0.0012,
+                        "robot_collider_path": "robot/right_gripper/finger",
+                    },
+                    {
+                        "human_region": "calf",
+                        "ignored": False,
+                        "penetration_m": 0.004,
+                        "robot_collider_path": "robot/right_gripper/finger",
+                    },
+                ],
+            },
+        ],
+    )
+
+    assert not report["gripper_foot_passage_ok"]
+    assert report["gripper_foot_region_contact_frames"] == [0, 1]
+    assert report["gripper_foot_region_penetration_frames"] == [1]
+    assert report["first_gripper_foot_region_contact_frame"] == 0
+    assert report[
+        "maximum_gripper_foot_region_penetration_m"
+    ] == pytest.approx(0.0012)
 
 
 def test_task_success_ignores_disabled_pair_penetration(monkeypatch):

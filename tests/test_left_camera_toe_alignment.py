@@ -229,3 +229,83 @@ def test_opening_preserved_profile_changes_only_grasp_span_contract():
     assert tuned["inference"][
         "minimum_opening_ring_area_retention"
     ] == pytest.approx(0.95)
+
+
+def test_toe_clearance_profile_changes_only_height_and_ankle_angle():
+    baseline_path = Path(
+        "config/autonomous_real_only_opening_reverse_270deg_"
+        "positive_180_drape_recorded_pose_gripper_coupled_"
+        "head_camera_frame_zero_physics_single_centroid_fast_policy_"
+        "human_chair_away2cm_down8cm_left_camera_foot_axis_vertical_"
+        "opening_preserved.yaml"
+    )
+    tuned_path = baseline_path.with_name(
+        baseline_path.name.replace(
+            "down8cm_left_camera",
+            "down12cm_plantar30deg_left_camera",
+        )
+    )
+    baseline = load_config(baseline_path)
+    tuned = load_config(tuned_path)
+
+    assert tuned["scene"]["camera_parent_link"] == baseline["scene"][
+        "camera_parent_link"
+    ]
+    assert tuned["scene"]["camera_local_position"] == baseline["scene"][
+        "camera_local_position"
+    ]
+    assert tuned["scene"]["camera_local_rotation"] == baseline["scene"][
+        "camera_local_rotation"
+    ]
+    baseline_pose = baseline["scene"]["initial_pose_contract"]
+    tuned_pose = tuned["scene"]["initial_pose_contract"]
+    for key, value in baseline_pose.items():
+        if key != "down_m":
+            assert tuned_pose[key] == value
+    assert tuned_pose["down_m"] == pytest.approx(0.12)
+    assert tuned["scenario"]["sock"] == baseline["scenario"]["sock"]
+    assert tuned["scenario"]["foot"]["plantarflexion_degrees"] == pytest.approx(
+        30.0
+    )
+    assert tuned["inference"]["pre_inference_drape"] == baseline["inference"][
+        "pre_inference_drape"
+    ]
+    assert tuned["scene"]["grasp_alignment"] == baseline["scene"][
+        "grasp_alignment"
+    ]
+    assert tuned["obi"]["expected"] == baseline["obi"]["expected"]
+    assert tuned["inference"][
+        "minimum_grasp_toe_vertical_clearance_m"
+    ] == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize("angle", [5, 10, 15, 18, 20, 21, 22, 24, 25, 27, 35])
+def test_foot_passage_profiles_change_only_plantarflexion(angle):
+    baseline_path = Path(
+        "config/autonomous_real_only_opening_reverse_270deg_"
+        "positive_180_drape_recorded_pose_gripper_coupled_"
+        "head_camera_frame_zero_physics_single_centroid_fast_policy_"
+        "human_chair_away2cm_down12cm_plantar30deg_left_camera_"
+        "foot_axis_vertical_opening_preserved.yaml"
+    )
+    tuned_path = baseline_path.with_name(
+        baseline_path.name.replace("plantar30deg", f"plantar{angle}deg")
+    )
+    baseline = load_config(baseline_path)
+    tuned = load_config(tuned_path)
+
+    assert tuned["scenario"]["foot"]["plantarflexion_degrees"] == pytest.approx(
+        float(angle)
+    )
+    assert tuned["scenario"]["sock"] == baseline["scenario"]["sock"]
+    assert tuned["scene"] == baseline["scene"]
+    assert tuned["obi"] == baseline["obi"]
+    assert tuned["joints"] == baseline["joints"]
+    assert tuned["inference"]["pre_inference_drape"] == baseline["inference"][
+        "pre_inference_drape"
+    ]
+    for key, value in baseline["inference"].items():
+        assert tuned["inference"][key] == value
+    assert tuned["inference"][
+        "maximum_gripper_foot_region_penetration_m"
+    ] == pytest.approx(0.001)

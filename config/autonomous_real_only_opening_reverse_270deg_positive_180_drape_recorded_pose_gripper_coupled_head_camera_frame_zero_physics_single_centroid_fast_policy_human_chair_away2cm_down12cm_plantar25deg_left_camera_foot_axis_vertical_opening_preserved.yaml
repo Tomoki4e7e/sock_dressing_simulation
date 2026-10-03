@@ -1,0 +1,8 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_recorded_pose_gripper_coupled_head_camera_frame_zero_physics_single_centroid_fast_policy_human_chair_away2cm_down12cm_plantar30deg_left_camera_foot_axis_vertical_opening_preserved.yaml
+
+scenario:
+  foot:
+    plantarflexion_degrees: 25.0
+
+inference:
+  maximum_gripper_foot_region_penetration_m: 0.001

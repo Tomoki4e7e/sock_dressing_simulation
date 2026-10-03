@@ -1414,6 +1414,20 @@ def _grasp_frame_report(observation: Mapping, config: Mapping) -> dict:
         vertical_difference = float(
             grasp_positions["left"][1] - grasp_positions["right"][1]
         )
+    right_toe = np.asarray(geometry.get("right_toe_position", ()), dtype=float)
+    grasp_toe_vertical_clearance = None
+    if (
+        len(grasp_positions) == 2
+        and right_toe.shape == (3,)
+        and np.all(np.isfinite(right_toe))
+    ):
+        grasp_toe_vertical_clearance = float(
+            min(
+                grasp_positions["left"][1],
+                grasp_positions["right"][1],
+            )
+            - right_toe[1]
+        )
     area_retention = geometry.get("opening_ring_area_retention")
     if area_retention is not None:
         area_retention = float(area_retention)
@@ -1437,6 +1451,12 @@ def _grasp_frame_report(observation: Mapping, config: Mapping) -> dict:
             else None
         ),
         "left_minus_right_vertical_m": vertical_difference,
+        "right_toe_position": (
+            right_toe.tolist()
+            if right_toe.shape == (3,) and np.all(np.isfinite(right_toe))
+            else None
+        ),
+        "grasp_toe_vertical_clearance_m": grasp_toe_vertical_clearance,
         "threshold_m": maximum_error,
         "ok": (
             available
@@ -1776,6 +1796,23 @@ def _task_success(
                 baseline_sign * value >= -crossing_tolerance
                 for value in vertical_differences
             )
+    grasp_toe_clearances = [
+        float(item["grasp_toe_vertical_clearance_m"])
+        for item in grasp_quality
+        if item.get("grasp_toe_vertical_clearance_m") is not None
+    ]
+    minimum_grasp_toe_clearance = float(
+        config["inference"].get(
+            "minimum_grasp_toe_vertical_clearance_m", float("-inf")
+        )
+    )
+    grasp_toe_clearance_ok = bool(
+        not np.isfinite(minimum_grasp_toe_clearance)
+        or (
+            grasp_toe_clearances
+            and min(grasp_toe_clearances) >= minimum_grasp_toe_clearance
+        )
+    )
     continuous_opening_span_ok = bool(
         opening_spans
         and max(opening_spans) <= maximum_opening_span
@@ -1863,6 +1900,47 @@ def _task_success(
             for item in rigid_collision_qa
         ),
         default=None,
+    )
+    foot_passage_regions = {"toes", "forefoot", "ankle"}
+    maximum_gripper_foot_penetration = 0.0
+    gripper_foot_contact_frames = []
+    gripper_foot_penetration_frames = []
+    first_gripper_foot_contact_frame = None
+    maximum_allowed_gripper_foot_penetration = float(
+        config["inference"].get(
+            "maximum_gripper_foot_region_penetration_m", float("inf")
+        )
+    )
+    for frame, item in enumerate(rigid_collision_qa):
+        frame_contact = False
+        frame_penetration = False
+        for pair in item.get("penetrating_pairs", ()) or ():
+            path = str(pair.get("robot_collider_path", "")).lower()
+            region = str(pair.get("human_region", "")).lower()
+            penetration = float(pair.get("penetration_m", 0.0))
+            if (
+                bool(pair.get("ignored", False))
+                or "gripper" not in path
+                or region not in foot_passage_regions
+                or penetration <= 0.0
+            ):
+                continue
+            frame_contact = True
+            maximum_gripper_foot_penetration = max(
+                maximum_gripper_foot_penetration, penetration
+            )
+            if penetration > maximum_allowed_gripper_foot_penetration:
+                frame_penetration = True
+        if frame_contact:
+            gripper_foot_contact_frames.append(frame)
+            if first_gripper_foot_contact_frame is None:
+                first_gripper_foot_contact_frame = frame
+        if frame_penetration:
+            gripper_foot_penetration_frames.append(frame)
+    gripper_foot_passage_ok = bool(
+        not np.isfinite(maximum_allowed_gripper_foot_penetration)
+        or maximum_gripper_foot_penetration
+        <= maximum_allowed_gripper_foot_penetration
     )
     rigid_collision_ok = bool(rigid_collision_qa) and all(
         (
@@ -1990,6 +2068,7 @@ def _task_success(
         "verified_grippers_ok": len(verified) >= required,
         "continuous_grasp_ok": continuous_grasp_ok,
         "continuous_opening_span_ok": continuous_opening_span_ok,
+        "grasp_toe_clearance_ok": grasp_toe_clearance_ok,
         "continuous_bounds_ok": continuous_bounds_ok,
         "coverage_gain_ok": coverage_ok,
         "initial_pose_ok": pose_ok,
@@ -2000,6 +2079,7 @@ def _task_success(
         "distal_follow_ok": distal_follow_ok,
         "foot_contact_ok": foot_contact_ok,
         "rigid_collision_ok": rigid_collision_ok,
+        "gripper_foot_passage_ok": gripper_foot_passage_ok,
         "dressing_observations_ok": dressing_observations_ok,
         "final_surface_containment_ok": final_surface_containment_ok,
         "final_section_containment_ok": final_section_containment_ok,
@@ -2032,6 +2112,24 @@ def _task_success(
         ),
         "minimum_allowed_opening_ring_area_retention": minimum_area_retention,
         "grasp_vertical_order_preserved": grasp_vertical_order_ok,
+        "minimum_grasp_toe_vertical_clearance_m": (
+            min(grasp_toe_clearances) if grasp_toe_clearances else None
+        ),
+        "minimum_allowed_grasp_toe_vertical_clearance_m": (
+            minimum_grasp_toe_clearance
+            if np.isfinite(minimum_grasp_toe_clearance)
+            else None
+        ),
+        "first_grasp_below_toe_frame": next(
+            (
+                index
+                for index, item in enumerate(grasp_quality)
+                if item.get("grasp_toe_vertical_clearance_m") is not None
+                and float(item["grasp_toe_vertical_clearance_m"]) < 0.0
+            ),
+            None,
+        ),
+        "grasp_toe_clearance_ok": grasp_toe_clearance_ok,
         "maximum_grasp_vertical_order_change_m": (
             max(
                 abs(value - vertical_differences[0])
@@ -2065,6 +2163,22 @@ def _task_success(
             maximum_ignored_penetration
         ),
         "maximum_allowed_robot_human_penetration_m": maximum_allowed_penetration,
+        "maximum_gripper_foot_region_penetration_m": (
+            maximum_gripper_foot_penetration
+        ),
+        "maximum_allowed_gripper_foot_region_penetration_m": (
+            maximum_allowed_gripper_foot_penetration
+            if np.isfinite(maximum_allowed_gripper_foot_penetration)
+            else None
+        ),
+        "gripper_foot_region_contact_frames": gripper_foot_contact_frames,
+        "gripper_foot_region_penetration_frames": (
+            gripper_foot_penetration_frames
+        ),
+        "first_gripper_foot_region_contact_frame": (
+            first_gripper_foot_contact_frame
+        ),
+        "gripper_foot_passage_ok": gripper_foot_passage_ok,
         "dressing_observations_ok": dressing_observations_ok,
         "final_coverage_hold_frames": hold_frames,
         "final_surface_containment_ratio": (
