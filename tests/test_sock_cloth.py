@@ -1162,6 +1162,21 @@ def test_custom_player_projects_strain_before_collision_solving():
     assert "Mathf.Max(alignedRest, blueprintRest)" in rest_length
 
 
+def test_strain_limiter_does_not_reapply_barrier_after_final_projection():
+    source = Path(
+        "RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs"
+    ).read_text()
+    limiter = source.split(
+        "private void LimitStructuralStretch()", 1
+    )[1].split("private void EnforceGraspParticlePositions()", 1)[0]
+    final_projection = limiter.split(
+        "Do not reapply those", 1
+    )[1]
+
+    assert "EnforceOpeningRimPlane();" not in final_projection
+    assert "EnforceOpeningBodyBarrier(false);" not in final_projection
+
+
 def test_dressing_qa_requires_finite_cross_section_observations():
     value = {
         "valid": True,
