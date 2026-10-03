@@ -1650,6 +1650,92 @@ def _cloth_frame_report(
     }
 
 
+def _contact_rebound_report(
+    dressing_quality: Sequence[Mapping],
+    grasp_quality: Sequence[Mapping],
+    foot_contact_ids_by_frame: Sequence[Sequence[int]],
+    *,
+    window_frames: int = 10,
+) -> dict:
+    dressing = list(dressing_quality or ())
+    grasp = list(grasp_quality or ())
+    contacts = list(foot_contact_ids_by_frame or ())
+    frame_count = max(len(dressing), len(grasp), len(contacts))
+    contact_onset = next(
+        (
+            frame
+            for frame in range(frame_count)
+            if (
+                frame < len(contacts)
+                and bool(contacts[frame])
+            )
+            or (
+                frame < len(dressing)
+                and int(dressing[frame].get("foot_contact_count", 0)) > 0
+            )
+        ),
+        None,
+    )
+    if contact_onset is None:
+        return {
+            "foot_contact_onset_frame": None,
+            "post_contact_window_frames": int(window_frames),
+            "maximum_post_contact_cuff_reverse_m": None,
+            "maximum_post_contact_cuff_progress_drop_m": None,
+            "minimum_post_contact_opening_span_m": None,
+            "minimum_post_contact_opening_ring_area_retention": None,
+            "maximum_post_contact_opening_span_overshoot_m": None,
+            "maximum_post_contact_opening_area_overshoot": None,
+        }
+    stop = min(frame_count, contact_onset + max(int(window_frames), 1) + 1)
+    dressing_window = dressing[contact_onset:stop]
+    grasp_window = grasp[contact_onset:stop]
+    reverse_values = [
+        float(item["maximum_cuff_reverse_step_m"])
+        for item in dressing_window
+        if item.get("maximum_cuff_reverse_step_m") is not None
+    ]
+    progress_values = [
+        float(item["cuff_progress_toward_ankle_m"])
+        for item in dressing_window
+        if item.get("cuff_progress_toward_ankle_m") is not None
+    ]
+    progress_drops = [
+        max(previous - current, 0.0)
+        for previous, current in zip(progress_values, progress_values[1:])
+    ]
+    spans = [
+        float(item["opening_span_m"])
+        for item in grasp_window
+        if item.get("opening_span_m") is not None
+    ]
+    areas = [
+        float(item["opening_ring_area_retention"])
+        for item in grasp_window
+        if item.get("opening_ring_area_retention") is not None
+    ]
+    return {
+        "foot_contact_onset_frame": contact_onset,
+        "post_contact_window_frames": int(window_frames),
+        "maximum_post_contact_cuff_reverse_m": (
+            max(reverse_values) if reverse_values else None
+        ),
+        "maximum_post_contact_cuff_progress_drop_m": (
+            max(progress_drops, default=0.0) if progress_values else None
+        ),
+        "minimum_post_contact_opening_span_m": min(spans) if spans else None,
+        "minimum_post_contact_opening_ring_area_retention": (
+            min(areas) if areas else None
+        ),
+        "maximum_post_contact_opening_span_overshoot_m": (
+            max(max(spans) - spans[0], 0.0) if spans else None
+        ),
+        "maximum_post_contact_opening_area_overshoot": (
+            max(max(areas) - areas[0], 0.0) if areas else None
+        ),
+    }
+
+
 def _task_success(
     observation: Mapping,
     quality: Sequence[Mapping],
@@ -1964,6 +2050,11 @@ def _task_success(
         rigid_collision_ok = True
     dressing_settings = config.get("dressing_player", {})
     dressing_quality = list(dressing_quality or ())
+    contact_rebound = _contact_rebound_report(
+        dressing_quality,
+        grasp_quality,
+        foot_contact_ids_by_frame or (),
+    )
     hold_frames = max(
         1, int(dressing_settings.get("final_coverage_hold_frames", 3))
     )
@@ -2219,6 +2310,7 @@ def _task_success(
         ),
         "maximum_allowed_cuff_beyond_distal_toe_m": maximum_cuff_beyond_toe,
         "cuff_progress_ok": cuff_progress_ok,
+        "contact_rebound": contact_rebound,
         "maximum_cloth_foot_penetration_m": max(
             (
                 float(item.get("maximum_cloth_foot_penetration_m", 0.0))

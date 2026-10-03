@@ -10,6 +10,7 @@ from sock_dressing_simulation.config import load_config
 from sock_dressing_simulation.demo import (
     _cloth_following_state,
     _cloth_frame_report,
+    _contact_rebound_report,
     _grasp_frame_report,
     _reference_action_at_frame,
     _sock_tip_geometry_report,
@@ -1177,6 +1178,57 @@ def test_task_success_reports_gripper_foot_region_passage(monkeypatch):
     assert report[
         "maximum_gripper_foot_region_penetration_m"
     ] == pytest.approx(0.0012)
+
+
+def test_contact_rebound_report_uses_only_post_contact_window():
+    dressing = [
+        {
+            "foot_contact_count": 0,
+            "maximum_cuff_reverse_step_m": 0.02,
+            "cuff_progress_toward_ankle_m": 0.0,
+        },
+        {
+            "foot_contact_count": 1,
+            "maximum_cuff_reverse_step_m": 0.001,
+            "cuff_progress_toward_ankle_m": 0.01,
+        },
+        {
+            "foot_contact_count": 1,
+            "maximum_cuff_reverse_step_m": 0.003,
+            "cuff_progress_toward_ankle_m": 0.006,
+        },
+        {
+            "foot_contact_count": 1,
+            "maximum_cuff_reverse_step_m": 0.001,
+            "cuff_progress_toward_ankle_m": 0.009,
+        },
+    ]
+    grasp = [
+        {"opening_span_m": 0.115, "opening_ring_area_retention": 1.0},
+        {"opening_span_m": 0.100, "opening_ring_area_retention": 0.98},
+        {"opening_span_m": 0.092, "opening_ring_area_retention": 0.95},
+        {"opening_span_m": 0.105, "opening_ring_area_retention": 1.01},
+    ]
+
+    report = _contact_rebound_report(
+        dressing, grasp, [[], [2105], [2105], [2105]], window_frames=2
+    )
+
+    assert report["foot_contact_onset_frame"] == 1
+    assert report["maximum_post_contact_cuff_reverse_m"] == pytest.approx(0.003)
+    assert report["maximum_post_contact_cuff_progress_drop_m"] == pytest.approx(
+        0.004
+    )
+    assert report["minimum_post_contact_opening_span_m"] == pytest.approx(0.092)
+    assert report[
+        "minimum_post_contact_opening_ring_area_retention"
+    ] == pytest.approx(0.95)
+    assert report["maximum_post_contact_opening_span_overshoot_m"] == pytest.approx(
+        0.005
+    )
+    assert report["maximum_post_contact_opening_area_overshoot"] == pytest.approx(
+        0.03
+    )
 
 
 def test_task_success_ignores_disabled_pair_penetration(monkeypatch):
