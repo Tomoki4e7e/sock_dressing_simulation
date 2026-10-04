@@ -707,6 +707,9 @@ def run_demo(
                         )
                     )
                     dressing_report = dict(observation.get("dressing_qa", {}) or {})
+                    dressing_report["foot_conformity"] = _foot_conformity_report(
+                        observation.get("cloth", {}), dressing_report
+                    )
                     dressing_quality_by_frame.append(dressing_report)
                     rigid_qa = dict(
                         observation.get("diagnostics", {}).get(
@@ -1469,6 +1472,90 @@ def _grasp_frame_report(observation: Mapping, config: Mapping) -> dict:
             and max(errors.values()) <= maximum_error
         ),
     }
+
+
+FOOT_CONFORMITY_NEIGHBOURHOOD_M = 0.03
+FOOT_CONFORMITY_CONTACT_TOLERANCE_M = 0.003
+
+
+def _foot_conformity_report(
+    cloth: Mapping, dressing_report: Mapping
+) -> dict:
+    """Summarize how closely and evenly the sock body follows the foot."""
+    geometric = dict(dressing_report.get("geometric_foot_penetration", {}) or {})
+    distances = np.asarray(
+        geometric.pop("minimum_particle_foot_distance_m", ()), dtype=float
+    )
+    if "geometric_foot_penetration" in dressing_report:
+        dressing_report["geometric_foot_penetration"] = geometric
+    particles = np.asarray(cloth.get("particles", ()), dtype=float)
+    edges = np.asarray(cloth.get("particle_edges", ()), dtype=int)
+    rest_lengths = np.asarray(
+        cloth.get("particle_rest_edge_lengths", ()), dtype=float
+    )
+    shell = float(geometric.get("particle_shell_m", float("nan")))
+    if (
+        particles.ndim != 2
+        or particles.shape[1:] != (3,)
+        or distances.shape != (particles.shape[0],)
+        or not np.all(np.isfinite(distances))
+        or not np.isfinite(shell)
+    ):
+        return {"available": False}
+    excluded = {
+        int(index) for index in cloth.get("opening_particle_indices", ())
+    } | {
+        int(index)
+        for state in cloth.get("grasp_state", ())
+        if bool(state.get("attached", False))
+        for index in state.get("particle_indices", ())
+    }
+    body = np.ones(particles.shape[0], dtype=bool)
+    body[[index for index in excluded if 0 <= index < body.size]] = False
+    neighbourhood = body & (distances <= FOOT_CONFORMITY_NEIGHBOURHOOD_M)
+    contact = neighbourhood & (
+        distances <= shell + FOOT_CONFORMITY_CONTACT_TOLERANCE_M
+    )
+    report = {
+        "available": True,
+        "neighbourhood_m": FOOT_CONFORMITY_NEIGHBOURHOOD_M,
+        "contact_tolerance_m": FOOT_CONFORMITY_CONTACT_TOLERANCE_M,
+        "neighbourhood_particle_count": int(neighbourhood.sum()),
+        "contact_particle_count": int(contact.sum()),
+        "contact_fraction": (
+            float(contact.sum() / neighbourhood.sum())
+            if neighbourhood.any()
+            else None
+        ),
+        "near_foot_edge_count": 0,
+        "near_foot_stretch_mean": None,
+        "near_foot_stretch_std": None,
+        "near_foot_stretch_max": None,
+    }
+    if (
+        edges.ndim == 2
+        and edges.shape[1:] == (2,)
+        and edges.shape[0] == rest_lengths.size
+        and edges.size
+        and edges.min() >= 0
+        and edges.max() < particles.shape[0]
+        and np.all(rest_lengths > 0)
+    ):
+        near_edges = neighbourhood[edges[:, 0]] & neighbourhood[edges[:, 1]]
+        if near_edges.any():
+            stretches = np.linalg.norm(
+                particles[edges[near_edges, 0]] - particles[edges[near_edges, 1]],
+                axis=1,
+            ) / rest_lengths[near_edges]
+            report.update(
+                {
+                    "near_foot_edge_count": int(near_edges.sum()),
+                    "near_foot_stretch_mean": float(stretches.mean()),
+                    "near_foot_stretch_std": float(stretches.std()),
+                    "near_foot_stretch_max": float(stretches.max()),
+                }
+            )
+    return report
 
 
 def _cloth_following_state(observation: Mapping, config: Mapping) -> Optional[dict]:

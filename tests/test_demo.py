@@ -11,6 +11,7 @@ from sock_dressing_simulation.demo import (
     _cloth_following_state,
     _cloth_frame_report,
     _contact_rebound_report,
+    _foot_conformity_report,
     _grasp_frame_report,
     _reference_action_at_frame,
     _sock_tip_geometry_report,
@@ -173,6 +174,49 @@ def _tip_drape_observation(
         },
         "dressing_qa": _passing_dressing_qa(),
     }
+
+
+def test_foot_conformity_reports_contact_and_near_foot_stretch():
+    cloth = {
+        "particles": [
+            [0.0, 0.0, 0.0],
+            [0.011, 0.0, 0.0],
+            [0.022, 0.0, 0.0],
+            [0.5, 0.0, 0.0],
+        ],
+        "particle_edges": [[0, 1], [1, 2], [2, 3]],
+        "particle_rest_edge_lengths": [0.010, 0.010, 0.478],
+        "opening_particle_indices": [],
+        "grasp_state": [{"attached": True, "particle_indices": [3]}],
+    }
+    dressing = {
+        "geometric_foot_penetration": {
+            "particle_shell_m": 0.010,
+            "minimum_particle_foot_distance_m": [0.011, 0.020, 0.012, 0.5],
+        }
+    }
+
+    report = _foot_conformity_report(cloth, dressing)
+
+    assert report["available"]
+    assert report["neighbourhood_particle_count"] == 3
+    assert report["contact_particle_count"] == 2
+    assert report["contact_fraction"] == pytest.approx(2 / 3)
+    assert report["near_foot_edge_count"] == 2
+    assert report["near_foot_stretch_max"] == pytest.approx(1.1)
+    assert report["near_foot_stretch_std"] == pytest.approx(0.0, abs=1e-9)
+    assert "minimum_particle_foot_distance_m" not in (
+        dressing["geometric_foot_penetration"]
+    )
+
+
+def test_foot_conformity_is_unavailable_without_particle_distances():
+    report = _foot_conformity_report(
+        {"particles": [[0.0, 0.0, 0.0]]},
+        {"geometric_foot_penetration": {"particle_shell_m": 0.01}},
+    )
+
+    assert report == {"available": False}
 
 
 def _passing_dressing_qa(**overrides):

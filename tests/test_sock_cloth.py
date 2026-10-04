@@ -1121,6 +1121,7 @@ def test_custom_player_reports_geometric_dressing_qa():
     assert '"maximum_cloth_foot_penetration_m"' in source
     assert '"geometric_maximum_cloth_foot_penetration_m"' in source
     assert '"geometric_overlap_particle_count"' in source
+    assert '"minimum_particle_foot_distance_m"' in source
     assert '{ "toes", "forefoot", "heel", "ankle", "calf" }' in source
 
 
