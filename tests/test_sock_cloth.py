@@ -1107,6 +1107,66 @@ def test_custom_player_keeps_grasp_targets_at_frames_and_enforces_edge_match():
     assert 0.105 * (2 * 0.022) == pytest.approx(0.00462)
 
 
+def test_custom_player_models_cuff_as_elastic_band():
+    source = Path(
+        "RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs"
+    ).read_text()
+
+    assert "public void ConfigureOpeningRimElasticBand(" in source
+    material = source[
+        source.index("private float MaterialRestLength("):
+        source.index("private float StructuralRestLength(")
+    ]
+    assert "BlueprintRestLength(first, second, blueprint)" in material
+    limiter = source[
+        source.index("private void LimitStructuralStretch()"):
+        source.index("private void EnforceGraspParticlePositions()")
+    ]
+    assert "MaterialRestLength(" in limiter
+    assert "openingRimElasticMaximumStretch" in limiter
+    assert "openingRimElasticRestoringStiffness" in limiter
+    rim = source[
+        source.index("private void EnforceOpeningRimPlane()"):
+        source.index("private bool IsOpeningRimSpanParticle(")
+    ]
+    # The plane term keeps the opening angle; the in-plane term is released
+    # after foot entry and skips particles touching the foot.
+    assert "openingRimPlaneStiffness * cuffWeight" in rim
+    assert "openingRimShapeStiffness * shapeWeight" in rim
+    assert "openingRimFootContacts.Contains(item.Key)" in rim
+    assert "guardMinimum - guardedSide" in rim
+    assert "UpdateOpeningRimRelease();" in source
+    entry = source[
+        source.index("private bool FootCrossedOpeningPlane()"):
+        source.index("private float MinimumFootSignedDistance(")
+    ]
+    # The draped sock hangs beside the foot, so entry must be a toe sample in
+    # a thin slab behind the rim, oriented toward the sock body, not anywhere
+    # in the infinite prism behind the opening rectangle.
+    assert "openingRimFootEntryDepth <= OpeningRimEntrySlabDepth" in entry
+    assert "bodyCentroid - center, inward) < 0" in entry
+    assert '"calf"' not in entry
+    assert '"foot_entry_depth_m"' in source
+    assert "JawLineGraspParticles(" in source
+    assert '"opening_rim_state", OpeningRimState()' in source
+    assert '"foot_section_enclosed_fraction"' in source
+    assert '"pretension_ratio"' in source
+    assert '"opening_rim_elastic_maximum_stretch"' in source
+
+
+def test_opening_rim_elastic_band_configuration_is_fail_closed():
+    cloth = SockClothAttr(FakeEnvironment(), 1200)
+    for kwargs in (
+        {"mode": "rubber"},
+        {"elastic_maximum_stretch": 0.9},
+        {"restoring_stiffness": 1.5},
+        {"shape_release_steps": 0},
+        {"collapse_guard_ratio": 1.0},
+    ):
+        with pytest.raises(ValueError):
+            cloth.configure_opening_rim_elastic_band(**kwargs)
+
+
 def test_custom_player_reports_geometric_dressing_qa():
     source = Path(
         "RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs"
@@ -1586,6 +1646,14 @@ def test_sock_cloth_commands_match_unity_contract():
         maximum_correction_m=0.03,
     )
     cloth.arm_opening_body_barrier_predictive_skin()
+    cloth.configure_opening_rim_elastic_band(
+        mode="elastic_band",
+        elastic_maximum_stretch=1.9,
+        restoring_stiffness=0.1,
+        shape_release_steps=30,
+        collapse_guard_ratio=0.7,
+        jaw_line_grasp=True,
+    )
     cloth.set_grasp_targets(2201, 2202)
     cloth.align_grasp_targets_to_opening()
     cloth.clamp_grasp_target_span(0.115)
@@ -1675,6 +1743,16 @@ def test_sock_cloth_commands_match_unity_contract():
         ),
         (1200, "ConfigureOpeningBodyBarrier", True, 0.008, 1.0, 0.03),
         (1200, "ArmOpeningBodyBarrierPredictiveSkin", True),
+        (
+            1200,
+            "ConfigureOpeningRimElasticBand",
+            True,
+            1.9,
+            0.1,
+            30,
+            0.7,
+            True,
+        ),
         (1200, "SetGraspTargets", 2201, 2202),
         (1200, "AlignGraspTargetsToOpening"),
         (1200, "ClampGraspTargetSpan", 0.115),

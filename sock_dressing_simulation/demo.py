@@ -1448,6 +1448,7 @@ def _grasp_frame_report(observation: Mapping, config: Mapping) -> dict:
         "maximum_edge_error_m": max(errors.values()) if errors else None,
         "opening_span_m": opening_span,
         "opening_ring_area_retention": area_retention,
+        "opening_rim_state": geometry.get("opening_rim_state"),
         "left_grasp_position": (
             grasp_positions["left"].tolist()
             if "left" in grasp_positions
@@ -1828,6 +1829,73 @@ def _contact_rebound_report(
     }
 
 
+def _rim_foot_entered(item: Mapping) -> bool:
+    return bool((item.get("opening_rim_state") or {}).get("foot_entered", False))
+
+
+def _opening_rim_elastic_qa(
+    grasp_quality: Sequence[Mapping], config: Mapping
+) -> dict:
+    """Judge an elastic-band cuff by staying open before the foot arrives
+    and by enclosing the leg section after it enters."""
+    obi_settings = config["obi"].get(
+        "expected", config["obi"].get("requested", {})
+    )
+    elastic_band = obi_settings.get("opening_rim_mode", "template") == "elastic_band"
+    minimum_enclosure = float(
+        config["inference"].get("minimum_post_entry_foot_section_enclosure", 0.95)
+    )
+    states = [
+        item.get("opening_rim_state") or {} for item in grasp_quality
+    ]
+    post_entry = [state for state in states if state.get("foot_entered")]
+    fractions = [
+        float(state["foot_section_enclosed_fraction"])
+        for state in post_entry
+        if int(state.get("foot_section_sample_count", 0)) > 0
+        and state.get("foot_section_enclosed_fraction") is not None
+        and np.isfinite(float(state["foot_section_enclosed_fraction"]))
+    ]
+    pretension = [
+        float(state["pretension_ratio"])
+        for state in states
+        if state.get("pretension_ratio") is not None
+        and np.isfinite(float(state["pretension_ratio"]))
+    ]
+    first_entry = next(
+        (index for index, state in enumerate(states) if state.get("foot_entered")),
+        None,
+    )
+    return {
+        "elastic_band": elastic_band,
+        "first_foot_entry_frame": first_entry,
+        "post_entry_frames": len(post_entry),
+        "post_entry_section_frames": len(fractions),
+        "minimum_post_entry_foot_section_enclosure": (
+            min(fractions) if fractions else None
+        ),
+        "mean_post_entry_foot_section_enclosure": (
+            float(np.mean(fractions)) if fractions else None
+        ),
+        "minimum_allowed_foot_section_enclosure": minimum_enclosure,
+        "foot_enclosure_ok": bool(fractions)
+        and min(fractions) >= minimum_enclosure,
+        "minimum_pretension_ratio": min(pretension) if pretension else None,
+        "maximum_pretension_ratio": max(pretension) if pretension else None,
+        "maximum_collapse_guard_correction_m": max(
+            (
+                float(state.get("collapse_guard_maximum_correction_m", 0.0))
+                for state in states
+            ),
+            default=None,
+        ),
+        "collapse_guard_active_frames": sum(
+            int(state.get("collapse_guard_correction_count", 0)) > 0
+            for state in states
+        ),
+    }
+
+
 def _task_success(
     observation: Mapping,
     quality: Sequence[Mapping],
@@ -1940,14 +2008,19 @@ def _task_success(
     minimum_opening_span = float(
         config["inference"].get("minimum_opening_span_m", 0.0)
     )
+    rim_qa = _opening_rim_elastic_qa(grasp_quality, config)
     area_retentions = [
         float(item["opening_ring_area_retention"])
         for item in grasp_quality
         if item.get("opening_ring_area_retention") is not None
+        and not (rim_qa["elastic_band"] and _rim_foot_entered(item))
     ]
     minimum_area_retention = float(
         config["inference"].get(
-            "minimum_opening_ring_area_retention", 0.0
+            "minimum_pre_entry_opening_ring_area_retention"
+            if rim_qa["elastic_band"]
+            else "minimum_opening_ring_area_retention",
+            0.0,
         )
     )
     vertical_differences = [
@@ -2270,11 +2343,16 @@ def _task_success(
         "cloth_foot_penetration_ok": cloth_foot_penetration_ok,
         "human_chair_lock_ok": human_chair_lock_ok,
     }
+    if rim_qa["elastic_band"]:
+        success_gates["opening_rim_foot_enclosure_ok"] = rim_qa[
+            "foot_enclosure_ok"
+        ]
     return {
         "success": all(success_gates.values()),
         "failed_gates": [
             name for name, passed in success_gates.items() if not passed
         ],
+        "opening_rim_elastic_qa": rim_qa,
         "semantic_masks_ok": semantic_ok,
         "verified_grippers": len(verified),
         "required_grippers": required,

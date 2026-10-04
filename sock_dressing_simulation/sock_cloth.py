@@ -764,6 +764,39 @@ class SockClothAttr:
             float(maximum_correction_m),
         )
 
+    def configure_opening_rim_elastic_band(
+        self,
+        *,
+        mode: str = "template",
+        elastic_maximum_stretch: float = 1.8,
+        restoring_stiffness: float = 0.0,
+        shape_release_steps: int = 25,
+        collapse_guard_ratio: float = 0.0,
+        jaw_line_grasp: bool = False,
+    ) -> None:
+        values = np.asarray(
+            [elastic_maximum_stretch, restoring_stiffness, collapse_guard_ratio],
+            dtype=float,
+        )
+        if (
+            mode not in ("template", "elastic_band")
+            or not np.all(np.isfinite(values))
+            or not 1.0 <= elastic_maximum_stretch <= 3.0
+            or not 0.0 <= restoring_stiffness <= 1.0
+            or int(shape_release_steps) < 1
+            or not 0.0 <= collapse_guard_ratio < 1.0
+        ):
+            raise ValueError("invalid opening rim elastic band configuration")
+        self._send_data(
+            "ConfigureOpeningRimElasticBand",
+            mode == "elastic_band",
+            float(elastic_maximum_stretch),
+            float(restoring_stiffness),
+            int(shape_release_steps),
+            float(collapse_guard_ratio),
+            bool(jaw_line_grasp),
+        )
+
     def arm_opening_body_barrier_predictive_skin(
         self, armed: bool = True
     ) -> None:

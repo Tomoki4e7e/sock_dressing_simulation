@@ -78,6 +78,10 @@ def summarize(episode: Path) -> dict:
         "maximum_near_foot_stretch": (
             max(stretch_max) if stretch_max else None
         ),
+        "maximum_opening_rim_stretch": _edge_class_max(
+            cloth_quality, "opening_rim", "maximum_stretch"
+        ),
+        "opening_rim_elastic_qa": success.get("opening_rim_elastic_qa"),
     }
 
 

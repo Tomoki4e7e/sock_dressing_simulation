@@ -1,0 +1,7 @@
+extends: rim_elastic_e1_jaw.yaml
+
+# E1 (jaw-line grasp beat the collapse guard on pre-entry area) plus the
+# damping that was best in the sock-conformity search.
+obi:
+  expected:
+    damping: 0.8

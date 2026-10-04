@@ -350,6 +350,22 @@ class SockDressingEnv:
                 expected.get("opening_body_barrier_maximum_correction_m", 0.03)
             ),
         )
+        self.sock_cloth.configure_opening_rim_elastic_band(
+            mode=str(expected.get("opening_rim_mode", "template")),
+            elastic_maximum_stretch=float(
+                expected.get("opening_rim_elastic_maximum_stretch", 1.8)
+            ),
+            restoring_stiffness=float(
+                expected.get("opening_rim_elastic_restoring_stiffness", 0.0)
+            ),
+            shape_release_steps=int(
+                expected.get("opening_rim_shape_release_steps", 25)
+            ),
+            collapse_guard_ratio=float(
+                expected.get("opening_rim_collapse_guard_ratio", 0.0)
+            ),
+            jaw_line_grasp=bool(expected.get("grasp_jaw_line", False)),
+        )
         self.sock_cloth.request_configuration()
         self.sock_cloth.request_registered_colliders()
         self._env.step()
@@ -2720,6 +2736,7 @@ class SockDressingEnv:
             cloth.get("particle_rest_edge_lengths", ()), dtype=float
         )
         diagnostics: Dict[str, Any] = {}
+        rim_ok = True
         if (
             edges.ndim == 2
             and edges.shape[1:] == (2,)
@@ -2745,8 +2762,25 @@ class SockDressingEnv:
                 axis=1,
             )
             edge_stretches = edge_lengths / rest_lengths
-            maximum_stretch_index = int(np.argmax(edge_stretches))
-            stretch = float(edge_stretches[maximum_stretch_index])
+            # An elastic-band cuff is judged against its own knit limit,
+            # measured from the mesh rest length; the body keeps the
+            # circumferential limit.
+            rim_limit = float(
+                cloth.get("opening_rim_elastic_maximum_stretch", -1.0) or -1.0
+            )
+            rim_mask = np.zeros(edges.shape[0], dtype=bool)
+            if rim_limit > 0 and opening_particles:
+                rim_mask = np.asarray(
+                    [
+                        int(edge[0]) in opening_particles
+                        and int(edge[1]) in opening_particles
+                        for edge in edges
+                    ],
+                    dtype=bool,
+                )
+            judged_stretches = np.where(rim_mask, 0.0, edge_stretches)
+            maximum_stretch_index = int(np.argmax(judged_stretches))
+            stretch = float(judged_stretches[maximum_stretch_index])
             maximum = float(edge_lengths.max())
             method = "Obi topology structural edge stretch"
             pinned_counts = np.asarray(
@@ -2763,7 +2797,7 @@ class SockDressingEnv:
                 ("pin_body", 1),
                 ("pin_pin", 2),
             ):
-                mask = pinned_counts == count
+                mask = (pinned_counts == count) & ~rim_mask
                 if not np.any(mask):
                     edge_classes[name] = {
                         "edge_count": 0,
@@ -2836,6 +2870,16 @@ class SockDressingEnv:
                     "maximum_stretch_rest_edge_m": None,
                     "maximum_excess_length_m": None,
                 }
+            if np.any(rim_mask):
+                rim_stretches = edge_stretches[rim_mask]
+                rim_ok = bool(rim_stretches.max() <= rim_limit)
+                edge_classes["opening_rim"] = {
+                    "edge_count": int(rim_mask.sum()),
+                    "maximum_stretch": float(rim_stretches.max()),
+                    "mean_stretch": float(rim_stretches.mean()),
+                    "maximum_allowed_stretch": rim_limit,
+                    "passes": rim_ok,
+                }
             diagnostics = {
                 "minimum_rest_edge_m": float(rest_lengths.min()),
                 "maximum_rest_edge_m": float(rest_lengths.max()),
@@ -2887,6 +2931,7 @@ class SockDressingEnv:
                     or maximum <= 0.06
                 )
                 and stretch <= maximum_circumferential_stretch
+                and rim_ok
             ),
             "maximum_circumferential_stretch": (
                 maximum_circumferential_stretch

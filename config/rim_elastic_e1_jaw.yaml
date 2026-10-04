@@ -1,0 +1,11 @@
+extends: rim_elastic_e0_band.yaml
+
+# Pinch the whole short cuff edge between the parallel jaws.
+obi:
+  expected:
+    grasp_jaw_line: true
+    maximum_grasp_particles_per_side: 5
+
+scene:
+  initial_pose_contract:
+    required_grasp_particles_per_side: 5

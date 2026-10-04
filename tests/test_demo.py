@@ -13,6 +13,7 @@ from sock_dressing_simulation.demo import (
     _contact_rebound_report,
     _foot_conformity_report,
     _grasp_frame_report,
+    _opening_rim_elastic_qa,
     _reference_action_at_frame,
     _sock_tip_geometry_report,
     _task_success,
@@ -217,6 +218,85 @@ def test_foot_conformity_is_unavailable_without_particle_distances():
     )
 
     assert report == {"available": False}
+
+
+def _rim_frame(entered, fraction=None, samples=0, pretension=1.5, guard=0):
+    return {
+        "opening_ring_area_retention": 0.9,
+        "opening_rim_state": {
+            "foot_entered": entered,
+            "foot_section_sample_count": samples,
+            "foot_section_enclosed_fraction": fraction,
+            "pretension_ratio": pretension,
+            "collapse_guard_correction_count": guard,
+            "collapse_guard_maximum_correction_m": 0.002 * guard,
+        },
+    }
+
+
+def test_opening_rim_elastic_qa_requires_post_entry_enclosure():
+    config = {
+        "obi": {"expected": {"opening_rim_mode": "elastic_band"}},
+        "inference": {"minimum_post_entry_foot_section_enclosure": 0.9},
+    }
+    frames = [
+        _rim_frame(False, pretension=1.45, guard=1),
+        _rim_frame(True, fraction=1.0, samples=12),
+        _rim_frame(True, fraction=0.95, samples=20, pretension=1.6),
+    ]
+
+    report = _opening_rim_elastic_qa(frames, config)
+
+    assert report["elastic_band"]
+    assert report["first_foot_entry_frame"] == 1
+    assert report["post_entry_section_frames"] == 2
+    assert report["minimum_post_entry_foot_section_enclosure"] == 0.95
+    assert report["foot_enclosure_ok"]
+    assert report["minimum_pretension_ratio"] == 1.45
+    assert report["maximum_pretension_ratio"] == 1.6
+    assert report["collapse_guard_active_frames"] == 1
+
+    frames.append(_rim_frame(True, fraction=0.5, samples=10))
+    assert not _opening_rim_elastic_qa(frames, config)["foot_enclosure_ok"]
+    assert not _opening_rim_elastic_qa(frames[:1], config)["foot_enclosure_ok"]
+
+
+def test_opening_rim_elastic_qa_is_inactive_for_template_rim():
+    config = {"obi": {"expected": {}}, "inference": {}}
+
+    assert not _opening_rim_elastic_qa([_rim_frame(False)], config)["elastic_band"]
+
+
+def test_cloth_stretch_judges_elastic_rim_against_its_own_limit():
+    cloth = {
+        "particles": [[0, 0, 0], [0.018, 0, 0], [0.018, 0.01, 0]],
+        "particle_edges": [[0, 1], [1, 2]],
+        "particle_rest_edge_lengths": [0.01, 0.01],
+        "opening_particle_indices": [0, 1],
+        "opening_rim_elastic_maximum_stretch": 1.9,
+    }
+
+    report = SockDressingEnv.cloth_radius_qa(
+        cloth, maximum_circumferential_stretch=1.5
+    )
+    assert report["passes"]
+    assert report["circumferential_stretch_proxy"] == pytest.approx(1.0)
+    assert report["edge_classes"]["opening_rim"]["maximum_stretch"] == (
+        pytest.approx(1.8)
+    )
+    assert report["edge_classes"]["opening_rim"]["passes"]
+
+    cloth["opening_rim_elastic_maximum_stretch"] = 1.7
+    assert not SockDressingEnv.cloth_radius_qa(
+        cloth, maximum_circumferential_stretch=1.5
+    )["passes"]
+
+    cloth["opening_rim_elastic_maximum_stretch"] = -1.0
+    report = SockDressingEnv.cloth_radius_qa(
+        cloth, maximum_circumferential_stretch=1.5
+    )
+    assert not report["passes"]
+    assert "opening_rim" not in report["edge_classes"]
 
 
 def _passing_dressing_qa(**overrides):
