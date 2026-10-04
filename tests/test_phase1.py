@@ -459,6 +459,40 @@ def test_foot_to_sock_translation_moves_rigidly_along_opening_normal():
     )
     assert report["baseline_signed_distance_m"] == pytest.approx(-0.20)
 
+    # Span follows the grippers, so the drape's normal flip does not change it.
+    assert report["baseline_span_offset_m"] == pytest.approx(0.05)
+    assert report["translated_lateral_m"] == pytest.approx(0.05)
+
+    # Zero lateral target puts the toe on the opening axis; a world offset is
+    # added on top of that.
+    config["scene"]["initial_pose_contract"]["foot_lateral_target_m"] = 0.0
+    translated, report = environment._translate_locked_pose_to_foot_to_sock(
+        baseline, geometry, 0.11
+    )
+    np.testing.assert_allclose(
+        np.asarray(translated["chair_position"])
+        - np.asarray(baseline["chair_position"]),
+        [-0.05, 0.09, 0.0],
+    )
+    assert report["baseline_span_offset_m"] == pytest.approx(0.05)
+    assert report["translated_lateral_m"] == pytest.approx(0.0, abs=1e-12)
+    config["scene"]["initial_pose_contract"]["foot_world_offset_m"] = [
+        0.0, 0.0, 0.02,
+    ]
+    translated, report = environment._translate_locked_pose_to_foot_to_sock(
+        baseline, geometry, 0.11
+    )
+    np.testing.assert_allclose(report["translation_m"], [-0.05, 0.09, 0.02])
+    assert report["translated_cross_offset_m"] == pytest.approx(-0.02)
+    assert report["translated_lateral_m"] == pytest.approx(0.02)
+    config["scene"]["initial_pose_contract"]["foot_world_offset_m"] = [0.0, 1.0]
+    with pytest.raises(ValueError, match="foot_world_offset_m"):
+        environment._translate_locked_pose_to_foot_to_sock(
+            baseline, geometry, 0.11
+        )
+    del config["scene"]["initial_pose_contract"]["foot_world_offset_m"]
+    del config["scene"]["initial_pose_contract"]["foot_lateral_target_m"]
+
     on_plane = dict(baseline, right_toe_position=[0.0, 0.5, 0.0])
     with pytest.raises(RuntimeError, match="on the held opening plane"):
         environment._translate_locked_pose_to_foot_to_sock(

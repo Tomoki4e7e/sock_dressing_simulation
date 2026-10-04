@@ -2532,8 +2532,10 @@ class SockDressingEnv:
         """Rigidly move human and chair along the opening normal so the toe
         sits ``target_distance_m`` in front of the held opening plane.
 
-        Only the offset along the normal changes; the lateral offset, leg
-        posture, opening angle and gripper pose are untouched.
+        ``foot_lateral_target_m`` additionally rescales the in-plane toe
+        offset (0 puts the toe on the opening axis), and
+        ``foot_world_offset_m`` adds a final world-space shift. Leg posture,
+        opening angle and gripper pose are untouched.
         """
         if not np.isfinite(target_distance_m) or target_distance_m <= 0:
             raise ValueError("foot_to_sock_m must be finite and positive")
@@ -2566,6 +2568,36 @@ class SockDressingEnv:
             raise RuntimeError("right toe lies on the held opening plane")
         delta = normal * (distance - np.sign(distance) * target_distance_m)
         settings = self.config["scene"].get("initial_pose_contract", {})
+        offset = toe - center
+        in_plane = offset - np.dot(offset, normal) * normal
+        span_axis = np.asarray(geometry.right_grasp_position, dtype=float) - (
+            np.asarray(geometry.left_grasp_position, dtype=float)
+        )
+        span_axis -= np.dot(span_axis, normal) * normal
+        if float(np.linalg.norm(span_axis)) <= 1e-8:
+            raise ValueError("grasp span is degenerate in the opening plane")
+        span_axis /= float(np.linalg.norm(span_axis))
+        cross_axis = np.cross(normal, span_axis)
+        lateral_target = settings.get("foot_lateral_target_m")
+        if lateral_target is not None:
+            lateral_target = float(lateral_target)
+            if not np.isfinite(lateral_target) or lateral_target < 0:
+                raise ValueError(
+                    "foot_lateral_target_m must be finite and non-negative"
+                )
+            lateral = float(np.linalg.norm(in_plane))
+            if lateral <= 1e-9 and lateral_target > 0:
+                raise RuntimeError("in-plane toe offset has no direction")
+            scale = 0.0 if lateral <= 1e-9 else lateral_target / lateral
+            delta = delta - in_plane * (1.0 - scale)
+        world_offset = np.zeros(3)
+        if settings.get("foot_world_offset_m") is not None:
+            world_offset = np.asarray(settings["foot_world_offset_m"], dtype=float)
+            if world_offset.shape != (3,) or not np.all(np.isfinite(world_offset)):
+                raise ValueError("foot_world_offset_m must be a finite 3-vector")
+            delta = delta + world_offset
+        moved = offset + delta
+        moved_in_plane = moved - np.dot(moved, normal) * normal
         rigid_task_pose = bool(settings.get("straight_right_leg", False))
         translated: Dict[str, Any] = {}
         for name in (
@@ -2590,6 +2622,15 @@ class SockDressingEnv:
             "baseline_foot_to_sock_m": abs(distance),
             "baseline_signed_distance_m": distance,
             "target_foot_to_sock_m": target_distance_m,
+            "target_foot_lateral_m": lateral_target,
+            "foot_world_offset_m": world_offset.tolist(),
+            # Span runs left gripper -> right gripper; cross is the short edge.
+            "baseline_lateral_m": float(np.linalg.norm(in_plane)),
+            "baseline_span_offset_m": float(np.dot(in_plane, span_axis)),
+            "baseline_cross_offset_m": float(np.dot(in_plane, cross_axis)),
+            "translated_lateral_m": float(np.linalg.norm(moved_in_plane)),
+            "translated_span_offset_m": float(np.dot(moved_in_plane, span_axis)),
+            "translated_cross_offset_m": float(np.dot(moved_in_plane, cross_axis)),
             "translation_m": delta.tolist(),
             "translated_locked_pose_baseline": translated,
         }

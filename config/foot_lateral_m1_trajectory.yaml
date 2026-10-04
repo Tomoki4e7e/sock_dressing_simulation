@@ -1,0 +1,9 @@
+extends: foot_lateral_l1_zero.yaml
+
+# L1 plus a rigid human+chair shift onto the policy's opening path: the
+# median dorsal/lateral offset of the opening centre from the foot axis over
+# L1 frames with along-axis in [-0.05, 0.10] m (23 frames; dorsal 0.0126 m,
+# lateral -0.0046 m), expressed in Unity world coordinates.
+scene:
+  initial_pose_contract:
+    foot_world_offset_m: [-0.004552797514407949, 0.011852071004478723, 0.004313799374685548]
