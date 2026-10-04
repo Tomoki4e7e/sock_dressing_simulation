@@ -1,0 +1,9 @@
+extends: foot_axis_h1_max_delta0p04.yaml
+
+# H1 (best of H1-H3) with the human and chair moved rigidly along the
+# opening normal so the toe starts foot_to_sock_m (0.11 m) from the held
+# opening, the distance the pose contract expects. Leg posture, lateral
+# offset, opening angle, drape and gripper pose are unchanged.
+scene:
+  initial_pose_contract:
+    translate_to_foot_to_sock: true

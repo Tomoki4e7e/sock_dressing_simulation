@@ -11,6 +11,7 @@ from sock_dressing_simulation.demo import (
     _cloth_following_state,
     _cloth_frame_report,
     _contact_rebound_report,
+    _foot_axis_alignment_qa,
     _foot_conformity_report,
     _grasp_frame_report,
     _opening_rim_elastic_qa,
@@ -267,6 +268,52 @@ def test_opening_rim_elastic_qa_is_inactive_for_template_rim():
     assert not _opening_rim_elastic_qa([_rim_frame(False)], config)["elastic_band"]
 
 
+def test_foot_axis_qa_accepts_cuff_travelling_along_foot_axis():
+    config = {
+        "obi": {"expected": {"grasp_thickness_half_width_m": 0.0375}},
+        "inference": {"maximum_opening_foot_axis_offset_m": 0.03},
+    }
+    grasp = [
+        _axis_grasp_frame(along, dorsal_m=0.01, lateral_m=-0.005)
+        for along in (-0.05, -0.01, 0.03, 0.08, 0.15)
+    ]
+    dressing = [_passing_dressing_qa() for _ in grasp]
+
+    report = _foot_axis_alignment_qa(grasp, dressing, config)
+
+    assert report["foot_axis_alignment_ok"]
+    assert report["first_past_toe_frame"] == 2
+    assert report["dorsal_passage_frames"] == []
+    assert abs(report["frames"][3]["along_axis_m"] - 0.08) < 1e-9
+    assert abs(report["frames"][3]["dorsal_m"] - 0.01) < 1e-9
+    assert abs(report["frames"][3]["lateral_m"] + 0.005) < 1e-9
+
+
+def test_foot_axis_qa_detects_cuff_sliding_over_the_instep():
+    config = {
+        "obi": {"expected": {"grasp_thickness_half_width_m": 0.0375}},
+        "inference": {},
+    }
+    # Mirrors the E3a failure: closest approach 3 cm above the toe, then the
+    # opening lifts to ~10 cm above the axis while advancing toward the ankle.
+    grasp = [
+        _axis_grasp_frame(-0.035, dorsal_m=0.031),
+        _axis_grasp_frame(0.006, dorsal_m=0.094),
+        _axis_grasp_frame(0.11, dorsal_m=0.092),
+    ]
+    dressing = [_passing_dressing_qa() for _ in grasp]
+
+    report = _foot_axis_alignment_qa(grasp, dressing, config)
+
+    assert not report["foot_axis_alignment_ok"]
+    assert report["dorsal_passage_frames"] == [1, 2]
+    assert report["closest_frame"] == 0
+    # A cuff that never reaches the toe cannot pass either.
+    assert not _foot_axis_alignment_qa(grasp[:1], dressing[:1], config)[
+        "foot_axis_alignment_ok"
+    ]
+
+
 def test_cloth_stretch_judges_elastic_rim_against_its_own_limit():
     cloth = {
         "particles": [[0, 0, 0], [0.018, 0, 0], [0.018, 0.01, 0]],
@@ -313,9 +360,23 @@ def _passing_dressing_qa(**overrides):
         "maximum_cloth_foot_penetration_m": 0.001,
         "obi_maximum_cloth_foot_penetration_m": 0.0008,
         "geometric_maximum_cloth_foot_penetration_m": 0.0006,
+        "foot_axis_to_ankle": [0.0, 0.0, -1.0],
     }
     value.update(overrides)
     return value
+
+
+def _axis_grasp_frame(along_m, dorsal_m=0.0, lateral_m=0.0, **extra):
+    """Grasp report whose opening centre sits at the given offsets from a toe
+    at the origin, for a foot axis pointing to -z (dorsal is +y)."""
+    center = np.array([lateral_m, dorsal_m, -along_m])
+    frame = {
+        "left_grasp_position": (center - [0.05, 0.0, 0.0]).tolist(),
+        "right_grasp_position": (center + [0.05, 0.0, 0.0]).tolist(),
+        "right_toe_position": [0.0, 0.0, 0.0],
+    }
+    frame.update(extra)
+    return frame
 
 
 def test_tip_drape_sample_requires_drop_centered_span_and_physics_qa(monkeypatch):
@@ -692,6 +753,76 @@ def test_demo_records_bounded_closed_loop_actions(tmp_path):
     ]
 
 
+def test_policy_catch_up_moves_to_first_command_before_inference(tmp_path):
+    created = []
+
+    class CountingPolicy(_Policy):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            created.append(self)
+
+    config = load_config()
+    config["assets"]["output_dir"] = str(tmp_path)
+    config["inference"]["policy_catch_up"] = {
+        "enabled": True,
+        "maximum_actions": 3,
+        "tolerance_rad": 0.05,
+    }
+    result = run_demo(
+        config,
+        prepared={"runtime_urdf": str(tmp_path / "robot.urdf")},
+        output_root=tmp_path / "episodes",
+        sock_points=[[1, 1]],
+        leg_points=[[3, 2]],
+        max_steps=1,
+        environment_factory=_Environment,
+        perception_factory=_Perception,
+        policy_factory=CountingPolicy,
+    )
+
+    assert result["ok"]
+    episode = result["episode"]
+    with open(f"{episode}/applied_action.csv", newline="") as stream:
+        rows = list(csv.reader(stream))
+    # Three rate-limited catch-up actions precede the single recorded frame.
+    assert len(rows) == 1
+    assert float(rows[0][0]) == pytest.approx(0.32)
+    metadata = json.loads(open(f"{episode}/metadata.json").read())
+    report = metadata["policy_catch_up"]
+    assert report["actions"] == 3
+    assert not report["converged"]
+    assert report["final_gap_rad"] < report["initial_gap_rad"]
+    # The recurrent policy restarts from the caught-up pose.
+    assert len(created) == 2
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"enabled": True, "maximum_actions": 0},
+        {"enabled": True, "tolerance_rad": 0.0},
+        {"enabled": True, "tolerance_rad": float("nan")},
+    ],
+)
+def test_policy_catch_up_settings_are_fail_closed(tmp_path, settings):
+    config = load_config()
+    config["assets"]["output_dir"] = str(tmp_path)
+    config["inference"]["policy_catch_up"] = settings
+
+    with pytest.raises(ValueError, match="policy catch-up"):
+        run_demo(
+            config,
+            prepared={"runtime_urdf": str(tmp_path / "robot.urdf")},
+            output_root=tmp_path / "episodes",
+            sock_points=[[1, 1]],
+            leg_points=[[3, 2]],
+            max_steps=1,
+            environment_factory=_Environment,
+            perception_factory=_Perception,
+            policy_factory=_Policy,
+        )
+
+
 def test_reference_actions_are_linearly_interpolated_across_demo_frames():
     actions = np.stack([np.zeros(18), np.ones(18), np.full(18, 2.0)])
 
@@ -928,12 +1059,13 @@ def test_task_success_requires_observed_foot_contact(monkeypatch):
     kwargs = {
         "application": {"initial_pose_contract": {"ok": True}},
         "grasp_quality": [
-            {
-                "ok": True,
-                "attached_grippers": 2,
-                "maximum_edge_error_m": 0.01,
-                "opening_span_m": 0.08,
-            }
+            _axis_grasp_frame(
+                0.02,
+                ok=True,
+                attached_grippers=2,
+                maximum_edge_error_m=0.01,
+                opening_span_m=0.08,
+            )
         ],
         "cloth_quality": [
             {

@@ -31,6 +31,7 @@ class SockDressingEnv:
         self._right_toe_offset_report: Optional[Dict[str, Any]] = None
         self._human_chair_translation_report: Optional[Dict[str, Any]] = None
         self._human_chair_grid_offset_report: Optional[Dict[str, Any]] = None
+        self._foot_to_sock_translation_report: Optional[Dict[str, Any]] = None
         self._effective_locked_pose_baseline: Optional[Dict[str, Any]] = None
 
     def connect(self) -> "SockDressingEnv":
@@ -1180,6 +1181,15 @@ class SockDressingEnv:
                     ) = self._apply_human_chair_grid_offset(
                         effective_baseline
                     )
+                if pose_settings.get("translate_to_foot_to_sock", False):
+                    (
+                        effective_baseline,
+                        self._foot_to_sock_translation_report,
+                    ) = self._translate_locked_pose_to_foot_to_sock(
+                        effective_baseline,
+                        self._request_scene_geometry(),
+                        float(pose_settings["foot_to_sock_m"]),
+                    )
                 self._effective_locked_pose_baseline = effective_baseline
                 chair_id = int(
                     self.config["scene"]
@@ -1213,6 +1223,7 @@ class SockDressingEnv:
             if (
                 self._human_chair_translation_report is not None
                 or self._human_chair_grid_offset_report is not None
+                or self._foot_to_sock_translation_report is not None
             ):
                 geometry = self._request_scene_geometry()
                 actual = np.asarray(geometry.right_toe_position, dtype=float)
@@ -1246,6 +1257,11 @@ class SockDressingEnv:
                     self._human_chair_translation_report.update(final_report)
                 if self._human_chair_grid_offset_report is not None:
                     self._human_chair_grid_offset_report.update(final_report)
+                if self._foot_to_sock_translation_report is not None:
+                    self._foot_to_sock_translation_report.update(
+                        final_report,
+                        actual_foot_to_sock_m=geometry.foot_to_opening_plane_m,
+                    )
             if initial_grasp and not all(
                 item["attached"] for item in initial_grasp
             ):
@@ -1409,6 +1425,9 @@ class SockDressingEnv:
                 ),
                 "human_chair_grid_offset": (
                     self._human_chair_grid_offset_report
+                ),
+                "foot_to_sock_translation": (
+                    self._foot_to_sock_translation_report
                 ),
                 "initial_pose_contract": pose_contract,
             }
@@ -2000,6 +2019,7 @@ class SockDressingEnv:
         offset_report = self._right_toe_offset_report
         translation_report = self._human_chair_translation_report
         grid_offset_report = self._human_chair_grid_offset_report
+        foot_to_sock_report = self._foot_to_sock_translation_report
         offset_ok = (
             offset_report is None or bool(offset_report.get("ok", False))
         ) and (
@@ -2008,6 +2028,9 @@ class SockDressingEnv:
         ) and (
             grid_offset_report is None
             or bool(grid_offset_report.get("ok", False))
+        ) and (
+            foot_to_sock_report is None
+            or bool(foot_to_sock_report.get("ok", False))
         )
         opening_plate_alignment = float(
             getattr(geometry, "opening_plate_normal_alignment", 1.0)
@@ -2497,6 +2520,77 @@ class SockDressingEnv:
             "translation_m": delta.tolist(),
             "distance_along_outward_normal_m": float(distance),
             "tolerance_m": tolerance,
+            "translated_locked_pose_baseline": translated,
+        }
+
+    def _translate_locked_pose_to_foot_to_sock(
+        self,
+        locked_pose_baseline: Mapping[str, Any],
+        geometry: Any,
+        target_distance_m: float,
+    ) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        """Rigidly move human and chair along the opening normal so the toe
+        sits ``target_distance_m`` in front of the held opening plane.
+
+        Only the offset along the normal changes; the lateral offset, leg
+        posture, opening angle and gripper pose are untouched.
+        """
+        if not np.isfinite(target_distance_m) or target_distance_m <= 0:
+            raise ValueError("foot_to_sock_m must be finite and positive")
+        center = 0.5 * (
+            np.asarray(geometry.left_grasp_position, dtype=float)
+            + np.asarray(geometry.right_grasp_position, dtype=float)
+        )
+        normal = np.asarray(geometry.opening_target_normal, dtype=float)
+        toe = np.asarray(
+            locked_pose_baseline["right_toe_position"], dtype=float
+        )
+        if (
+            center.shape != (3,)
+            or normal.shape != (3,)
+            or toe.shape != (3,)
+            or not np.all(np.isfinite(center))
+            or not np.all(np.isfinite(normal))
+            or not np.all(np.isfinite(toe))
+            or float(np.linalg.norm(normal)) <= 1e-8
+        ):
+            raise ValueError(
+                "opening geometry and locked right toe must be finite 3-vectors"
+            )
+        normal = normal / float(np.linalg.norm(normal))
+        # The pre-inference drape later turns the opening 180 degrees about
+        # its span axis, which keeps the plane but flips this normal, so only
+        # the toe's side of the plane is preserved, not the sign.
+        distance = float(np.dot(center - toe, normal))
+        if abs(distance) <= 1e-6:
+            raise RuntimeError("right toe lies on the held opening plane")
+        delta = normal * (distance - np.sign(distance) * target_distance_m)
+        settings = self.config["scene"].get("initial_pose_contract", {})
+        rigid_task_pose = bool(settings.get("straight_right_leg", False))
+        translated: Dict[str, Any] = {}
+        for name in (
+            "human_root_position",
+            "chair_position",
+            "human_anchor_position",
+            "right_toe_position",
+        ):
+            value = np.asarray(locked_pose_baseline[name], dtype=float)
+            if value.shape != (3,) or not np.all(np.isfinite(value)):
+                raise ValueError(
+                    f"locked_pose_baseline.{name} must be a finite 3-vector"
+                )
+            translated[name] = (
+                value if rigid_task_pose and name == "human_root_position"
+                else value + delta
+            ).tolist()
+        return translated, {
+            "frame": "unity_world",
+            "opening_target_center": center.tolist(),
+            "opening_inward_normal": normal.tolist(),
+            "baseline_foot_to_sock_m": abs(distance),
+            "baseline_signed_distance_m": distance,
+            "target_foot_to_sock_m": target_distance_m,
+            "translation_m": delta.tolist(),
             "translated_locked_pose_baseline": translated,
         }
 

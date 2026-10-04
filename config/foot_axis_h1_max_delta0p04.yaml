@@ -1,0 +1,7 @@
+extends: rim_elastic_e3a_jaw_damping0p8.yaml
+
+# Arm joints may move 0.04 rad per action (was 0.02) so the robot keeps up
+# with the policy instead of rate-limiting the whole insertion; grippers
+# keep their limits.
+joints:
+  max_delta: [0.04, 0.04, 0.04, 0.04, 0.04, 0.04, 0.04, 0.005, 0.0025, 0.04, 0.04, 0.04, 0.04, 0.04, 0.04, 0.04, 0.005, 0.0025]

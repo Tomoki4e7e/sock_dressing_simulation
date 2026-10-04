@@ -407,6 +407,65 @@ def test_human_chair_grid_offset_uses_horizontal_robot_away_axis():
     np.testing.assert_allclose(report["translation_m"], expected_delta)
 
 
+def test_foot_to_sock_translation_moves_rigidly_along_opening_normal():
+    config = load_config(
+        Path("config/autonomous_real_only_human_chair_offset_search.yaml")
+    )
+    config["scene"]["initial_pose_contract"]["straight_right_leg"] = True
+    environment = SockDressingEnv(config, backend=_Backend())
+    baseline = {
+        "human_root_position": [1.0, 2.0, 3.0],
+        "chair_position": [4.0, 5.0, 6.0],
+        "human_anchor_position": [7.0, 8.0, 9.0],
+        "right_toe_position": [0.05, 0.30, 0.0],
+    }
+    # Opening 0.20 m in front of the toe along +y, with a 5 cm lateral offset.
+    geometry = SimpleNamespace(
+        left_grasp_position=[-0.05, 0.50, 0.0],
+        right_grasp_position=[0.05, 0.50, 0.0],
+        opening_target_normal=[0.0, 2.0, 0.0],
+    )
+
+    translated, report = environment._translate_locked_pose_to_foot_to_sock(
+        baseline, geometry, 0.11
+    )
+
+    expected_delta = np.asarray([0.0, 0.09, 0.0])
+    np.testing.assert_allclose(
+        translated["human_root_position"], baseline["human_root_position"]
+    )
+    for name in ("chair_position", "human_anchor_position", "right_toe_position"):
+        np.testing.assert_allclose(
+            np.asarray(translated[name]) - np.asarray(baseline[name]),
+            expected_delta,
+        )
+    assert report["baseline_foot_to_sock_m"] == pytest.approx(0.20)
+    np.testing.assert_allclose(report["translation_m"], expected_delta)
+
+    # Before the drape flips the opening the toe is on the other side of the
+    # normal; it must still end 0.11 m from the plane without crossing it.
+    flipped = SimpleNamespace(
+        left_grasp_position=geometry.left_grasp_position,
+        right_grasp_position=geometry.right_grasp_position,
+        opening_target_normal=[0.0, -1.0, 0.0],
+    )
+    translated, report = environment._translate_locked_pose_to_foot_to_sock(
+        baseline, flipped, 0.11
+    )
+    np.testing.assert_allclose(
+        np.asarray(translated["right_toe_position"])
+        - np.asarray(baseline["right_toe_position"]),
+        expected_delta,
+    )
+    assert report["baseline_signed_distance_m"] == pytest.approx(-0.20)
+
+    on_plane = dict(baseline, right_toe_position=[0.0, 0.5, 0.0])
+    with pytest.raises(RuntimeError, match="on the held opening plane"):
+        environment._translate_locked_pose_to_foot_to_sock(
+            on_plane, geometry, 0.11
+        )
+
+
 def test_human_chair_grid_offset_rejects_degenerate_horizontal_axis():
     config = load_config(
         Path("config/autonomous_real_only_human_chair_offset_search.yaml")

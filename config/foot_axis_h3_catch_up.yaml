@@ -1,0 +1,9 @@
+extends: rim_elastic_e3a_jaw_damping0p8.yaml
+
+# Keep the 0.02 rad rate limit but reach the policy's first command before
+# the recorded inference starts.
+inference:
+  policy_catch_up:
+    enabled: true
+    maximum_actions: 40
+    tolerance_rad: 0.05

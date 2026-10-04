@@ -4,7 +4,7 @@ import csv
 import json
 from dataclasses import asdict
 from pathlib import Path
-from typing import Callable, Mapping, Optional, Sequence
+from typing import Callable, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -94,6 +94,16 @@ def run_demo(
     post_drape_prompt_mode = str(
         settings.get("post_pre_drape_prompt_mode", "dual_centroid")
     )
+    catch_up_settings = dict(settings.get("policy_catch_up", {}) or {})
+    catch_up_enabled = bool(catch_up_settings.get("enabled", False))
+    catch_up_maximum_actions = int(catch_up_settings.get("maximum_actions", 40))
+    catch_up_tolerance = float(catch_up_settings.get("tolerance_rad", 0.05))
+    if catch_up_enabled and (
+        catch_up_maximum_actions < 1
+        or not np.isfinite(catch_up_tolerance)
+        or catch_up_tolerance <= 0
+    ):
+        raise ValueError("invalid policy catch-up settings")
     if (
         not 0 <= reference_blend <= 1
         or reference_hold < 1
@@ -624,6 +634,44 @@ def run_demo(
                 perceived = perception.initialize(
                     observation["camera"]["rgb"], **initialize_kwargs
                 )
+                metadata["policy_catch_up"] = {"enabled": False}
+                if catch_up_enabled:
+                    first = policy.step(
+                        rgb=observation["camera"]["rgb"],
+                        sock_depth=perceived.sock_depth,
+                        leg_depth=perceived.leg_depth,
+                        angle=observation["angle"],
+                        torque=observation["torque"],
+                        step_index=0,
+                    )
+                    observation, catch_up_report = _catch_up_to_policy_target(
+                        environment,
+                        observation,
+                        first["action"],
+                        config,
+                        maximum_actions=catch_up_maximum_actions,
+                        tolerance_rad=catch_up_tolerance,
+                        physics_steps_per_action=physics_steps_per_action,
+                    )
+                    metadata["policy_catch_up"] = catch_up_report
+                    writer.update_metadata(
+                        {"policy_catch_up": catch_up_report}
+                    )
+                    # Inference starts from the caught-up pose with a fresh
+                    # recurrent state and masks of the scene it now sees.
+                    cloth_following_baseline = _cloth_following_state(
+                        observation, config
+                    )
+                    policy = policy_factory(
+                        config, checkpoint=checkpoint, device=device
+                    )
+                    renderer_masks = _renderer_masks(observation["camera"])
+                    if renderer_masks is not None:
+                        last_renderer_masks = renderer_masks
+                        initialize_kwargs["renderer_masks"] = renderer_masks
+                    perceived = perception.initialize(
+                        observation["camera"]["rgb"], **initialize_kwargs
+                    )
                 for frame in range(steps):
                     prediction = policy.step(
                         rgb=observation["camera"]["rgb"],
@@ -1896,6 +1944,151 @@ def _opening_rim_elastic_qa(
     }
 
 
+def _catch_up_to_policy_target(
+    environment,
+    observation: Mapping,
+    target: Sequence[float],
+    config: Mapping,
+    *,
+    maximum_actions: int,
+    tolerance_rad: float,
+    physics_steps_per_action: int,
+) -> Tuple[Mapping, dict]:
+    """Drive the arms to the policy's first command before inference starts.
+
+    The rate limit otherwise makes the whole insertion a delayed catch-up from
+    the drape pose rather than the trajectory the policy predicts.
+    """
+    from .joints import JointMap
+
+    mapping = JointMap.from_config(config)
+    goal = np.clip(np.asarray(target, dtype=float)[:18], mapping.lower, mapping.upper)
+
+    def gap(current: Mapping) -> float:
+        return float(np.max(np.abs(goal - np.asarray(current["angle"], dtype=float))))
+
+    def toe_to_opening(current: Mapping) -> Optional[float]:
+        geometry = current.get("diagnostics", {}).get("scene_geometry", {}) or {}
+        try:
+            center = (
+                np.asarray(geometry["left_grasp_position"], dtype=float)
+                + np.asarray(geometry["right_grasp_position"], dtype=float)
+            ) * 0.5
+            toe = np.asarray(geometry["right_toe_position"], dtype=float)
+        except (KeyError, TypeError, ValueError):
+            return None
+        return float(np.linalg.norm(center - toe))
+
+    initial_gap = gap(observation)
+    distances = []
+    contacts = set()
+    actions = 0
+    while actions < maximum_actions and gap(observation) > tolerance_rad:
+        environment.command(goal, observation["angle"])
+        environment.advance_physics(physics_steps_per_action - 1)
+        observation = environment.observe()
+        actions += 1
+        distance = toe_to_opening(observation)
+        if distance is not None:
+            distances.append(distance)
+        contacts.update(
+            int(item.get("collider_id", -1))
+            for item in observation.get("contact_force", ())
+            if 2101 <= int(item.get("collider_id", -1)) <= 2105
+        )
+    final_gap = gap(observation)
+    return observation, {
+        "enabled": True,
+        "actions": actions,
+        "maximum_actions": maximum_actions,
+        "tolerance_rad": tolerance_rad,
+        "initial_gap_rad": initial_gap,
+        "final_gap_rad": final_gap,
+        "converged": final_gap <= tolerance_rad,
+        "minimum_toe_to_opening_m": min(distances) if distances else None,
+        "final_toe_to_opening_m": distances[-1] if distances else None,
+        "foot_contact_collider_ids": sorted(contacts),
+    }
+
+
+def _foot_axis_alignment_qa(
+    grasp_quality: Sequence[Mapping],
+    dressing_quality: Sequence[Mapping],
+    config: Mapping,
+) -> dict:
+    """Measure where the held opening travels relative to the foot axis.
+
+    A cuff that advances past the toe while sitting above the instep slides
+    over the dorsum instead of taking the foot; along-axis cuff progress alone
+    cannot tell the two apart.
+    """
+    settings = config["inference"]
+    maximum_offset = float(
+        settings.get("maximum_opening_foot_axis_offset_m", 0.03)
+    )
+    obi_settings = config["obi"].get(
+        "expected", config["obi"].get("requested", {})
+    )
+    dorsal_limit = float(obi_settings.get("grasp_thickness_half_width_m", 0.0375))
+    frames = []
+    for index, (grasp, dressing) in enumerate(zip(grasp_quality, dressing_quality)):
+        try:
+            left = np.asarray(grasp["left_grasp_position"], dtype=float)
+            right = np.asarray(grasp["right_grasp_position"], dtype=float)
+            toe = np.asarray(grasp["right_toe_position"], dtype=float)
+            axis = np.asarray(dressing["foot_axis_to_ankle"], dtype=float)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if (
+            left.shape != (3,) or right.shape != (3,) or toe.shape != (3,)
+            or axis.shape != (3,) or not np.all(np.isfinite(axis))
+            or np.linalg.norm(axis) <= 1e-8
+        ):
+            continue
+        axis = axis / np.linalg.norm(axis)
+        up = np.array([0.0, 1.0, 0.0])
+        dorsal = up - np.dot(up, axis) * axis
+        if np.linalg.norm(dorsal) <= 1e-8:
+            continue
+        dorsal /= np.linalg.norm(dorsal)
+        lateral = np.cross(axis, dorsal)
+        offset = (left + right) * 0.5 - toe
+        along = float(offset @ axis)
+        dorsal_offset = float(offset @ dorsal)
+        lateral_offset = float(offset @ lateral)
+        frames.append(
+            {
+                "frame": index,
+                "along_axis_m": along,
+                "dorsal_m": dorsal_offset,
+                "lateral_m": lateral_offset,
+                "radial_m": float(np.hypot(dorsal_offset, lateral_offset)),
+            }
+        )
+    past_toe = [item for item in frames if item["along_axis_m"] > 0]
+    dorsal_passage = [
+        item["frame"] for item in past_toe if item["dorsal_m"] > dorsal_limit
+    ]
+    closest = min(frames, key=lambda item: item["radial_m"], default=None)
+    maximum_past_toe = max(
+        (item["radial_m"] for item in past_toe), default=None
+    )
+    return {
+        "available": bool(frames),
+        "frames": frames,
+        "closest_radial_m": closest["radial_m"] if closest else None,
+        "closest_frame": closest["frame"] if closest else None,
+        "first_past_toe_frame": past_toe[0]["frame"] if past_toe else None,
+        "maximum_past_toe_radial_m": maximum_past_toe,
+        "maximum_allowed_radial_m": maximum_offset,
+        "dorsal_limit_m": dorsal_limit,
+        "dorsal_passage_frames": dorsal_passage,
+        "foot_axis_alignment_ok": bool(past_toe)
+        and not dorsal_passage
+        and maximum_past_toe <= maximum_offset,
+    }
+
+
 def _task_success(
     observation: Mapping,
     quality: Sequence[Mapping],
@@ -2347,12 +2540,19 @@ def _task_success(
         success_gates["opening_rim_foot_enclosure_ok"] = rim_qa[
             "foot_enclosure_ok"
         ]
+    foot_axis_qa = _foot_axis_alignment_qa(
+        grasp_quality or [], dressing_quality or [], config
+    )
+    success_gates["foot_axis_alignment_ok"] = foot_axis_qa[
+        "foot_axis_alignment_ok"
+    ]
     return {
         "success": all(success_gates.values()),
         "failed_gates": [
             name for name, passed in success_gates.items() if not passed
         ],
         "opening_rim_elastic_qa": rim_qa,
+        "foot_axis_alignment_qa": foot_axis_qa,
         "semantic_masks_ok": semantic_ok,
         "verified_grippers": len(verified),
         "required_grippers": required,

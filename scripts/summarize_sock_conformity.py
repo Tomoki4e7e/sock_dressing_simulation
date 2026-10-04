@@ -82,6 +82,12 @@ def summarize(episode: Path) -> dict:
             cloth_quality, "opening_rim", "maximum_stretch"
         ),
         "opening_rim_elastic_qa": success.get("opening_rim_elastic_qa"),
+        "foot_axis_alignment_qa": {
+            key: value
+            for key, value in (success.get("foot_axis_alignment_qa") or {}).items()
+            if key != "frames"
+        },
+        "policy_catch_up": metadata.get("policy_catch_up"),
     }
 
 
