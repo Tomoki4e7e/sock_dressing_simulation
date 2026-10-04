@@ -295,6 +295,9 @@ class SockDressingEnv:
                 expected["maximum_circumferential_stretch"]
             ),
             strain_limit_iterations=int(expected["strain_limit_iterations"]),
+            opening_body_maximum_stretch=float(
+                expected["opening_body_maximum_stretch"]
+            ),
         )
         self.sock_cloth.configure_grasp(
             linear_compliance=float(expected["grasp_linear_compliance"]),
@@ -2783,6 +2786,55 @@ class SockDressingEnv:
                     "maximum_stretch_rest_edge_m": float(
                         rest_lengths[edge_index]
                     ),
+                    "maximum_excess_length_m": float(
+                        max(
+                            0.0,
+                            edge_lengths[edge_index]
+                            - rest_lengths[edge_index],
+                        )
+                    ),
+                }
+            opening_counts = np.asarray(
+                [
+                    int(int(edge[0]) in opening_particles)
+                    + int(int(edge[1]) in opening_particles)
+                    for edge in edges
+                ],
+                dtype=int,
+            )
+            opening_body_mask = opening_counts == 1
+            if np.any(opening_body_mask):
+                opening_body_indices = np.flatnonzero(opening_body_mask)
+                local_index = int(
+                    np.argmax(edge_stretches[opening_body_mask])
+                )
+                edge_index = int(opening_body_indices[local_index])
+                edge_classes["opening_body"] = {
+                    "edge_count": int(opening_body_mask.sum()),
+                    "maximum_stretch": float(edge_stretches[edge_index]),
+                    "maximum_stretch_edge": edges[edge_index].tolist(),
+                    "maximum_stretch_current_edge_m": float(
+                        edge_lengths[edge_index]
+                    ),
+                    "maximum_stretch_rest_edge_m": float(
+                        rest_lengths[edge_index]
+                    ),
+                    "maximum_excess_length_m": float(
+                        max(
+                            0.0,
+                            edge_lengths[edge_index]
+                            - rest_lengths[edge_index],
+                        )
+                    ),
+                }
+            else:
+                edge_classes["opening_body"] = {
+                    "edge_count": 0,
+                    "maximum_stretch": None,
+                    "maximum_stretch_edge": None,
+                    "maximum_stretch_current_edge_m": None,
+                    "maximum_stretch_rest_edge_m": None,
+                    "maximum_excess_length_m": None,
                 }
             diagnostics = {
                 "minimum_rest_edge_m": float(rest_lengths.min()),
@@ -3007,6 +3059,18 @@ class SockDressingEnv:
         if self._env is None:
             raise RuntimeError("environment is not connected")
         for _ in range(count):
+            self._env.step()
+
+    def stabilize_cloth_constraints(self) -> None:
+        if self.sock_cloth is None:
+            raise RuntimeError(
+                "cloth stabilization requires the custom Player profile"
+            )
+        # RFUniverse commands and collected observations cross a one-step
+        # boundary. Apply twice so both the command frame and the state later
+        # returned to the policy have a constrained seam.
+        for _ in range(2):
+            self.sock_cloth.stabilize_constraints()
             self._env.step()
 
     def grasp(self, side: str, max_distance_m: float = 0.03) -> Dict[str, Any]:

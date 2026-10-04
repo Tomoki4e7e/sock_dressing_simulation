@@ -132,6 +132,8 @@ obi:
     stretching_scale: 1.0
     # Reject any rollout that stretches the 40 mm rest radius beyond 60 mm.
     maximum_circumferential_stretch: 1.5
+    # Keep the opening lip connected to the first body ring.
+    opening_body_maximum_stretch: 1.10
     strain_limit_iterations: 200
     # Avoid a rigid long-range cage; local structural constraints and the
     # explicit 1.5x edge limiter remain authoritative.

@@ -863,6 +863,7 @@ def test_cloth_radius_qa_reports_body_pin_edge_classes():
             "particles": [[0, 0, 0], [0.01, 0, 0], [0.024, 0, 0], [0.04, 0, 0]],
             "particle_edges": [[0, 1], [1, 2], [2, 3]],
             "particle_rest_edge_lengths": [0.01, 0.01, 0.01],
+            "opening_particle_indices": [0],
             "grasp_state": [
                 {
                     "attached": True,
@@ -876,6 +877,10 @@ def test_cloth_radius_qa_reports_body_pin_edge_classes():
     assert report["edge_classes"]["body_body"]["maximum_stretch"] == pytest.approx(1.0)
     assert report["edge_classes"]["pin_body"]["maximum_stretch"] == pytest.approx(1.4)
     assert report["edge_classes"]["pin_pin"]["maximum_stretch"] == pytest.approx(1.6)
+    opening_body = report["edge_classes"]["opening_body"]
+    assert opening_body["edge_count"] == 1
+    assert opening_body["maximum_stretch"] == pytest.approx(1.0)
+    assert opening_body["maximum_excess_length_m"] == pytest.approx(0.0)
     assert not report["passes"]
 
 

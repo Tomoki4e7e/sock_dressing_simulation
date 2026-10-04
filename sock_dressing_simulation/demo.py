@@ -670,6 +670,11 @@ def run_demo(
                                 "reference Cartesian projection failed: "
                                 + json.dumps(alignment)
                             )
+                        # The Cartesian IK update moves the grasp targets
+                        # after the regular action substeps. Settle the
+                        # opening-to-body seam once before it is rendered and
+                        # measured.
+                        environment.stabilize_cloth_constraints()
                     observation = environment.observe()
                     renderer_masks = _renderer_masks(observation["camera"])
                     if renderer_masks is not None:
@@ -2314,6 +2319,29 @@ def _task_success(
         "maximum_cloth_foot_penetration_m": max(
             (
                 float(item.get("maximum_cloth_foot_penetration_m", 0.0))
+                for item in dressing_quality
+            ),
+            default=None,
+        ),
+        "maximum_obi_cloth_foot_penetration_m": max(
+            (
+                float(
+                    item.get(
+                        "obi_maximum_cloth_foot_penetration_m", 0.0
+                    )
+                )
+                for item in dressing_quality
+            ),
+            default=None,
+        ),
+        "maximum_geometric_cloth_foot_penetration_m": max(
+            (
+                float(
+                    item.get(
+                        "geometric_maximum_cloth_foot_penetration_m",
+                        0.0,
+                    )
+                )
                 for item in dressing_quality
             ),
             default=None,

@@ -181,6 +181,9 @@ def test_plate_normal_profile_uses_exactly_four_grasp_points():
     assert config["obi"]["expected"]["opening_rim_maximum_stretch"] == pytest.approx(
         1.05
     )
+    assert config["obi"]["expected"][
+        "opening_body_maximum_stretch"
+    ] == pytest.approx(1.10)
     assert config["obi"]["expected"]["opening_rim_plane_stiffness"] == pytest.approx(
         1.00
     )
@@ -1133,10 +1136,19 @@ def test_custom_player_projects_strain_before_collision_solving():
     )[0]
     assert "SyncRightLegCollidersToBones();" in callback
     assert "LimitStructuralStretch();" in callback
+    assert "ApplyGraspCenterTranslation();" in callback
+    assert callback.index(
+        "ApplyGraspCenterTranslation();"
+    ) < callback.index("LimitStructuralStretch();")
     end_callback = source.split("private void OnSolverSimulationEnd(", 1)[1].split(
         "private Dictionary<string, object> GeometricFootPenetration()", 1
     )[0]
     assert "LimitStructuralStretch();" in end_callback
+    assert "ApplyGraspCenterTranslation();" not in end_callback
+    assert "EnforceFootGeometricDepenetration();" in end_callback
+    assert end_callback.index(
+        "LimitStructuralStretch();"
+    ) < end_callback.index("EnforceFootGeometricDepenetration();")
     late_update = source.split("private void LateUpdate()", 1)[1].split(
         "[RFUAPI]", 1
     )[0]
@@ -1175,6 +1187,31 @@ def test_strain_limiter_does_not_reapply_barrier_after_final_projection():
 
     assert "EnforceOpeningRimPlane();" not in final_projection
     assert "EnforceOpeningBodyBarrier(false);" not in final_projection
+
+
+def test_opening_body_seam_and_foot_projection_are_explicit_constraints():
+    source = Path(
+        "RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs"
+    ).read_text()
+    limiter = source.split(
+        "private void LimitStructuralStretch()", 1
+    )[1].split("private void EnforceGraspParticlePositions()", 1)[0]
+    foot_projection = source.split(
+        "private void EnforceFootGeometricDepenetration(", 1
+    )[1].split("private static List<Vector3> FootSurfaceSamples(", 1)[0]
+
+    assert "bool openingBodyEdge" in limiter
+    assert "openingBodyMaximumStretch" in limiter
+    assert "rightLegRegions.Values" in foot_projection
+    assert "configuredParticleRadius + configuredCollisionMargin" in (
+        foot_projection
+    )
+    assert "for (int i = 0; i < cloth.particleCount; ++i)" in foot_projection
+    assert "solver.prevPositions[solverIndex]" in foot_projection
+    assert "solver.renderablePositions[solverIndex]" in foot_projection
+    assert "UpdateGraspOffsetAfterFootProjection(" in foot_projection
+    assert "grasp.batch.offsets[i] = offset;" in source
+    assert "graspThicknessHalfWidth = Mathf.Min(" in source
 
 
 def test_dressing_qa_requires_finite_cross_section_observations():
@@ -1513,6 +1550,7 @@ def test_sock_cloth_commands_match_unity_contract():
     cloth = SockClothAttr(env, 1200)
     cloth.request_particles()
     cloth.request_particle_velocities()
+    cloth.stabilize_constraints()
     cloth.configure(
         stretch_compliance=0.0,
         bend_compliance=0.01,
@@ -1592,6 +1630,7 @@ def test_sock_cloth_commands_match_unity_contract():
     assert env.messages == [
         (1200, "GetParticles"),
         (1200, "GetParticleVelocities"),
+        (1200, "StabilizeClothConstraints"),
         (
             1200,
             "ConfigureSock",
@@ -1611,6 +1650,7 @@ def test_sock_cloth_commands_match_unity_contract():
             1.0,
             1.5,
             8,
+                1.1,
         ),
         (
             1200,

@@ -610,6 +610,9 @@ class SockClothAttr:
             self.data.get("particle_velocities", []), 3, "particle_velocities"
         )
 
+    def stabilize_constraints(self) -> None:
+        self._send_data("StabilizeClothConstraints")
+
     def request_configuration(self) -> None:
         self._send_data("GetClothConfiguration")
 
@@ -632,6 +635,7 @@ class SockClothAttr:
         tether_scale: float = 1.0,
         maximum_circumferential_stretch: float = 1.5,
         strain_limit_iterations: int = 8,
+        opening_body_maximum_stretch: float = 1.10,
     ) -> None:
         self._send_data(
             "ConfigureSock",
@@ -651,6 +655,7 @@ class SockClothAttr:
             float(tether_scale),
             float(maximum_circumferential_stretch),
             int(strain_limit_iterations),
+            float(opening_body_maximum_stretch),
         )
 
     def configure_grasp(

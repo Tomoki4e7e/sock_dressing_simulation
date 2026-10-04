@@ -63,6 +63,9 @@ class _Environment:
     def advance_physics(self, steps):
         self.physics_steps = getattr(self, "physics_steps", 0) + int(steps)
 
+    def stabilize_cloth_constraints(self):
+        self.stabilizations = getattr(self, "stabilizations", 0) + 1
+
 
 class _Perception:
     def __init__(self, config):
@@ -81,6 +84,15 @@ class _Perception:
 
     def track(self, *args, **kwargs):
         return self.result
+
+
+def test_cartesian_projection_settles_seam_before_observation():
+    source = Path("sock_dressing_simulation/demo.py").read_text()
+    projection = source.split(
+        "alignment = environment.move_grippers_to_targets(", 1
+    )[1].split("observation = environment.observe()", 1)[0]
+
+    assert "environment.stabilize_cloth_constraints()" in projection
 
 
 def test_sock_tip_geometry_report_preserves_world_y_and_loop_offsets():
@@ -175,6 +187,8 @@ def _passing_dressing_qa(**overrides):
         "maximum_cuff_reverse_step_m": 0.0,
         "cuff_beyond_distal_toe_m": 0.0,
         "maximum_cloth_foot_penetration_m": 0.001,
+        "obi_maximum_cloth_foot_penetration_m": 0.0008,
+        "geometric_maximum_cloth_foot_penetration_m": 0.0006,
     }
     value.update(overrides)
     return value
@@ -1058,6 +1072,12 @@ def test_task_success_rejects_invalid_final_dressing_state(
 
     assert not report["success"]
     assert not report[failed_gate]
+    assert report["maximum_obi_cloth_foot_penetration_m"] == pytest.approx(
+        0.0008
+    )
+    assert report[
+        "maximum_geometric_cloth_foot_penetration_m"
+    ] == pytest.approx(0.0006)
 
 
 def test_task_success_rejects_robot_human_penetration(monkeypatch):
