@@ -3231,6 +3231,12 @@ class SockDressingEnv:
         self._env.step()
         return bounded
 
+    def begin_cloth_contact_rollout(self) -> None:
+        """Enable continuous contact after the prepared drape pose is established."""
+        if self.sock_cloth is not None:
+            self.sock_cloth.arm_foot_collision_safety(True)
+            self._env.step(simulate=False)
+
     def advance_physics(self, steps: int) -> None:
         """Advance additional fixed steps after a command without changing its target."""
         count = int(steps)

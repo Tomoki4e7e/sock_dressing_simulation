@@ -605,6 +605,9 @@ def run_demo(
                             ),
                         }
                     )
+                begin_contact = getattr(environment, "begin_cloth_contact_rollout", None)
+                if callable(begin_contact):
+                    begin_contact()
                 # The released tip settles before autonomous control starts.
                 # Use that post-settle state as the motion-following baseline;
                 # otherwise gravity-driven drape is incorrectly charged as

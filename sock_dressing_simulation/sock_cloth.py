@@ -1100,6 +1100,10 @@ class SockClothAttr:
     def request_scene_geometry(self) -> None:
         self._send_data("GetSceneGeometry")
 
+    def arm_foot_collision_safety(self, armed: bool = True) -> None:
+        """Arm continuous foot/surface constraints after kinematic preparation."""
+        self._send_data("ArmFootCollisionSafety", bool(armed))
+
     def request_dressing_qa(self) -> None:
         self._send_data("GetDressingQA")
 
