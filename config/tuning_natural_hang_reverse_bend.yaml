@@ -1,0 +1,15 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_lower5cm_toe20deg.yaml
+
+scenario:
+  sock:
+    # Gravity-following bend used by the reverse-opening family, evaluated
+    # here without changing either opening rotation or pre-inference drape.
+    rest_bend_start_m: 0.03
+    rest_bend_length_m: 0.18
+    rest_bend_degrees: -105.0
+    rest_bend_azimuth_degrees: -90.0
+
+obi:
+  expected:
+    damping: 0.95
+    bend_compliance: 0.01

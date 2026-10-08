@@ -1,0 +1,7 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_lower5cm_toe20deg_natural_hang.yaml
+
+scenario:
+  sock:
+    # Reverse the current bend plane to test the remaining camera-depth route
+    # without changing the opening or drape motion.
+    rest_bend_azimuth_degrees: 180.0

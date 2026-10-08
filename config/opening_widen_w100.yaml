@@ -1,0 +1,8 @@
+extends: foot_lateral_l1_zero.yaml
+
+# L1 with the opening short edge widened to 100 mm nominal (80 mm clearance
+# after the two 10 mm particle shells, 10 mm over the 70 mm forefoot). The
+# Player caps contact widening at a 0.05 m half width, so this is the limit.
+obi:
+  expected:
+    grasp_thickness_half_width_m: 0.05

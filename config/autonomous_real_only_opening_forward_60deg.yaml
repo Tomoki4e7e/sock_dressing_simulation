@@ -1,0 +1,11 @@
+extends: autonomous_real_only_plate_normal_taut_rim.yaml
+
+scene:
+  initial_pose_contract:
+    # Add another 30 degrees to the existing toe-facing 30-degree rotation.
+    # The player selects the sign that points the opening normal toward the toe.
+    opening_rotation_about_span_degrees: 60.0
+    # At 60 degrees, alignment with the original grasp-plate normal is cos(60)
+    # ~= 0.5. Keep a small numerical tolerance while retaining target-normal QA.
+    opening_plate_normal_alignment_min: 0.48
+    opening_ring_plate_alignment_min: 0.48

@@ -8,6 +8,15 @@ import numpy as np
 from PIL import Image
 
 
+# 0.1 micrometre: single-precision PhysX boundary roundoff only.
+RIGID_COLLISION_STOP_NUMERICAL_TOLERANCE_M = 1e-7
+
+
+def rigid_collision_stop_required(penetration_m: float, limit_m: float) -> bool:
+    return bool(not np.isfinite(penetration_m) or penetration_m < 0 or
+                penetration_m > limit_m + RIGID_COLLISION_STOP_NUMERICAL_TOLERANCE_M)
+
+
 def assess_observation_quality(
     cameras: Sequence[Mapping[str, np.ndarray]],
     *,
@@ -156,6 +165,60 @@ def _image_summary(paths: Sequence[Path], *, mask: bool, maximum: int) -> Dict[s
     return result
 
 
+def _depth_mask_summary(paths: Sequence[Path], *, maximum: int) -> Dict[str, Any]:
+    """Summarize nonzero depth values without letting the black background dominate."""
+    result = _image_summary(paths, mask=True, maximum=maximum)
+    samples = _sample_paths(paths, maximum)
+    if not samples:
+        return result
+    arrays = []
+    foreground_means = []
+    foreground_standard_deviations = []
+    foreground_dynamic_ranges = []
+    for path in samples:
+        with Image.open(path) as image:
+            array = np.asarray(image.convert("L"), dtype=np.float32) / 255.0
+        arrays.append(array)
+        foreground = array[array > 0.0]
+        if not foreground.size:
+            continue
+        foreground_means.append(float(foreground.mean()))
+        foreground_standard_deviations.append(float(foreground.std()))
+        foreground_dynamic_ranges.append(
+            float(np.percentile(foreground, 95) - np.percentile(foreground, 5))
+        )
+    temporal_changes = []
+    for previous, current in zip(arrays, arrays[1:]):
+        if previous.shape != current.shape:
+            continue
+        union = (previous > 0.0) | (current > 0.0)
+        if np.any(union):
+            temporal_changes.append(
+                float(np.mean(np.abs(current[union] - previous[union])))
+            )
+    result.update(
+        {
+            "foreground_mean": (
+                float(np.mean(foreground_means)) if foreground_means else None
+            ),
+            "foreground_standard_deviation": (
+                float(np.mean(foreground_standard_deviations))
+                if foreground_standard_deviations
+                else None
+            ),
+            "foreground_dynamic_range": (
+                float(np.mean(foreground_dynamic_ranges))
+                if foreground_dynamic_ranges
+                else None
+            ),
+            "temporal_absolute_change": (
+                float(np.mean(temporal_changes)) if temporal_changes else 0.0
+            ),
+        }
+    )
+    return result
+
+
 def summarize_learning_episode(
     episode: Path, *, maximum_image_samples: int = 16
 ) -> Dict[str, Any]:
@@ -163,8 +226,9 @@ def summarize_learning_episode(
     episode = Path(episode).resolve()
     sock_mask = _numbered_pngs(episode / "camera_right_mask" / "sock_mask")
     limb_dir = episode / "camera_right_mask" / "foot_mask"
+    foot_depth_dir = episode / "depth_mask" / "foot_depth"
     limb_name = "foot"
-    if not limb_dir.is_dir():
+    if not limb_dir.is_dir() and not foot_depth_dir.is_dir():
         limb_dir = episode / "camera_right_mask" / "leg_mask"
         limb_name = "leg"
     limb_mask = _numbered_pngs(limb_dir)
@@ -188,11 +252,11 @@ def summarize_learning_episode(
         "limb_mask": _image_summary(
             limb_mask, mask=True, maximum=maximum_image_samples
         ),
-        "sock_depth": _image_summary(
-            sock_depth, mask=True, maximum=maximum_image_samples
+        "sock_depth": _depth_mask_summary(
+            sock_depth, maximum=maximum_image_samples
         ),
-        "limb_depth": _image_summary(
-            limb_depth, mask=True, maximum=maximum_image_samples
+        "limb_depth": _depth_mask_summary(
+            limb_depth, maximum=maximum_image_samples
         ),
     }
     signals = {}
@@ -281,8 +345,21 @@ def compare_learning_domains(
                 f"{item['episode']}: {count} RGB frames versus real median {real_frame_median:g}"
             )
     differences = {}
-    for name in ("rgb", "camera_depth", "sock_mask", "limb_mask"):
-        for metric in ("mean", "standard_deviation", "foreground_fraction"):
+    compared_metrics = {
+        "rgb": ("mean", "standard_deviation"),
+        "camera_depth": ("mean", "standard_deviation"),
+        "sock_mask": ("mean", "standard_deviation", "foreground_fraction"),
+        "limb_mask": ("mean", "standard_deviation", "foreground_fraction"),
+        "limb_depth": (
+            "foreground_fraction",
+            "foreground_mean",
+            "foreground_standard_deviation",
+            "foreground_dynamic_range",
+            "temporal_absolute_change",
+        ),
+    }
+    for name, metrics in compared_metrics.items():
+        for metric in metrics:
             real_values = [
                 item["modalities"][name][metric]
                 for item in real
@@ -302,12 +379,15 @@ def compare_learning_domains(
                     "simulation": sim_mean,
                     "absolute": abs(sim_mean - real_mean),
                 }
+                denominator = max(abs(real_mean), 1e-6)
+                differences[key]["relative_absolute"] = (
+                    abs(sim_mean - real_mean) / denominator
+                )
                 if name == "rgb" and metric == "mean" and abs(sim_mean - real_mean) > 0.2:
                     warnings.append(
                         f"{key}: normalized mean differs by {abs(sim_mean - real_mean):.3g}"
                     )
                 if metric == "foreground_fraction":
-                    denominator = max(real_mean, 1e-6)
                     ratio = sim_mean / denominator
                     differences[key]["ratio"] = ratio
                     if ratio > 5.0 or ratio < 0.2:

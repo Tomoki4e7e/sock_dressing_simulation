@@ -1,0 +1,8 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_lower5cm_toe20deg_frame_zero_catch.yaml
+
+obi:
+  expected:
+    # Match the established close-family stiffness and reduce velocity
+    # damping so the distal body follows accelerating grasp targets.
+    bend_compliance: 0.03
+    damping: 0.55

@@ -1,0 +1,12 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_recorded_pose_gripper_coupled_front_right_camera.yaml
+
+# Keep the recorded pose, front-right observation, opening orientation and
+# +180-degree pre-inference drape unchanged while restoring the cloth response
+# from the frame-zero-catch rollout that approached the toe.
+obi:
+  expected:
+    bend_compliance: 0.10
+    damping: 0.95
+
+inference:
+  physics_steps_per_action: 10

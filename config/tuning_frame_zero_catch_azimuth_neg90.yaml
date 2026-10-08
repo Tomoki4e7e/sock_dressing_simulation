@@ -1,0 +1,7 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_lower5cm_toe20deg_natural_hang.yaml
+
+scenario:
+  sock:
+    # Opposite lateral route for the free body, evaluated with all opening and
+    # pre-inference drape settings inherited unchanged.
+    rest_bend_azimuth_degrees: -90.0

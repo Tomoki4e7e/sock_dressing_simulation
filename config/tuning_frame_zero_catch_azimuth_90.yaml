@@ -1,0 +1,7 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_lower5cm_toe20deg_natural_hang.yaml
+
+scenario:
+  sock:
+    # Route the free body around the opening edge instead of through its
+    # head-camera projection while preserving the established bend magnitude.
+    rest_bend_azimuth_degrees: 90.0

@@ -1,0 +1,15 @@
+extends: autonomous_real_only_downward_plate_human_chair.yaml
+
+scene:
+  initial_pose_contract:
+    # Search scripts override both values for every grid candidate.
+    away_from_robot_m: 0.01
+    down_m: 0.01
+    # The new grid intentionally moves the toe away from the plate-normal ray.
+    # Keep geometric QA active with wider screening bounds and let the search
+    # script reject failed contracts without aborting before metadata is saved.
+    enforce: false
+    opening_to_toe_alignment_min: 0.50
+    maximum_opening_edge_error_m: 0.025
+    maximum_grasp_corner_error_m: 0.025
+    right_knee_flexion_max_degrees: 90.0

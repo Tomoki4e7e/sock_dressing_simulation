@@ -1,0 +1,9 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_recorded_pose_gripper_coupled_head_camera_frame_zero_physics_single_centroid_fast_policy_human_chair_away2cm_down7cm.yaml
+
+# Keep the current policy, human/chair pose, drape, physics and anisotropic
+# opening-rim settings while moving only the inference camera to the
+# robot-centric left See3CAM mount.
+scene:
+  camera_parent_link: "head/see3cam_left/camera_color_frame"
+  camera_local_position: [0.0, -0.04, 0.1]
+  camera_local_rotation: [60.0, 0.0, 0.0]

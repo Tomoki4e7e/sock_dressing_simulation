@@ -1,0 +1,11 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_recorded_pose_gripper_coupled_head_camera_frame_zero_physics_single_centroid_fast_policy_human_chair_away2cm_down7cm_left_camera.yaml
+
+# Keep the validated down-8 cm height while moving the locked human/chair
+# assembly 3 cm toward robot-right and yawing the left camera 3 degrees toward
+# the toe. This reduces the frame-zero toe-center error from 80.5 px to 18.5 px.
+scene:
+  camera_local_rotation: [60.0, -3.0, 0.0]
+  initial_pose_contract:
+    away_from_robot_m: 0.02
+    down_m: 0.08
+    right_from_robot_m: 0.03

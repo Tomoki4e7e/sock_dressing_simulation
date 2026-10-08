@@ -1,0 +1,8 @@
+extends: rim_elastic_e1_jaw.yaml
+
+# No rectangular side constraint at all: band tension holds the lip open and
+# the one-sided guard only stops it folding past 70% of the held half-width.
+obi:
+  expected:
+    opening_rim_shape_stiffness: 0.0
+    opening_rim_collapse_guard_ratio: 0.7

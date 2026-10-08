@@ -1,0 +1,15 @@
+extends: autonomous_real_only_straight_neutral_wide_cuff_small_foot.yaml
+
+scene:
+  # Match the rendered foot and fail before rollout if the sock starts more
+  # than 2 mm inside any foot/ankle/calf collision box.
+  right_foot_collider_cross_section_scale: 1.0
+  initial_pose_contract:
+    maximum_cloth_foot_penetration_m: 0.002
+    # Keep the toe on the downward opening ray while moving the complete
+    # human/chair pose near the opening, then translate it horizontally clear
+    # of the hanging cuff before autonomous insertion begins.
+    vertical_toe_drop_m: 0.25
+    away_from_robot_m: 0.12
+    down_m: 0.0
+    opening_to_toe_alignment_min: 0.45

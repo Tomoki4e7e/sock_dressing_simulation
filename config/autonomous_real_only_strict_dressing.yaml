@@ -1,0 +1,22 @@
+extends: autonomous_real_only.yaml
+
+# Reproduce the 2026-09-23 straight-leg baseline.  This profile intentionally
+# does not inherit the toe-left-down override.
+scene:
+  human_position: [0.06, 1.48, -0.72]
+  chair:
+    enabled: true
+    asset_name: Collider_Box
+    parts:
+      - {id: 2301, name: chair, position: [0.0, 0.48, -0.18], scale: [0.62, 0.10, 0.58]}
+  initial_pose_contract:
+    straight_right_leg: true
+    right_knee_flexion_max_degrees: 2.0
+    right_leg_raise_degrees: 90.0
+    right_leg_raise_tolerance_degrees: 16.0
+    expected_human_position: [0.06, 1.48, -0.72]
+    expected_chair_position: [0.0, 0.48, -0.18]
+
+scenario:
+  foot:
+    plantarflexion_degrees: 30.0

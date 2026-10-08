@@ -1,0 +1,7 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_recorded_pose_gripper_coupled_head_camera_frame_zero_physics_single_centroid.yaml
+
+joints:
+  # The checkpoint emits absolute joint targets. Restore the autonomous base
+  # rate so a 100-step rollout can converge instead of remaining roughly one
+  # radian behind the policy target at the end of the video.
+  max_delta: [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.005, 0.0025, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.005, 0.0025]

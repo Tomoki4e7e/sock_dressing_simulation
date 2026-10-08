@@ -1,0 +1,7 @@
+extends: foot_lateral_l1_zero.yaml
+
+# L1 with the opening short edge widened to 95 mm nominal (75 mm clearance
+# after the two 10 mm particle shells).
+obi:
+  expected:
+    grasp_thickness_half_width_m: 0.0475

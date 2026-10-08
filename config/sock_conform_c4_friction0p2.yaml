@@ -1,0 +1,6 @@
+extends: autonomous_real_only_opening_short_edge_75mm.yaml
+
+# Sock object material/collision only; opening, camera, drape and pose are inherited.
+obi:
+  expected:
+    friction: 0.2

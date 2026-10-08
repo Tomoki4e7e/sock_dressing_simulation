@@ -1,0 +1,13 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_lower5cm_toe20deg_natural_hang.yaml
+
+scenario:
+  sock:
+    # Route the distal body around the projected opening edge so the toe hangs
+    # below the blue frame in the Dry-AIREC head camera.
+    rest_bend_azimuth_degrees: 180.0
+
+obi:
+  expected:
+    # Let gravity straighten the routed body after the fixed +180-degree
+    # pre-inference rotation instead of retaining a hook at the toe.
+    bend_compliance: 0.10

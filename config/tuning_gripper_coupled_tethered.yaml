@@ -1,0 +1,10 @@
+extends: tuning_gripper_coupled_settled.yaml
+
+obi:
+  expected:
+    # Keep each distal particle within its authored distance from the grasped
+    # cuff so the J-shaped body translates with the grippers without becoming
+    # a rigidly pinned surface.
+    tether_constraints: true
+    tether_compliance: 0.001
+    tether_scale: 1.0

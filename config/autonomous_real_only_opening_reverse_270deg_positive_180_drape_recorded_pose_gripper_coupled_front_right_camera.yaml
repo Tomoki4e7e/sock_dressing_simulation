@@ -1,0 +1,16 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_recorded_pose_gripper_coupled.yaml
+
+# In this dedicated profile, "camera_right" follows the caregiver-facing
+# convention: the camera on the right when standing in front of Dry-AIREC.
+# That physical eye is the robot-centric left See3CAM link.
+scene:
+  camera_parent_link: "head/see3cam_left/camera_color_frame"
+  # Move the mount 4 cm from the crown toward the neck while retaining the
+  # calibrated 10 cm optical-axis standoff.
+  camera_local_position: [0.0, -0.04, 0.1]
+  # With the lower mount, add 20 degrees of downward pitch so the post-drape
+  # sock remains near the image center without changing optical standoff.
+  camera_local_rotation: [60.0, 0.0, 0.0]
+
+inference:
+  record_inference_camera_video: true

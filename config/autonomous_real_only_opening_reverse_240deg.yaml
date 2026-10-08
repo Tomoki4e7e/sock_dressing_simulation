@@ -1,0 +1,21 @@
+extends: autonomous_real_only_opening_reverse_180deg.yaml
+
+scenario:
+  sock:
+    # Continue the rest-bend azimuth by the same reverse 60-degree increment.
+    rest_bend_degrees: -105.0
+    rest_bend_azimuth_degrees: 30.0
+
+scene:
+  initial_pose_contract:
+    # A cumulative reverse 240-degree rotation is the same physical
+    # orientation as the opposite signed 120-degree rotation. The Player API
+    # accepts magnitudes in [0, 180], so select the toe-facing candidate.
+    opening_rotation_about_span_degrees: 120.0
+    opening_rotation_away_from_toe: false
+    # Bias release restoring forces back toward the gravity-gate corridor.
+    sock_tip_target_span_axis_offset_m: 0.040
+    sock_tip_target_opening_depth_m: 0.080
+    # Alignment with the original grasp-plate normal is cos(240) = -0.5.
+    opening_plate_normal_alignment_min: -0.52
+    opening_ring_plate_alignment_min: -0.52

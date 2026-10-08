@@ -1,0 +1,6 @@
+extends: tuning_gripper_coupled_slow.yaml
+
+inference:
+  # Preserve the proven 240-pass material projection while allowing the cloth
+  # additional physical settling time between policy commands.
+  physics_steps_per_action: 30

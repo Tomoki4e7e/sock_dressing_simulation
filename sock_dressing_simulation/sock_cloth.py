@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Any, Dict, Iterable, Mapping, Sequence, Tuple
 
 import numpy as np
@@ -18,6 +19,18 @@ REQUIRED_COLLIDER_REGIONS = (
     "robot",
     "chair",
 )
+
+
+def validate_prepared_state_readback(reference: str, observed: str) -> Dict[str, Any]:
+    """Verify the native restore by recapturing state before material changes."""
+    expected,actual=json.loads(reference),json.loads(observed)
+    checks={key:expected.get(key) is not None and expected[key]==actual.get(key) for key in (
+        "positions","previousPositions","velocities","angularVelocities","orientations","previousOrientations")}
+    for keys,values in (("restKeys","restValues"),("rimKeys","rimValues"),("barrierDepthKeys","barrierDepthValues")):
+        checks[keys]=dict(zip(expected[keys],expected[values]))==dict(zip(actual.get(keys,[]),actual.get(values,[])))
+    for key in ("barrierInside","barrierContacts","predictiveContacts"):
+        checks[key]=set(expected[key])==set(actual.get(key,[]))
+    return {"ok":all(checks.values()),"checks":checks,"source":"native_state_recapture"}
 
 
 def _finite_vectors(value: Any, width: int, name: str) -> np.ndarray:
@@ -92,7 +105,40 @@ class SceneGeometry:
     left_grasp_local_offset: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     right_grasp_local_offset: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     opening_target_normal: Tuple[float, float, float] = (0.0, 0.0, 1.0)
+    grasp_plate_outward_normal: Tuple[float, float, float] = (0.0, 0.0, -1.0)
+    opening_plate_normal_alignment: float = 1.0
+    opening_target_normal_alignment: float = 1.0
+    plate_downward_alignment: float = 0.0
+    opening_ring_inward_normal: Tuple[float, float, float] = (0.0, 0.0, 1.0)
+    opening_ring_plate_alignment: float = 1.0
+    opening_ring_target_alignment: float = 1.0
+    opening_ring_plane_rms_m: float = 0.0
+    opening_ring_plane_maximum_m: float = 0.0
+    opening_ring_maximum_sag_m: float = 0.0
+    opening_ring_area_m2: float = 0.0
+    opening_ring_area_retention: float = 1.0
+    sock_tip_center: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    sock_tip_span_axis_offset_m: float = 0.0
+    sock_tip_cross_axis_offset_m: float = 0.0
+    sock_tip_opening_depth_m: float = 0.0
+    opening_body_barrier_violation_count: int = 0
+    opening_body_barrier_maximum_penetration_m: float = 0.0
+    opening_body_barrier_correction_count: int = 0
+    opening_body_barrier_maximum_applied_correction_m: float = 0.0
+    signed_opening_span_rotation_degrees: float = 0.0
+    left_grasp_thickness_axis: Tuple[float, float, float] = (1.0, 0.0, 0.0)
+    right_grasp_thickness_axis: Tuple[float, float, float] = (1.0, 0.0, 0.0)
+    left_grasp_inward_axis: Tuple[float, float, float] = (0.0, 0.0, 1.0)
+    right_grasp_inward_axis: Tuple[float, float, float] = (0.0, 0.0, 1.0)
     opening_span_m: float = 0.0
+    left_grasp_corner_negative: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    left_grasp_corner_positive: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    right_grasp_corner_negative: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    right_grasp_corner_positive: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    left_grasp_patch_span_m: float = 0.0
+    right_grasp_patch_span_m: float = 0.0
+    maximum_grasp_corner_error_m: float = 0.0
+    grasp_thickness_axis_alignment: float = 0.0
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "SceneGeometry":
@@ -111,6 +157,17 @@ class SceneGeometry:
             "left_grasp_local_offset",
             "right_grasp_local_offset",
             "opening_target_normal",
+            "grasp_plate_outward_normal",
+            "opening_ring_inward_normal",
+            "sock_tip_center",
+            "left_grasp_thickness_axis",
+            "right_grasp_thickness_axis",
+            "left_grasp_inward_axis",
+            "right_grasp_inward_axis",
+            "left_grasp_corner_negative",
+            "left_grasp_corner_positive",
+            "right_grasp_corner_negative",
+            "right_grasp_corner_positive",
         )
         vectors = {}
         for name in vector_names:
@@ -119,11 +176,30 @@ class SceneGeometry:
                 "left_opening_edge": "left_grasp_position",
                 "right_opening_edge": "right_grasp_position",
                 "opening_target_normal": "opening_normal",
+                "grasp_plate_outward_normal": "opening_outward_normal",
+                "opening_ring_inward_normal": "opening_target_normal",
+                "sock_tip_center": "opening_center",
+                "left_grasp_thickness_axis": None,
+                "right_grasp_thickness_axis": None,
+                "left_grasp_inward_axis": "opening_target_normal",
+                "right_grasp_inward_axis": "opening_target_normal",
+                "left_grasp_corner_negative": "left_grasp_position",
+                "left_grasp_corner_positive": "left_grasp_position",
+                "right_grasp_corner_negative": "right_grasp_position",
+                "right_grasp_corner_positive": "right_grasp_position",
             }.get(name)
             fallback = (
                 value.get(fallback_name, ())
                 if fallback_name
-                else ((0.0, 0.0, 0.0) if name.endswith("_local_offset") else ())
+                else (
+                    (1.0, 0.0, 0.0)
+                    if name.endswith("_thickness_axis")
+                    else (
+                        (0.0, 0.0, 0.0)
+                        if name.endswith("_local_offset")
+                        else ()
+                    )
+                )
             )
             vector = tuple(float(item) for item in value.get(name, fallback))
             if len(vector) != 3 or not np.all(np.isfinite(vector)):
@@ -146,6 +222,66 @@ class SceneGeometry:
                 ),
             )
         )
+        left_patch_span = float(value.get("left_grasp_patch_span_m", 0.0))
+        right_patch_span = float(value.get("right_grasp_patch_span_m", 0.0))
+        maximum_corner_error = float(
+            value.get("maximum_grasp_corner_error_m", 0.0)
+        )
+        thickness_alignment = float(
+            value.get("grasp_thickness_axis_alignment", 0.0)
+        )
+        opening_plate_alignment = float(
+            value.get("opening_plate_normal_alignment", 1.0)
+        )
+        opening_target_alignment = float(
+            value.get("opening_target_normal_alignment", 1.0)
+        )
+        plate_downward_alignment = float(
+            value.get("plate_downward_alignment", 0.0)
+        )
+        ring_plate_alignment = float(
+            value.get("opening_ring_plate_alignment", 1.0)
+        )
+        ring_target_alignment = float(
+            value.get("opening_ring_target_alignment", 1.0)
+        )
+        ring_plane_rms = float(value.get("opening_ring_plane_rms_m", 0.0))
+        ring_plane_maximum = float(
+            value.get("opening_ring_plane_maximum_m", 0.0)
+        )
+        ring_maximum_sag = float(
+            value.get("opening_ring_maximum_sag_m", 0.0)
+        )
+        ring_area = float(value.get("opening_ring_area_m2", 0.0))
+        ring_area_retention = float(
+            value.get("opening_ring_area_retention", 1.0)
+        )
+        sock_tip_span_axis_offset = float(
+            value.get("sock_tip_span_axis_offset_m", 0.0)
+        )
+        sock_tip_cross_axis_offset = float(
+            value.get("sock_tip_cross_axis_offset_m", 0.0)
+        )
+        sock_tip_opening_depth = float(
+            value.get("sock_tip_opening_depth_m", 0.0)
+        )
+        barrier_violation_count = int(
+            value.get("opening_body_barrier_violation_count", 0)
+        )
+        barrier_maximum_penetration = float(
+            value.get("opening_body_barrier_maximum_penetration_m", 0.0)
+        )
+        barrier_correction_count = int(
+            value.get("opening_body_barrier_correction_count", 0)
+        )
+        barrier_maximum_applied_correction = float(
+            value.get(
+                "opening_body_barrier_maximum_applied_correction_m", 0.0
+            )
+        )
+        signed_opening_span_rotation = float(
+            value.get("signed_opening_span_rotation_degrees", 0.0)
+        )
         if (
             not np.isfinite(distance)
             or distance < 0
@@ -156,19 +292,105 @@ class SceneGeometry:
             or knee_flexion < 0
             or knee_flexion > 180
             or not np.isfinite(gravity_alignment)
-            or gravity_alignment < -1.0
-            or gravity_alignment > 1.0
+            or gravity_alignment < -1.000001
+            or gravity_alignment > 1.000001
             or not np.isfinite(toe_alignment)
-            or toe_alignment < -1.0
-            or toe_alignment > 1.0
+            or toe_alignment < -1.000001
+            or toe_alignment > 1.000001
             or not np.isfinite(left_insertion)
             or left_insertion < 0
             or not np.isfinite(right_insertion)
             or right_insertion < 0
             or not np.isfinite(opening_span)
             or opening_span < 0
+            or not np.isfinite(left_patch_span)
+            or left_patch_span < 0
+            or not np.isfinite(right_patch_span)
+            or right_patch_span < 0
+            or not np.isfinite(maximum_corner_error)
+            or maximum_corner_error < 0
+            or not np.isfinite(thickness_alignment)
+            or thickness_alignment < -0.000001
+            or thickness_alignment > 1.000001
+            or not np.isfinite(opening_plate_alignment)
+            or opening_plate_alignment < -1.000001
+            or opening_plate_alignment > 1.000001
+            or not np.isfinite(opening_target_alignment)
+            or opening_target_alignment < -1.000001
+            or opening_target_alignment > 1.000001
+            or not np.isfinite(plate_downward_alignment)
+            or plate_downward_alignment < -1.000001
+            or plate_downward_alignment > 1.000001
+            or not np.isfinite(ring_plate_alignment)
+            or ring_plate_alignment < -1.000001
+            or ring_plate_alignment > 1.000001
+            or not np.isfinite(ring_target_alignment)
+            or ring_target_alignment < -1.000001
+            or ring_target_alignment > 1.000001
+            or not np.isfinite(ring_plane_rms)
+            or ring_plane_rms < 0
+            or not np.isfinite(ring_plane_maximum)
+            or ring_plane_maximum < 0
+            or not np.isfinite(ring_maximum_sag)
+            or ring_maximum_sag < 0
+            or not np.isfinite(ring_area)
+            or ring_area < 0
+            or not np.isfinite(ring_area_retention)
+            or ring_area_retention < 0
+            or not np.isfinite(sock_tip_span_axis_offset)
+            or not np.isfinite(sock_tip_cross_axis_offset)
+            or not np.isfinite(sock_tip_opening_depth)
+            or barrier_violation_count < 0
+            or not np.isfinite(barrier_maximum_penetration)
+            or barrier_maximum_penetration < 0
+            or barrier_correction_count < 0
+            or not np.isfinite(barrier_maximum_applied_correction)
+            or barrier_maximum_applied_correction < 0
+            or not np.isfinite(signed_opening_span_rotation)
         ):
-            raise ValueError("scene distances and angles must be finite")
+            raise ValueError(
+                "scene distances and angles are invalid: "
+                f"distance={distance}, lateral={lateral}, angle={angle}, "
+                f"knee_flexion={knee_flexion}, "
+                f"gravity_alignment={gravity_alignment}, "
+                f"toe_alignment={toe_alignment}, "
+                f"left_insertion={left_insertion}, "
+                f"right_insertion={right_insertion}, "
+                f"opening_span={opening_span}, "
+                f"left_patch_span={left_patch_span}, "
+                f"right_patch_span={right_patch_span}, "
+                f"maximum_corner_error={maximum_corner_error}, "
+                f"thickness_alignment={thickness_alignment}, "
+                f"opening_plate_alignment={opening_plate_alignment}, "
+                f"plate_downward_alignment={plate_downward_alignment}, "
+                f"ring_plate_alignment={ring_plate_alignment}, "
+                f"ring_plane_rms={ring_plane_rms}, "
+                f"ring_plane_maximum={ring_plane_maximum}, "
+                f"ring_maximum_sag={ring_maximum_sag}, "
+                f"ring_area={ring_area}, "
+                f"ring_area_retention={ring_area_retention}, "
+                f"sock_tip_span_axis_offset={sock_tip_span_axis_offset}, "
+                f"sock_tip_cross_axis_offset={sock_tip_cross_axis_offset}, "
+                f"sock_tip_opening_depth={sock_tip_opening_depth}"
+            )
+        gravity_alignment = float(np.clip(gravity_alignment, -1.0, 1.0))
+        toe_alignment = float(np.clip(toe_alignment, -1.0, 1.0))
+        thickness_alignment = float(np.clip(thickness_alignment, 0.0, 1.0))
+        opening_plate_alignment = float(
+            np.clip(opening_plate_alignment, -1.0, 1.0)
+        )
+        opening_target_alignment = float(
+            np.clip(opening_target_alignment, -1.0, 1.0)
+        )
+        plate_downward_alignment = float(
+            np.clip(plate_downward_alignment, -1.0, 1.0)
+        )
+        ring_plate_alignment = float(
+            np.clip(ring_plate_alignment, -1.0, 1.0)
+        )
+        ring_target_alignment = float(
+            np.clip(ring_target_alignment, -1.0, 1.0)
+        )
         return cls(
             foot_to_opening_plane_m=distance,
             foot_to_opening_lateral_m=lateral,
@@ -181,6 +403,34 @@ class SceneGeometry:
             left_grasp_parent=str(value.get("left_grasp_parent", "")),
             right_grasp_parent=str(value.get("right_grasp_parent", "")),
             opening_span_m=opening_span,
+            left_grasp_patch_span_m=left_patch_span,
+            right_grasp_patch_span_m=right_patch_span,
+            maximum_grasp_corner_error_m=maximum_corner_error,
+            grasp_thickness_axis_alignment=thickness_alignment,
+            opening_plate_normal_alignment=opening_plate_alignment,
+            opening_target_normal_alignment=opening_target_alignment,
+            plate_downward_alignment=plate_downward_alignment,
+            opening_ring_plate_alignment=ring_plate_alignment,
+            opening_ring_target_alignment=ring_target_alignment,
+            opening_ring_plane_rms_m=ring_plane_rms,
+            opening_ring_plane_maximum_m=ring_plane_maximum,
+            opening_ring_maximum_sag_m=ring_maximum_sag,
+            opening_ring_area_m2=ring_area,
+            opening_ring_area_retention=ring_area_retention,
+            sock_tip_span_axis_offset_m=sock_tip_span_axis_offset,
+            sock_tip_cross_axis_offset_m=sock_tip_cross_axis_offset,
+            sock_tip_opening_depth_m=sock_tip_opening_depth,
+            opening_body_barrier_violation_count=barrier_violation_count,
+            opening_body_barrier_maximum_penetration_m=(
+                barrier_maximum_penetration
+            ),
+            opening_body_barrier_correction_count=barrier_correction_count,
+            opening_body_barrier_maximum_applied_correction_m=(
+                barrier_maximum_applied_correction
+            ),
+            signed_opening_span_rotation_degrees=(
+                signed_opening_span_rotation
+            ),
             **vectors,
         )
 
@@ -213,6 +463,98 @@ class ClothContact:
             normal=normal,
             penetration_m=float(value["penetration_m"]),
             force_proxy=float(value["force_proxy"]),
+        )
+
+
+@dataclass(frozen=True)
+class DressingQA:
+    valid: bool
+    simulation_frame: int
+    surface_containment_ratio: float
+    sections: Tuple[Mapping[str, Any], ...]
+    cuff_progress_toward_ankle_m: float
+    maximum_cuff_reverse_step_m: float
+    cuff_beyond_distal_toe_m: float
+    foot_contact_count: int
+    maximum_cloth_foot_penetration_m: float
+    maximum_cloth_foot_force_proxy: float
+    obi_foot_contact_count: int
+    obi_maximum_cloth_foot_penetration_m: float
+    geometric_overlap_particle_count: int
+    geometric_maximum_cloth_foot_penetration_m: float
+    geometric_regions: Tuple[Mapping[str, Any], ...]
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any]) -> "DressingQA":
+        required = (
+            "surface_containment_ratio",
+            "cuff_progress_toward_ankle_m",
+            "maximum_cuff_reverse_step_m",
+            "cuff_beyond_distal_toe_m",
+            "maximum_cloth_foot_penetration_m",
+            "maximum_cloth_foot_force_proxy",
+        )
+        scalars = np.asarray([value[name] for name in required], dtype=float)
+        sections = tuple(dict(item) for item in value.get("sections", ()))
+        section_values = np.asarray(
+            [item.get("containment_ratio", np.nan) for item in sections],
+            dtype=float,
+        )
+        geometric = dict(value.get("geometric_foot_penetration", {}))
+        geometric_regions = tuple(
+            dict(item) for item in geometric.get("regions", ())
+        )
+        obi_penetration = float(
+            value.get(
+                "obi_maximum_cloth_foot_penetration_m",
+                value["maximum_cloth_foot_penetration_m"],
+            )
+        )
+        geometric_penetration = float(
+            value.get(
+                "geometric_maximum_cloth_foot_penetration_m",
+                value["maximum_cloth_foot_penetration_m"],
+            )
+        )
+        if (
+            not np.all(np.isfinite(scalars))
+            or not np.all(
+                np.isfinite([obi_penetration, geometric_penetration])
+            )
+            or not sections
+            or not np.all(np.isfinite(section_values))
+            or np.any(section_values < 0)
+            or np.any(section_values > 1)
+            or scalars[0] < 0
+            or scalars[0] > 1
+            or np.any(scalars[2:] < 0)
+            or obi_penetration < 0
+            or geometric_penetration < 0
+        ):
+            raise ValueError("dressing QA values must be finite and in range")
+        return cls(
+            valid=bool(value.get("valid", False)),
+            simulation_frame=int(value.get("simulation_frame", -1)),
+            surface_containment_ratio=float(scalars[0]),
+            sections=sections,
+            cuff_progress_toward_ankle_m=float(scalars[1]),
+            maximum_cuff_reverse_step_m=float(scalars[2]),
+            cuff_beyond_distal_toe_m=float(scalars[3]),
+            foot_contact_count=int(value.get("foot_contact_count", 0)),
+            maximum_cloth_foot_penetration_m=float(scalars[4]),
+            maximum_cloth_foot_force_proxy=float(scalars[5]),
+            obi_foot_contact_count=int(
+                value.get(
+                    "obi_foot_contact_count",
+                    value.get("foot_contact_count", 0),
+                )
+            ),
+            obi_maximum_cloth_foot_penetration_m=obi_penetration,
+            geometric_overlap_particle_count=int(
+                value.get("geometric_overlap_particle_count", 0)
+            ),
+            geometric_maximum_cloth_foot_penetration_m=geometric_penetration,
+            geometric_regions=geometric_regions,
         )
 
 
@@ -270,6 +612,12 @@ class SockClothAttr:
     def request_particles(self) -> None:
         self._send_data("GetParticles")
 
+    def request_prepared_state(self) -> None:
+        self._send_data("GetPreparedSockState")
+
+    def restore_prepared_state(self, snapshot: str) -> None:
+        self._send_data("RestorePreparedSockState", snapshot)
+
     def particles(self) -> np.ndarray:
         return _finite_vectors(self.data.get("particles", []), 3, "particles")
 
@@ -280,6 +628,9 @@ class SockClothAttr:
         return _finite_vectors(
             self.data.get("particle_velocities", []), 3, "particle_velocities"
         )
+
+    def stabilize_constraints(self) -> None:
+        self._send_data("StabilizeClothConstraints")
 
     def request_configuration(self) -> None:
         self._send_data("GetClothConfiguration")
@@ -298,6 +649,12 @@ class SockClothAttr:
         damping: float,
         substeps: int,
         solver_iterations: int,
+        tether_constraints: bool = True,
+        tether_compliance: float = 0.0,
+        tether_scale: float = 1.0,
+        maximum_circumferential_stretch: float = 1.5,
+        strain_limit_iterations: int = 8,
+        opening_body_maximum_stretch: float = 1.10,
     ) -> None:
         self._send_data(
             "ConfigureSock",
@@ -312,7 +669,24 @@ class SockClothAttr:
             float(damping),
             int(substeps),
             int(solver_iterations),
+            bool(tether_constraints),
+            float(tether_compliance),
+            float(tether_scale),
+            float(maximum_circumferential_stretch),
+            int(strain_limit_iterations),
+            float(opening_body_maximum_stretch),
         )
+
+    def configure_foot_conforming(self, *, surface_mode: str = "local",
+                                  bulk_transport: bool = False, fixed_grasp_offsets: bool = True) -> None:
+        if surface_mode not in ("local", "legacy"):
+            raise ValueError("unknown foot surface mode")
+        self._send_data("ConfigureFootConforming", surface_mode, bool(bulk_transport), bool(fixed_grasp_offsets))
+
+    def configure_foot_collider_shape(self, mode: str) -> None:
+        if mode not in ("boxes", "skin-hull"):
+            raise ValueError("unknown foot collider shape")
+        self._send_data("ConfigureFootColliderShape", mode)
 
     def configure_grasp(
         self,
@@ -321,10 +695,18 @@ class SockClothAttr:
         rotational_compliance: float,
         break_threshold: float,
         slip_constraint_error_m: float,
+        slip_minimum_opening_span_m: float,
         slip_opening_span_m: float,
         slip_consecutive_steps: int,
         maximum_particles_per_side: int,
         cuff_insertion_depth_m: float,
+        grasp_thickness_half_width_m: float,
+        opening_rim_maximum_stretch: float = 1.05,
+        opening_rim_plane_stiffness: float = 0.75,
+        opening_rim_shape_stiffness: float = 0.5,
+        opening_rim_maximum_correction_m: float = 0.01,
+        opening_rim_span_maximum_stretch: float = 1.05,
+        opening_rim_span_shape_stiffness: float = 0.5,
     ) -> None:
         values = np.asarray(
             [
@@ -332,8 +714,16 @@ class SockClothAttr:
                 rotational_compliance,
                 break_threshold,
                 slip_constraint_error_m,
+                slip_minimum_opening_span_m,
                 slip_opening_span_m,
                 cuff_insertion_depth_m,
+                grasp_thickness_half_width_m,
+                opening_rim_maximum_stretch,
+                opening_rim_plane_stiffness,
+                opening_rim_shape_stiffness,
+                opening_rim_maximum_correction_m,
+                opening_rim_span_maximum_stretch,
+                opening_rim_span_shape_stiffness,
             ],
             dtype=float,
         )
@@ -343,10 +733,19 @@ class SockClothAttr:
             or rotational_compliance <= 0
             or break_threshold <= 0
             or slip_constraint_error_m <= 0
+            or slip_minimum_opening_span_m < 0
             or slip_opening_span_m <= 0
+            or slip_minimum_opening_span_m > slip_opening_span_m
             or cuff_insertion_depth_m <= 0
+            or grasp_thickness_half_width_m <= 0
             or int(slip_consecutive_steps) < 1
-            or int(maximum_particles_per_side) < 1
+            or int(maximum_particles_per_side) < 2
+            or not 1.0 <= opening_rim_maximum_stretch <= 1.5
+            or not 1.0 <= opening_rim_span_maximum_stretch <= 1.5
+            or not 0.0 <= opening_rim_plane_stiffness <= 1.0
+            or not 0.0 <= opening_rim_shape_stiffness <= 1.0
+            or not 0.0 <= opening_rim_span_shape_stiffness <= 1.0
+            or opening_rim_maximum_correction_m <= 0
         ):
             raise ValueError("invalid grasp/slip configuration")
         self._send_data(
@@ -355,10 +754,84 @@ class SockClothAttr:
             float(rotational_compliance),
             float(break_threshold),
             float(slip_constraint_error_m),
+            float(slip_minimum_opening_span_m),
             float(slip_opening_span_m),
             int(slip_consecutive_steps),
             int(maximum_particles_per_side),
             float(cuff_insertion_depth_m),
+            float(grasp_thickness_half_width_m),
+            float(opening_rim_maximum_stretch),
+            float(opening_rim_plane_stiffness),
+            float(opening_rim_shape_stiffness),
+            float(opening_rim_maximum_correction_m),
+            float(opening_rim_span_maximum_stretch),
+            float(opening_rim_span_shape_stiffness),
+        )
+
+    def configure_opening_body_barrier(
+        self,
+        *,
+        enabled: bool,
+        clearance_m: float,
+        stiffness: float,
+        maximum_correction_m: float,
+    ) -> None:
+        values = np.asarray(
+            [clearance_m, stiffness, maximum_correction_m], dtype=float
+        )
+        if (
+            not np.all(np.isfinite(values))
+            or clearance_m < 0
+            or not 0.0 <= stiffness <= 1.0
+            or maximum_correction_m <= 0
+        ):
+            raise ValueError("invalid opening body barrier configuration")
+        self._send_data(
+            "ConfigureOpeningBodyBarrier",
+            bool(enabled),
+            float(clearance_m),
+            float(stiffness),
+            float(maximum_correction_m),
+        )
+
+    def configure_opening_rim_elastic_band(
+        self,
+        *,
+        mode: str = "template",
+        elastic_maximum_stretch: float = 1.8,
+        restoring_stiffness: float = 0.0,
+        shape_release_steps: int = 25,
+        collapse_guard_ratio: float = 0.0,
+        jaw_line_grasp: bool = False,
+    ) -> None:
+        values = np.asarray(
+            [elastic_maximum_stretch, restoring_stiffness, collapse_guard_ratio],
+            dtype=float,
+        )
+        if (
+            mode not in ("template", "elastic_band")
+            or not np.all(np.isfinite(values))
+            or not 1.0 <= elastic_maximum_stretch <= 3.0
+            or not 0.0 <= restoring_stiffness <= 1.0
+            or int(shape_release_steps) < 1
+            or not 0.0 <= collapse_guard_ratio < 1.0
+        ):
+            raise ValueError("invalid opening rim elastic band configuration")
+        self._send_data(
+            "ConfigureOpeningRimElasticBand",
+            mode == "elastic_band",
+            float(elastic_maximum_stretch),
+            float(restoring_stiffness),
+            int(shape_release_steps),
+            float(collapse_guard_ratio),
+            bool(jaw_line_grasp),
+        )
+
+    def arm_opening_body_barrier_predictive_skin(
+        self, armed: bool = True
+    ) -> None:
+        self._send_data(
+            "ArmOpeningBodyBarrierPredictiveSkin", bool(armed)
         )
 
     def set_grasp_targets(self, left_id: int, right_id: int) -> None:
@@ -381,6 +854,84 @@ class SockClothAttr:
             raise ValueError("right toe target must be a finite 3-vector")
         self._send_data("AlignSockOpeningToGraspTargets", *target.tolist())
 
+    def align_sock_opening_to_grasp_targets_and_grasp(
+        self, toe_target: Sequence[float], max_distance_m: float
+    ) -> None:
+        target = np.asarray(toe_target, dtype=float)
+        distance = float(max_distance_m)
+        if target.shape != (3,) or not np.all(np.isfinite(target)):
+            raise ValueError("right toe target must be a finite 3-vector")
+        if not np.isfinite(distance) or distance <= 0:
+            raise ValueError("max_distance_m must be finite and positive")
+        self._send_data(
+            "AlignSockOpeningToGraspTargetsAndGrasp",
+            *target.tolist(),
+            distance,
+        )
+
+    def align_sock_opening_to_grasp_plate_and_grasp(
+        self,
+        max_distance_m: float,
+        opening_rotation_degrees: float = 0.0,
+        rotate_away_from_toe: bool = False,
+    ) -> None:
+        distance = float(max_distance_m)
+        rotation = float(opening_rotation_degrees)
+        if not np.isfinite(distance) or distance <= 0:
+            raise ValueError("max_distance_m must be finite and positive")
+        if not np.isfinite(rotation) or not 0 <= rotation <= 180:
+            raise ValueError(
+                "opening_rotation_degrees must be finite and in [0, 180]"
+            )
+        self._send_data(
+            "AlignSockOpeningToGraspPlateAndGrasp",
+            distance,
+            rotation,
+            bool(rotate_away_from_toe),
+        )
+
+    def configure_initial_tip_guidance(
+        self,
+        span_offset_m: float,
+        cross_axis_offset_m: float,
+        opening_depth_m: float,
+        maximum_correction_m: float,
+        guidance_weight_exponent: float = 1.0,
+    ) -> None:
+        values = np.asarray(
+            (
+                span_offset_m,
+                cross_axis_offset_m,
+                opening_depth_m,
+                maximum_correction_m,
+                guidance_weight_exponent,
+            ),
+            dtype=float,
+        )
+        if (
+            not np.all(np.isfinite(values))
+            or values[3] <= 0
+            or values[4] <= 0
+        ):
+            raise ValueError(
+                "initial tip guidance values must be finite with positive "
+                "correction and weight exponent"
+            )
+        self._send_data("ConfigureInitialTipGuidance", *values.tolist())
+
+    def release_initial_tip_guidance(self) -> None:
+        self._send_data("ReleaseInitialTipGuidance")
+
+    def rotate_grasped_opening_about_span(
+        self, delta_degrees: float
+    ) -> None:
+        delta = float(delta_degrees)
+        if not np.isfinite(delta) or abs(delta) > 180:
+            raise ValueError(
+                "opening rotation delta must be finite and in [-180, 180]"
+            )
+        self._send_data("RotateGraspedOpeningAboutSpan", delta)
+
     def set_grasp_target_position(
         self, side: str, position: Sequence[float]
     ) -> None:
@@ -391,8 +942,21 @@ class SockClothAttr:
             raise ValueError("grasp target position must be a finite 3-vector")
         self._send_data("SetGraspTargetPosition", side, *value.tolist())
 
-    def configure_right_leg_colliders(self, human_id: int) -> None:
-        self._send_data("ConfigureRightLegColliders", int(human_id))
+    def configure_right_leg_colliders(
+        self,
+        human_id: int,
+        foot_cross_section_scale: float = 1.0,
+    ) -> None:
+        scale = float(foot_cross_section_scale)
+        if not np.isfinite(scale) or scale <= 0 or scale > 1:
+            raise ValueError(
+                "foot_cross_section_scale must be finite and in (0, 1]"
+            )
+        self._send_data(
+            "ConfigureRightLegColliders",
+            int(human_id),
+            scale,
+        )
 
     def configure_human_visual_pose(
         self, seat_position: Sequence[float], foot_position: Sequence[float]
@@ -497,8 +1061,38 @@ class SockClothAttr:
     def stop_foot_clearance_tracking(self) -> None:
         self._send_data("StopFootClearanceTracking")
 
-    def lock_human_and_chair(self) -> None:
-        self._send_data("LockHumanAndChair")
+    def restore_human_chair_world_pose(
+        self,
+        human_root_position: Sequence[float],
+        chair_position: Sequence[float],
+        human_anchor_position: Sequence[float],
+        right_toe_position: Sequence[float],
+        chair_id: int = -1,
+    ) -> None:
+        vectors = [
+            np.asarray(value, dtype=float)
+            for value in (
+                human_root_position,
+                chair_position,
+                human_anchor_position,
+                right_toe_position,
+            )
+        ]
+        if any(
+            value.shape != (3,) or not np.all(np.isfinite(value))
+            for value in vectors
+        ):
+            raise ValueError(
+                "restored human/chair pose requires four finite 3-vectors"
+            )
+        self._send_data(
+            "RestoreHumanChairWorldPose",
+            *(item for value in vectors for item in value.tolist()),
+            int(chair_id),
+        )
+
+    def lock_human_and_chair(self, chair_id: int = -1) -> None:
+        self._send_data("LockHumanAndChair", int(chair_id))
 
     def arm_slip_detection(self, armed: bool = True) -> None:
         self._send_data("ArmSlipDetection", bool(armed))
@@ -535,6 +1129,16 @@ class SockClothAttr:
 
     def request_scene_geometry(self) -> None:
         self._send_data("GetSceneGeometry")
+
+    def arm_foot_collision_safety(self, armed: bool = True) -> None:
+        """Arm continuous foot/surface constraints after kinematic preparation."""
+        self._send_data("ArmFootCollisionSafety", bool(armed))
+
+    def request_dressing_qa(self) -> None:
+        self._send_data("GetDressingQA")
+
+    def dressing_qa(self) -> DressingQA:
+        return DressingQA.from_mapping(self.data.get("dressing_qa", {}))
 
     def request_visual_diagnostics(self, chair_id: int = -1) -> None:
         self._send_data("GetVisualDiagnostics", int(chair_id))

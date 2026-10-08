@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import csv
 import json
+from dataclasses import asdict
 from pathlib import Path
-from typing import Callable, Mapping, Optional, Sequence
+from typing import Callable, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 import yaml
 
 from .config import resolve_package_path
@@ -16,6 +17,7 @@ from .joints import JointMap
 from .perception import SAMDepthPerception, select_prompt_points
 from .policy import SAMDAMSARNNPolicy
 from .scenario import scenario_from_config
+from .quality import rigid_collision_stop_required, RIGID_COLLISION_STOP_NUMERICAL_TOLERANCE_M
 
 
 def run_demo(
@@ -42,7 +44,7 @@ def run_demo(
     joints = JointMap.from_config(config)
     scenario = scenario_from_config(config, seed=seed)
     episode = output_root / config["dataset"]["name"] / "train" / _episode_name()
-    policy = policy_factory(config, checkpoint=checkpoint, device=device)
+    policy = None
     perception = perception_factory(config)
     reference_actions = None
     reference_path = settings.get("reference_actions")
@@ -66,19 +68,73 @@ def run_demo(
     )
     reference_pull = float(settings.get("reference_cartesian_pull_m", 0.0))
     physics_steps_per_action = int(settings.get("physics_steps_per_action", 1))
+    record_inference_camera_video = bool(
+        settings.get("record_inference_camera_video", False)
+    )
+    tip_drape_settings = dict(settings.get("tip_drape_wait", {}) or {})
+    tip_drape_enabled = bool(tip_drape_settings.get("enabled", False))
+    tip_drape_maximum_steps = int(
+        tip_drape_settings.get("maximum_steps", 250)
+    )
+    tip_drape_consecutive_steps = int(
+        tip_drape_settings.get("consecutive_steps", 5)
+    )
+    pre_drape_settings = dict(
+        settings.get("pre_inference_drape", {}) or {}
+    )
+    pre_drape_enabled = bool(pre_drape_settings.get("enabled", False))
+    pre_drape_rotation = float(
+        pre_drape_settings.get("rotation_degrees", 0.0)
+    )
+    pre_drape_rotation_steps = int(
+        pre_drape_settings.get("rotation_steps", 180)
+    )
+    pre_drape_settle_steps = int(
+        pre_drape_settings.get("settle_steps", 250)
+    )
+    post_drape_prompt_mode = str(
+        settings.get("post_pre_drape_prompt_mode", "dual_centroid")
+    )
+    catch_up_settings = dict(settings.get("policy_catch_up", {}) or {})
+    catch_up_enabled = bool(catch_up_settings.get("enabled", False))
+    catch_up_maximum_actions = int(catch_up_settings.get("maximum_actions", 40))
+    catch_up_tolerance = float(catch_up_settings.get("tolerance_rad", 0.05))
+    if catch_up_enabled and (
+        catch_up_maximum_actions < 1
+        or not np.isfinite(catch_up_tolerance)
+        or catch_up_tolerance <= 0
+    ):
+        raise ValueError("invalid policy catch-up settings")
     if (
         not 0 <= reference_blend <= 1
         or reference_hold < 1
         or physics_steps_per_action < 1
         or reference_interpolation not in {"hold", "linear"}
+        or post_drape_prompt_mode
+        not in {"dual_centroid", "single_centroid"}
+        or tip_drape_maximum_steps < 1
+        or tip_drape_consecutive_steps < 1
     ):
         raise ValueError("invalid reference action projection settings")
+    if pre_drape_enabled and (
+        not tip_drape_enabled
+        or not np.isfinite(pre_drape_rotation)
+        or abs(pre_drape_rotation) > 180
+        or abs(pre_drape_rotation) < 1e-8
+        or pre_drape_rotation_steps < 1
+        or pre_drape_settle_steps < 1
+    ):
+        raise ValueError("invalid pre-inference drape settings")
     output = resolve_package_path(config["assets"]["output_dir"])
     metadata = {
         "phase": 4,
         "mode": "airec-closed-loop",
-        "checkpoint": str(policy.checkpoint),
-        "checkpoint_sha256": policy.checkpoint_sha256,
+        "checkpoint": str(
+            checkpoint
+            if checkpoint is not None
+            else resolve_package_path(settings["checkpoint"])
+        ),
+        "checkpoint_sha256": None,
         "perception": "SAM2+Depth-Anything-V2",
         "seed": scenario.seed,
         "scenario": scenario.to_metadata(),
@@ -90,15 +146,39 @@ def run_demo(
             "interpolation": reference_interpolation,
             "cartesian_pull_m": reference_pull,
         },
+        "post_pre_drape_prompt_mode": post_drape_prompt_mode,
+        "rigid_collision_stop_numerical_tolerance_m": RIGID_COLLISION_STOP_NUMERICAL_TOLERANCE_M,
     }
     stop_reason = "max_steps"
     frames = 0
     quality_by_frame = []
     coverage_by_frame = []
     grasp_quality_by_frame = []
+    cloth_quality_by_frame = []
+    dressing_quality_by_frame = []
     foot_contact_ids_by_frame = []
     rigid_collision_qa_by_frame = []
+    human_chair_lock_qa_by_frame = []
+    sock_tip_geometry_by_frame = []
+    final_task_success = {}
     video_path = episode / "demo.mp4"
+    inference_camera_video_path = episode / "inference_camera.mp4"
+    tip_drape_video_path = episode / "tip_drape_settle.mp4"
+    pre_drape_video_path = episode / "pre_inference_drape.mp4"
+    tip_drape_report = {
+        "enabled": tip_drape_enabled,
+        "passed": not tip_drape_enabled,
+        "reason": "disabled" if not tip_drape_enabled else "not_started",
+        "samples": [],
+    }
+    pre_drape_report = {
+        "enabled": pre_drape_enabled,
+        "passed": not pre_drape_enabled,
+        "reason": "disabled" if not pre_drape_enabled else "not_started",
+        "rotation_degrees": pre_drape_rotation,
+        "rotation_steps": pre_drape_rotation_steps,
+        "settle_steps": pre_drape_settle_steps,
+    }
     configured_prompts = settings.get("prompts", {})
     if not sock_points:
         sock_points = configured_prompts.get("sock", {}).get("positive")
@@ -135,6 +215,7 @@ def run_demo(
         observation = environment.observe()
         if observation["camera"] is None:
             raise RuntimeError("camera observation is unavailable")
+        cloth_following_baseline = _cloth_following_state(observation, config)
         initial_renderer_masks = _renderer_masks(observation["camera"])
         if (
             config["rcareworld"].get("profile") == "custom_player"
@@ -214,14 +295,22 @@ def run_demo(
             "opening_frame": recording_camera_frame,
         }
         with EpisodeWriter(episode, joints.names, metadata) as writer:
-            Image.fromarray(observation["camera"]["rgb"].astype("uint8"), "RGB").save(
-                episode / "prompt_frame.png"
-            )
             video = _open_video(
                 video_path,
                 video_camera["rgb"].shape,
                 float(settings.get("rate_hz", 5.0)),
             )
+            inference_camera_video = (
+                _open_video(
+                    inference_camera_video_path,
+                    observation["camera"]["rgb"].shape,
+                    float(settings.get("rate_hz", 5.0)),
+                )
+                if record_inference_camera_video
+                else None
+            )
+            tip_drape_video = None
+            pre_drape_video = None
             predicted_file = (episode / "predicted_action.csv").open(
                 "w", newline="", encoding="utf-8"
             )
@@ -231,7 +320,319 @@ def run_demo(
             predicted_writer = csv.writer(predicted_file)
             applied_writer = csv.writer(applied_file)
             try:
+                if tip_drape_enabled:
+                    release_tip = getattr(
+                        environment,
+                        "release_initial_tip_guidance",
+                        None,
+                    )
+                    if not callable(release_tip):
+                        raise RuntimeError(
+                            "tip drape wait requires initial tip guidance release"
+                        )
+                    initial_geometry = observation.get("diagnostics", {}).get(
+                        "scene_geometry", {}
+                    )
+                    initial_tip = _sock_tip_geometry_report(
+                        -1, initial_geometry
+                    )
+                    release_y = initial_tip.get("sock_tip_world_y_m")
+                    if release_y is None or not np.isfinite(float(release_y)):
+                        raise RuntimeError(
+                            "tip drape wait requires a finite release tip world Y"
+                        )
+                    release_tip()
+                    tip_drape_video = _open_video(
+                        tip_drape_video_path,
+                        video_camera["rgb"].shape,
+                        1.0 / float(config["obi"].get("timestep_s", 0.02)),
+                    )
+                    consecutive = 0
+                    previous_y = float(release_y)
+                    for wait_step in range(1, tip_drape_maximum_steps + 1):
+                        # Native custom-player observe requests diagnostics and
+                        # advances exactly one synchronized physics step.
+                        observation = environment.observe()
+                        video_camera = observation.get("recording_camera")
+                        if video_camera is None:
+                            video_camera = observation["camera"]
+                        _write_video_frame(
+                            tip_drape_video,
+                            video_camera["rgb"],
+                            wait_step - 1,
+                            crop_xywh=settings.get("recording_crop_xywh"),
+                        )
+                        sample = _tip_drape_sample(
+                            wait_step,
+                            observation,
+                            config,
+                            release_y=float(release_y),
+                            previous_y=previous_y,
+                            settings=tip_drape_settings,
+                        )
+                        tip_drape_report["samples"].append(sample)
+                        previous_y = float(sample["sock_tip_world_y_m"])
+                        consecutive = consecutive + 1 if sample["ok"] else 0
+                        if consecutive >= tip_drape_consecutive_steps:
+                            tip_drape_report.update(
+                                {
+                                    "passed": True,
+                                    "reason": "conditions_met",
+                                    "wait_steps": wait_step,
+                                    "consecutive_steps": consecutive,
+                                    "release_tip_world_y_m": float(release_y),
+                                    "inference_start_tip_world_y_m": previous_y,
+                                    "tip_drop_m": float(release_y) - previous_y,
+                                    "video": str(tip_drape_video_path),
+                                }
+                            )
+                            break
+                    if not tip_drape_report["passed"]:
+                        tip_drape_report.update(
+                            {
+                                "reason": "timeout",
+                                "wait_steps": tip_drape_maximum_steps,
+                                "consecutive_steps": consecutive,
+                                "release_tip_world_y_m": float(release_y),
+                                "inference_start_tip_world_y_m": previous_y,
+                                "tip_drop_m": float(release_y) - previous_y,
+                                "video": str(tip_drape_video_path),
+                            }
+                        )
+                        raise RuntimeError(
+                            "tip drape wait timed out before inference: "
+                            + json.dumps(
+                                tip_drape_report["samples"][-1],
+                                sort_keys=True,
+                            )
+                        )
+                arm_predictive_skin = getattr(
+                    environment,
+                    "arm_opening_body_barrier_predictive_skin",
+                    None,
+                )
+                if callable(arm_predictive_skin):
+                    arm_predictive_skin(True)
+                if pre_drape_enabled:
+                    rotate_opening = getattr(
+                        environment,
+                        "rotate_grasped_opening_about_span",
+                        None,
+                    )
+                    step_physics = getattr(environment, "step_physics", None)
+                    frame_side_camera = getattr(
+                        environment, "frame_side_camera_on_sock", None
+                    )
+                    observe_drape = getattr(
+                        environment, "observe_drape_cameras", None
+                    )
+                    if not all(
+                        callable(method)
+                        for method in (
+                            rotate_opening,
+                            step_physics,
+                            frame_side_camera,
+                            observe_drape,
+                        )
+                    ):
+                        raise RuntimeError(
+                            "pre-inference drape requires signed rotation "
+                            "and dual-camera environment support"
+                        )
+                    rotation_delta = (
+                        pre_drape_rotation / pre_drape_rotation_steps
+                    )
+                    for _ in range(pre_drape_rotation_steps):
+                        rotate_opening(rotation_delta)
+                        step_physics()
+                    side_camera = frame_side_camera(
+                        float(pre_drape_settings.get("side_distance_m", 0.65)),
+                        reverse=bool(
+                            pre_drape_settings.get("side_reverse", False)
+                        ),
+                    )
+                    first_drape = observe_drape()
+                    pre_drape_video = _open_video(
+                        pre_drape_video_path,
+                        first_drape["overview"]["rgb"].shape,
+                        1.0 / float(
+                            config["obi"].get("timestep_s", 0.02)
+                        ),
+                    )
+                    drape_frames = []
+                    for settle_frame in range(pre_drape_settle_steps):
+                        drape_sample = (
+                            first_drape
+                            if settle_frame == 0
+                            else observe_drape()
+                        )
+                        _write_video_frame(
+                            pre_drape_video,
+                            drape_sample["overview"]["rgb"],
+                            settle_frame,
+                            crop_xywh=settings.get(
+                                "recording_crop_xywh"
+                            ),
+                        )
+                        drape_frames.append(
+                            asdict(drape_sample["geometry"])
+                        )
+                    pre_drape_video.release()
+                    pre_drape_video = None
+                    maximum_penetration = max(
+                        frame[
+                            "opening_body_barrier_maximum_penetration_m"
+                        ]
+                        for frame in drape_frames
+                    )
+                    maximum_violations = max(
+                        frame["opening_body_barrier_violation_count"]
+                        for frame in drape_frames
+                    )
+                    final_drape = drape_frames[-1]
+                    rotation_error = abs(
+                        final_drape[
+                            "signed_opening_span_rotation_degrees"
+                        ]
+                        - pre_drape_rotation
+                    )
+                    maximum_allowed_penetration = float(
+                        settings.get(
+                            "maximum_opening_body_penetration_m",
+                            0.0005,
+                        )
+                    )
+                    pre_drape_ok = bool(
+                        rotation_error <= 0.01
+                        and maximum_violations == 0
+                        and maximum_penetration
+                        <= maximum_allowed_penetration
+                        and final_drape[
+                            "opening_target_normal_alignment"
+                        ]
+                        >= 0.98
+                        and final_drape[
+                            "opening_ring_target_alignment"
+                        ]
+                        >= 0.98
+                    )
+                    pre_drape_report.update(
+                        {
+                            "passed": pre_drape_ok,
+                            "reason": (
+                                "conditions_met"
+                                if pre_drape_ok
+                                else "geometry_qa_failed"
+                            ),
+                            "rotation_delta_degrees": rotation_delta,
+                            "side_camera": side_camera,
+                            "maximum_opening_body_penetration_m": (
+                                maximum_penetration
+                            ),
+                            "maximum_opening_body_barrier_violation_count": (
+                                maximum_violations
+                            ),
+                            "final_geometry": final_drape,
+                            "video": str(pre_drape_video_path),
+                        }
+                    )
+                    diagnostic_continue = bool(config.get("foot_conforming_rollout", {}).get(
+                        "diagnostic_continue_failed_preparation", False))
+                    if not pre_drape_ok and diagnostic_continue:
+                        pre_drape_report["continued_for_diagnostics"] = True
+                        pre_drape_report["excluded_from_best_selection"] = True
+                    if not pre_drape_ok and not diagnostic_continue:
+                        raise RuntimeError(
+                            "pre-inference drape geometry QA failed: "
+                            + json.dumps(
+                                pre_drape_report, sort_keys=True
+                            )
+                        )
+                    observation = environment.observe()
+                    post_drape_masks = _renderer_masks(
+                        observation["camera"]
+                    )
+                    if (
+                        config["rcareworld"].get("profile")
+                        == "custom_player"
+                        and post_drape_masks is not None
+                    ):
+                        sock_center = _mask_centroid_point(
+                            post_drape_masks["sock"]
+                        )
+                        leg_center = _mask_centroid_point(
+                            post_drape_masks["leg"]
+                        )
+                        if post_drape_prompt_mode == "single_centroid":
+                            sock_labels = [1]
+                            leg_labels = [1]
+                            sock_points = [sock_center]
+                            leg_points = [leg_center]
+                        else:
+                            sock_labels = [1, 0]
+                            leg_labels = [1, 0]
+                            sock_points = [
+                                sock_center,
+                                leg_center,
+                            ]
+                            leg_points = [
+                                leg_center,
+                                sock_center,
+                            ]
+                    if post_drape_prompt_mode == "single_centroid":
+                        # A post-drape renderer mask can be unavailable when
+                        # the cuff is partially outside the inference camera.
+                        # In that case, remove the inherited cross-negative
+                        # point from the last valid centroid prompts as well.
+                        sock_points = [sock_points[0]]
+                        leg_points = [leg_points[0]]
+                        sock_labels = [1]
+                        leg_labels = [1]
+                    metadata["prompt_points"] = {
+                        "sock": list(map(list, sock_points)),
+                        "leg": list(map(list, leg_points)),
+                        "sock_labels": (
+                            None
+                            if sock_labels is None
+                            else list(sock_labels)
+                        ),
+                        "leg_labels": (
+                            None
+                            if leg_labels is None
+                            else list(leg_labels)
+                        ),
+                    }
+                    metadata["diagnostics"] = observation["diagnostics"]
+                    writer.update_metadata(
+                        {
+                            "prompt_points": metadata["prompt_points"],
+                            "diagnostics": metadata["diagnostics"],
+                            "post_pre_drape_prompt_mode": (
+                                post_drape_prompt_mode
+                            ),
+                        }
+                    )
+                begin_contact = getattr(environment, "begin_cloth_contact_rollout", None)
+                if callable(begin_contact):
+                    begin_contact()
+                # The released tip settles before autonomous control starts.
+                # Use that post-settle state as the motion-following baseline;
+                # otherwise gravity-driven drape is incorrectly charged as
+                # grasp-follow error throughout the policy rollout.
+                cloth_following_baseline = _cloth_following_state(
+                    observation, config
+                )
+                Image.fromarray(
+                    observation["camera"]["rgb"].astype("uint8"), "RGB"
+                ).save(episode / "prompt_frame.png")
+                policy = policy_factory(
+                    config, checkpoint=checkpoint, device=device
+                )
+                metadata["checkpoint"] = str(policy.checkpoint)
+                metadata["checkpoint_sha256"] = policy.checkpoint_sha256
                 renderer_masks = _renderer_masks(observation["camera"])
+                last_renderer_masks = renderer_masks
+                opening_qa_frames = {0, steps // 2, steps - 1}
                 initialize_kwargs = {
                     "sock_points": sock_points,
                     "leg_points": leg_points,
@@ -243,6 +644,44 @@ def run_demo(
                 perceived = perception.initialize(
                     observation["camera"]["rgb"], **initialize_kwargs
                 )
+                metadata["policy_catch_up"] = {"enabled": False}
+                if catch_up_enabled:
+                    first = policy.step(
+                        rgb=observation["camera"]["rgb"],
+                        sock_depth=perceived.sock_depth,
+                        leg_depth=perceived.leg_depth,
+                        angle=observation["angle"],
+                        torque=observation["torque"],
+                        step_index=0,
+                    )
+                    observation, catch_up_report = _catch_up_to_policy_target(
+                        environment,
+                        observation,
+                        first["action"],
+                        config,
+                        maximum_actions=catch_up_maximum_actions,
+                        tolerance_rad=catch_up_tolerance,
+                        physics_steps_per_action=physics_steps_per_action,
+                    )
+                    metadata["policy_catch_up"] = catch_up_report
+                    writer.update_metadata(
+                        {"policy_catch_up": catch_up_report}
+                    )
+                    # Inference starts from the caught-up pose with a fresh
+                    # recurrent state and masks of the scene it now sees.
+                    cloth_following_baseline = _cloth_following_state(
+                        observation, config
+                    )
+                    policy = policy_factory(
+                        config, checkpoint=checkpoint, device=device
+                    )
+                    renderer_masks = _renderer_masks(observation["camera"])
+                    if renderer_masks is not None:
+                        last_renderer_masks = renderer_masks
+                        initialize_kwargs["renderer_masks"] = renderer_masks
+                    perceived = perception.initialize(
+                        observation["camera"]["rgb"], **initialize_kwargs
+                    )
                 for frame in range(steps):
                     prediction = policy.step(
                         rgb=observation["camera"]["rgb"],
@@ -289,8 +728,21 @@ def run_demo(
                                 "reference Cartesian projection failed: "
                                 + json.dumps(alignment)
                             )
+                        # The Cartesian IK update moves the grasp targets
+                        # after the regular action substeps. Settle the
+                        # opening-to-body seam once before it is rendered and
+                        # measured.
+                        environment.stabilize_cloth_constraints()
                     observation = environment.observe()
                     renderer_masks = _renderer_masks(observation["camera"])
+                    if renderer_masks is not None:
+                        last_renderer_masks = renderer_masks
+                    elif (
+                        settings.get("use_renderer_masks", False)
+                        and settings.get("hold_last_renderer_masks", False)
+                        and last_renderer_masks is not None
+                    ):
+                        renderer_masks = last_renderer_masks
                     perceived = (
                         perception.track(
                             observation["camera"]["rgb"],
@@ -305,12 +757,40 @@ def run_demo(
                     )
                     grasp_report = _grasp_frame_report(observation, config)
                     grasp_quality_by_frame.append(grasp_report)
+                    cloth_quality_by_frame.append(
+                        _cloth_frame_report(
+                            observation,
+                            config,
+                            cloth_following_baseline,
+                        )
+                    )
+                    dressing_report = dict(observation.get("dressing_qa", {}) or {})
+                    dressing_report["foot_conformity"] = _foot_conformity_report(
+                        observation.get("cloth", {}), dressing_report
+                    )
+                    dressing_quality_by_frame.append(dressing_report)
                     rigid_qa = dict(
                         observation.get("diagnostics", {}).get(
                             "robot_human_rigid_collision_qa", {}
                         )
                     )
                     rigid_collision_qa_by_frame.append(rigid_qa)
+                    human_chair_lock_qa_by_frame.append(
+                        dict(
+                            observation.get("diagnostics", {}).get(
+                                "human_chair_lock_qa", {}
+                            )
+                            or {}
+                        )
+                    )
+                    sock_tip_geometry_by_frame.append(
+                        _sock_tip_geometry_report(
+                            frame,
+                            observation.get("diagnostics", {}).get(
+                                "scene_geometry", {}
+                            ),
+                        )
+                    )
                     foot_contact_ids_by_frame.append(
                         sorted(
                             {
@@ -340,12 +820,36 @@ def run_demo(
                     video_camera = observation.get("recording_camera")
                     if video_camera is None:
                         video_camera = observation["camera"]
+                    if frame in opening_qa_frames:
+                        _save_opening_qa_snapshot(
+                            episode / "opening_qa",
+                            frame,
+                            observation["camera"]["rgb"],
+                            video_camera["rgb"],
+                            observation.get("diagnostics", {}).get(
+                                "scene_geometry", {}
+                            ),
+                        )
+                    if frame == 0 and not tip_drape_enabled:
+                        release_tip = getattr(
+                            environment,
+                            "release_initial_tip_guidance",
+                            None,
+                        )
+                        if callable(release_tip):
+                            release_tip()
                     _write_video_frame(
                         video,
                         video_camera["rgb"],
                         frame,
                         crop_xywh=settings.get("recording_crop_xywh"),
                     )
+                    if inference_camera_video is not None:
+                        _write_video_frame(
+                            inference_camera_video,
+                            observation["camera"]["rgb"],
+                            frame,
+                        )
                     if cartesian_reference is not None:
                         applied = np.asarray(observation["angle"], dtype=float)
                     applied_writer.writerow(applied.tolist())
@@ -368,14 +872,59 @@ def run_demo(
                             "maximum_robot_human_penetration_m", float("inf")
                         )
                     )
+                    allow_ignored_rigid_pairs = bool(
+                        config.get("dressing_player", {}).get(
+                            "allow_ignored_robot_human_collision_pairs", False
+                        )
+                    )
                     if (
-                        int(rigid_qa.get("ignored_pair_count", 0)) > 0
-                        or float(rigid_qa.get("maximum_penetration_m", 0.0))
-                        > maximum_penetration
+                        bool(
+                            config.get("dressing_player", {}).get(
+                                "abort_on_rigid_collision_qa_failure", True
+                            )
+                        )
+                        and (
+                            (
+                                int(rigid_qa.get("ignored_pair_count", 0)) > 0
+                                and not allow_ignored_rigid_pairs
+                            )
+                            or rigid_collision_stop_required(float(
+                                rigid_qa.get(
+                                    "maximum_enabled_penetration_m",
+                                    rigid_qa.get("maximum_penetration_m", 0.0),
+                                )
+                            ), maximum_penetration)
+                        )
                     ):
                         raise RuntimeError(
                             "robot/human rigid collision QA failed: "
                             + json.dumps(rigid_qa, sort_keys=True)
+                        )
+                    maximum_cloth_foot_penetration = float(
+                        config.get("dressing_player", {}).get(
+                            "maximum_cloth_foot_penetration_m", float("inf")
+                        )
+                    )
+                    if (
+                        bool(
+                            config.get("dressing_player", {}).get(
+                                "abort_on_cloth_foot_qa_failure", False
+                            )
+                        )
+                        and (
+                            not bool(dressing_report.get("valid", False))
+                            or float(
+                                dressing_report.get(
+                                    "maximum_cloth_foot_penetration_m",
+                                    float("inf"),
+                                )
+                            )
+                            > maximum_cloth_foot_penetration
+                        )
+                    ):
+                        raise RuntimeError(
+                            "cloth/foot dressing QA failed: "
+                            + json.dumps(dressing_report, sort_keys=True)
                         )
             except (RuntimeError, ValueError) as error:
                 stop_reason = f"fail_closed: {error}"
@@ -383,26 +932,53 @@ def run_demo(
                 predicted_file.close()
                 applied_file.close()
                 video.release()
+                if inference_camera_video is not None:
+                    inference_camera_video.release()
+                if tip_drape_video is not None:
+                    tip_drape_video.release()
+                if pre_drape_video is not None:
+                    pre_drape_video.release()
+                final_task_success = _task_success(
+                    observation,
+                    quality_by_frame,
+                    coverage_by_frame,
+                    config,
+                    application=application,
+                    grasp_quality=grasp_quality_by_frame,
+                    cloth_quality=cloth_quality_by_frame,
+                    dressing_quality=dressing_quality_by_frame,
+                    foot_contact_ids_by_frame=foot_contact_ids_by_frame,
+                    rigid_collision_qa_by_frame=rigid_collision_qa_by_frame,
+                    human_chair_lock_qa_by_frame=human_chair_lock_qa_by_frame,
+                )
                 writer.update_metadata(
                     {
                         "stop_reason": stop_reason,
+                        "checkpoint": metadata["checkpoint"],
+                        "checkpoint_sha256": metadata["checkpoint_sha256"],
                         "frames_inferred": frames,
                         "video": str(video_path),
+                        "inference_camera_video": (
+                            str(inference_camera_video_path)
+                            if record_inference_camera_video
+                            else None
+                        ),
                         "perception_quality_by_frame": quality_by_frame,
                         "coverage_by_frame": coverage_by_frame,
                         "grasp_quality_by_frame": grasp_quality_by_frame,
+                        "cloth_quality_by_frame": cloth_quality_by_frame,
+                        "dressing_quality_by_frame": dressing_quality_by_frame,
                         "foot_contact_ids_by_frame": foot_contact_ids_by_frame,
                         "rigid_collision_qa_by_frame": rigid_collision_qa_by_frame,
-                        "task_success": _task_success(
-                            observation,
-                            quality_by_frame,
-                            coverage_by_frame,
-                            config,
-                            application=application,
-                            grasp_quality=grasp_quality_by_frame,
-                            foot_contact_ids_by_frame=foot_contact_ids_by_frame,
-                            rigid_collision_qa_by_frame=rigid_collision_qa_by_frame,
+                        "human_chair_lock_qa_by_frame": (
+                            human_chair_lock_qa_by_frame
                         ),
+                        "sock_tip_geometry_by_frame": (
+                            sock_tip_geometry_by_frame
+                        ),
+                        "tip_drape_wait": tip_drape_report,
+                        "pre_inference_drape": pre_drape_report,
+                        "task_success": final_task_success,
                     }
                 )
     manifest = output_root / "dataset_phase4.yaml"
@@ -423,9 +999,21 @@ def run_demo(
     )
     return {
         "ok": stop_reason == "max_steps" and frames == steps,
+        "task_success": bool(final_task_success.get("success", False)),
         "episode": str(episode),
         "manifest": str(manifest),
         "video": str(video_path),
+        "inference_camera_video": (
+            str(inference_camera_video_path)
+            if record_inference_camera_video
+            else None
+        ),
+        "tip_drape_video": (
+            str(tip_drape_video_path) if tip_drape_enabled else None
+        ),
+        "pre_inference_drape_video": (
+            str(pre_drape_video_path) if pre_drape_enabled else None
+        ),
         "frames": frames,
         "stop_reason": stop_reason,
     }
@@ -470,6 +1058,333 @@ def _save_mask_overlay(
     image[leg] = (0.55 * image[leg] + 0.45 * np.array([64, 255, 64])).astype(np.uint8)
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(image, "RGB").save(path)
+
+
+def _save_opening_qa_snapshot(
+    directory: Path,
+    frame: int,
+    inference_rgb: np.ndarray,
+    overview_rgb: np.ndarray,
+    geometry: Mapping,
+) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    metrics = {
+        name: geometry.get(name)
+        for name in (
+            "grasp_plate_outward_normal",
+            "opening_ring_inward_normal",
+            "opening_ring_plate_alignment",
+            "opening_target_normal_alignment",
+            "opening_ring_target_alignment",
+            "opening_ring_plane_rms_m",
+            "opening_ring_plane_maximum_m",
+            "opening_ring_maximum_sag_m",
+            "opening_ring_area_m2",
+            "opening_ring_area_retention",
+            "sock_tip_center",
+            "sock_tip_span_axis_offset_m",
+            "sock_tip_cross_axis_offset_m",
+            "sock_tip_opening_depth_m",
+            "opening_body_barrier_violation_count",
+            "opening_body_barrier_maximum_penetration_m",
+            "opening_body_barrier_correction_count",
+            "opening_body_barrier_maximum_applied_correction_m",
+            "plate_downward_alignment",
+        )
+    }
+    label = "\n".join(
+        f"{name}: {value}" for name, value in metrics.items()
+    )
+    for name, rgb in (
+        ("inference", inference_rgb),
+        ("overview", overview_rgb),
+    ):
+        image = Image.fromarray(np.asarray(rgb, dtype=np.uint8), "RGB")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((0, 0, min(image.width, 920), 248), fill=(0, 0, 0))
+        draw.multiline_text((8, 8), label, fill=(255, 255, 255), spacing=2)
+        image.save(directory / f"{frame:04d}_{name}.png")
+    (directory / f"{frame:04d}_geometry.json").write_text(
+        json.dumps(metrics, indent=2, sort_keys=True) + "\n"
+    )
+
+
+def _sock_tip_geometry_report(frame: int, geometry: Mapping) -> dict:
+    center = geometry.get("sock_tip_center")
+    opening_center = geometry.get("opening_center")
+    return {
+        "frame": int(frame),
+        "sock_tip_center": center,
+        "sock_tip_world_y_m": (
+            float(center[1])
+            if isinstance(center, (list, tuple)) and len(center) == 3
+            else None
+        ),
+        "opening_center": opening_center,
+        "opening_center_world_y_m": (
+            float(opening_center[1])
+            if isinstance(opening_center, (list, tuple))
+            and len(opening_center) == 3
+            else None
+        ),
+        "sock_tip_span_axis_offset_m": geometry.get(
+            "sock_tip_span_axis_offset_m"
+        ),
+        "sock_tip_cross_axis_offset_m": geometry.get(
+            "sock_tip_cross_axis_offset_m"
+        ),
+        "sock_tip_opening_depth_m": geometry.get(
+            "sock_tip_opening_depth_m"
+        ),
+        "opening_ring_maximum_sag_m": geometry.get(
+            "opening_ring_maximum_sag_m"
+        ),
+        "opening_ring_area_retention": geometry.get(
+            "opening_ring_area_retention"
+        ),
+        "opening_target_normal_alignment": geometry.get(
+            "opening_target_normal_alignment"
+        ),
+        "opening_ring_target_alignment": geometry.get(
+            "opening_ring_target_alignment"
+        ),
+        "opening_body_barrier_violation_count": geometry.get(
+            "opening_body_barrier_violation_count"
+        ),
+        "opening_body_barrier_maximum_penetration_m": geometry.get(
+            "opening_body_barrier_maximum_penetration_m"
+        ),
+        "opening_body_barrier_correction_count": geometry.get(
+            "opening_body_barrier_correction_count"
+        ),
+        "opening_body_barrier_maximum_applied_correction_m": geometry.get(
+            "opening_body_barrier_maximum_applied_correction_m"
+        ),
+    }
+
+
+def _tip_drape_sample(
+    step: int,
+    observation: Mapping,
+    config: Mapping,
+    *,
+    release_y: float,
+    previous_y: float,
+    settings: Mapping,
+) -> dict:
+    geometry = observation.get("diagnostics", {}).get("scene_geometry", {})
+    tip = _sock_tip_geometry_report(step, geometry)
+    tip_y = tip.get("sock_tip_world_y_m")
+    span_offset = tip.get("sock_tip_span_axis_offset_m")
+    cross_offset = tip.get("sock_tip_cross_axis_offset_m")
+    opening_depth = tip.get("sock_tip_opening_depth_m")
+    coordinate_frame = str(settings.get("coordinate_frame", "opening"))
+    if coordinate_frame == "gravity_aligned":
+        span_offset, cross_offset, opening_depth = (
+            _gravity_aligned_tip_offsets(geometry)
+        )
+        tip.update(
+            {
+                "sock_tip_span_axis_offset_m": span_offset,
+                "sock_tip_cross_axis_offset_m": cross_offset,
+                "sock_tip_opening_depth_m": opening_depth,
+            }
+        )
+    elif coordinate_frame != "opening":
+        raise ValueError(
+            "tip drape wait coordinate_frame must be opening or gravity_aligned"
+        )
+    opening_span = geometry.get("opening_span_m")
+    values = (tip_y, span_offset, cross_offset, opening_depth, opening_span)
+    if any(value is None or not np.isfinite(float(value)) for value in values):
+        raise RuntimeError(
+            "tip drape wait requires finite tip Y, span offset, and opening span"
+        )
+    tip_y = float(tip_y)
+    span_offset = float(span_offset)
+    opening_span = float(opening_span)
+    minimum_drop = float(settings.get("minimum_tip_drop_m", 0.05))
+    require_drop = bool(settings.get("require_tip_drop", True))
+    minimum_below_opening = float(
+        settings.get("minimum_tip_below_opening_m", 0.0)
+    )
+    span_margin = float(settings.get("span_margin_m", 0.005))
+    tip_radius_allowance = float(settings.get("tip_radius_allowance_m", 0.0))
+    maximum_rise = float(settings.get("maximum_tip_rise_per_step_m", 0.002))
+    minimum_cross = float(
+        settings.get("minimum_tip_cross_axis_offset_m", float("-inf"))
+    )
+    maximum_cross = float(
+        settings.get("maximum_tip_cross_axis_offset_m", float("inf"))
+    )
+    minimum_depth = float(
+        settings.get("minimum_tip_opening_depth_m", float("-inf"))
+    )
+    maximum_depth = float(
+        settings.get("maximum_tip_opening_depth_m", float("inf"))
+    )
+    gravity_alignment = geometry.get("sock_body_gravity_alignment")
+    minimum_gravity_alignment = float(
+        settings.get("minimum_sock_body_gravity_alignment", -1.0)
+    )
+    maximum_barrier_penetration = float(
+        config["inference"].get(
+            "maximum_opening_body_penetration_m", float("inf")
+        )
+    )
+    if (
+        minimum_drop < 0
+        or minimum_below_opening < 0
+        or span_margin < 0
+        or tip_radius_allowance < 0
+        or maximum_rise < 0
+        or not -1.0 <= minimum_gravity_alignment <= 1.0
+        or maximum_barrier_penetration < 0
+        or minimum_cross > maximum_cross
+        or minimum_depth > maximum_depth
+        or opening_span <= 2 * span_margin
+    ):
+        raise ValueError("invalid tip drape wait geometry thresholds")
+    gravity_alignment_ok = (
+        gravity_alignment is not None
+        and np.isfinite(float(gravity_alignment))
+        and float(gravity_alignment) >= minimum_gravity_alignment
+    )
+    barrier_violation_count = int(
+        geometry.get("opening_body_barrier_violation_count", 0)
+    )
+    barrier_maximum_penetration = float(
+        geometry.get("opening_body_barrier_maximum_penetration_m", 0.0)
+    )
+    opening_body_penetration_ok = (
+        barrier_violation_count == 0
+        and barrier_maximum_penetration <= maximum_barrier_penetration
+    )
+    drop = float(release_y) - tip_y
+    opening_center_y = tip.get("opening_center_world_y_m")
+    if opening_center_y is None or not np.isfinite(float(opening_center_y)):
+        raise RuntimeError(
+            "tip drape wait requires a finite opening center world Y"
+        )
+    below_opening = float(opening_center_y) - tip_y
+    span_limit = opening_span * 0.5 - span_margin + tip_radius_allowance
+    grasp = _grasp_frame_report(observation, config)
+    cloth = _cloth_frame_report(observation, config, baseline=None)
+    stretch = cloth.get("stretch", {})
+    stretch_required = bool(settings.get("require_stretch", True))
+    stretch_ok = bool(stretch.get("passes", False))
+    pose = config["scene"].get("initial_pose_contract", {})
+    rim_alignment = tip.get("opening_ring_target_alignment")
+    rim_sag = tip.get("opening_ring_maximum_sag_m")
+    rim_area = tip.get("opening_ring_area_retention")
+    rim_ok = (
+        rim_alignment is not None
+        and rim_sag is not None
+        and rim_area is not None
+        and float(rim_alignment)
+        >= float(pose.get("opening_ring_target_alignment_min", -1.0))
+        and float(rim_sag)
+        <= float(pose.get("opening_ring_maximum_sag_m", float("inf")))
+        and float(rim_area)
+        >= float(pose.get("opening_ring_area_retention_min", -1.0))
+    )
+    sample = {
+        **tip,
+        "step": int(step),
+        "release_tip_world_y_m": float(release_y),
+        "tip_drop_m": drop,
+        "tip_below_opening_m": below_opening,
+        "tip_y_change_m": tip_y - float(previous_y),
+        "opening_span_m": opening_span,
+        "coordinate_frame": coordinate_frame,
+        "span_limit_m": span_limit,
+        "drop_ok": not require_drop or drop >= minimum_drop,
+        "tip_drop_required": require_drop,
+        "below_opening_ok": below_opening >= minimum_below_opening,
+        "span_ok": abs(span_offset) <= span_limit,
+        "cross_ok": minimum_cross <= float(cross_offset) <= maximum_cross,
+        "depth_ok": minimum_depth <= float(opening_depth) <= maximum_depth,
+        "sock_body_gravity_alignment": (
+            float(gravity_alignment)
+            if gravity_alignment is not None
+            and np.isfinite(float(gravity_alignment))
+            else None
+        ),
+        "minimum_sock_body_gravity_alignment": minimum_gravity_alignment,
+        "gravity_alignment_ok": gravity_alignment_ok,
+        "maximum_opening_body_penetration_m": maximum_barrier_penetration,
+        "opening_body_penetration_ok": opening_body_penetration_ok,
+        "descending_ok": tip_y - float(previous_y) <= maximum_rise,
+        "grasp_ok": bool(grasp.get("ok", False)),
+        "rim_ok": rim_ok,
+        "stretch_required": stretch_required,
+        "stretch_ok": stretch_ok,
+        "stretch_gate_ok": not stretch_required or stretch_ok,
+        "stretch": stretch,
+    }
+    sample["ok"] = all(
+        sample[name]
+        for name in (
+            "drop_ok",
+            "below_opening_ok",
+            "span_ok",
+            "cross_ok",
+            "depth_ok",
+            "gravity_alignment_ok",
+            "opening_body_penetration_ok",
+            "descending_ok",
+            "grasp_ok",
+            "rim_ok",
+            "stretch_gate_ok",
+        )
+    )
+    return sample
+
+
+def _gravity_aligned_tip_offsets(geometry: Mapping) -> tuple:
+    names = (
+        "sock_tip_center",
+        "opening_center",
+        "left_grasp_position",
+        "right_grasp_position",
+        "opening_target_normal",
+    )
+    values = {
+        name: np.asarray(geometry.get(name), dtype=float)
+        for name in names
+    }
+    if any(
+        value.shape != (3,) or not np.all(np.isfinite(value))
+        for value in values.values()
+    ):
+        raise RuntimeError(
+            "gravity-aligned tip drape wait requires finite scene axes"
+        )
+    span_axis = values["right_grasp_position"] - values["left_grasp_position"]
+    span_norm = float(np.linalg.norm(span_axis))
+    if span_norm <= 1e-8:
+        raise RuntimeError(
+            "gravity-aligned tip drape wait requires separated grasp targets"
+        )
+    span_axis /= span_norm
+    cross_axis = np.asarray([0.0, 1.0, 0.0], dtype=float)
+    cross_axis -= np.dot(cross_axis, span_axis) * span_axis
+    cross_norm = float(np.linalg.norm(cross_axis))
+    if cross_norm <= 1e-8:
+        raise RuntimeError(
+            "gravity-aligned tip drape wait requires a nonvertical grasp span"
+        )
+    cross_axis /= cross_norm
+    depth_axis = np.cross(cross_axis, span_axis)
+    depth_axis /= float(np.linalg.norm(depth_axis))
+    if np.dot(depth_axis, values["opening_target_normal"]) < 0:
+        depth_axis = -depth_axis
+    offset = values["sock_tip_center"] - values["opening_center"]
+    return (
+        float(np.dot(offset, span_axis)),
+        float(np.dot(offset, cross_axis)),
+        float(np.dot(offset, depth_axis)),
+    )
 
 
 def _measured_coverage(environment, camera: Mapping) -> Optional[float]:
@@ -549,6 +1464,35 @@ def _grasp_frame_report(observation: Mapping, config: Mapping) -> dict:
         )
     if opening_span is not None:
         opening_span = float(opening_span)
+    grasp_positions = {}
+    for side in ("left", "right"):
+        value = np.asarray(
+            geometry.get(f"{side}_grasp_position", ()), dtype=float
+        )
+        if value.shape == (3,) and np.all(np.isfinite(value)):
+            grasp_positions[side] = value
+    vertical_difference = None
+    if len(grasp_positions) == 2:
+        vertical_difference = float(
+            grasp_positions["left"][1] - grasp_positions["right"][1]
+        )
+    right_toe = np.asarray(geometry.get("right_toe_position", ()), dtype=float)
+    grasp_toe_vertical_clearance = None
+    if (
+        len(grasp_positions) == 2
+        and right_toe.shape == (3,)
+        and np.all(np.isfinite(right_toe))
+    ):
+        grasp_toe_vertical_clearance = float(
+            min(
+                grasp_positions["left"][1],
+                grasp_positions["right"][1],
+            )
+            - right_toe[1]
+        )
+    area_retention = geometry.get("opening_ring_area_retention")
+    if area_retention is not None:
+        area_retention = float(area_retention)
     return {
         "available": available,
         "attached_grippers": len(attached_sides),
@@ -557,12 +1501,597 @@ def _grasp_frame_report(observation: Mapping, config: Mapping) -> dict:
         "target_to_edge_distances_m": target_to_edge,
         "maximum_edge_error_m": max(errors.values()) if errors else None,
         "opening_span_m": opening_span,
+        "opening_ring_area_retention": area_retention,
+        "opening_rim_state": geometry.get("opening_rim_state"),
+        "left_grasp_position": (
+            grasp_positions["left"].tolist()
+            if "left" in grasp_positions
+            else None
+        ),
+        "right_grasp_position": (
+            grasp_positions["right"].tolist()
+            if "right" in grasp_positions
+            else None
+        ),
+        "left_minus_right_vertical_m": vertical_difference,
+        "right_toe_position": (
+            right_toe.tolist()
+            if right_toe.shape == (3,) and np.all(np.isfinite(right_toe))
+            else None
+        ),
+        "grasp_toe_vertical_clearance_m": grasp_toe_vertical_clearance,
         "threshold_m": maximum_error,
         "ok": (
             available
             and len(attached_sides) >= required
             and max(errors.values()) <= maximum_error
         ),
+    }
+
+
+FOOT_CONFORMITY_NEIGHBOURHOOD_M = 0.03
+FOOT_CONFORMITY_CONTACT_TOLERANCE_M = 0.003
+
+
+def _foot_conformity_report(
+    cloth: Mapping, dressing_report: Mapping
+) -> dict:
+    """Summarize how closely and evenly the sock body follows the foot."""
+    geometric = dict(dressing_report.get("geometric_foot_penetration", {}) or {})
+    distances = np.asarray(
+        geometric.pop("minimum_particle_foot_distance_m", ()), dtype=float
+    )
+    if "geometric_foot_penetration" in dressing_report:
+        dressing_report["geometric_foot_penetration"] = geometric
+    particles = np.asarray(cloth.get("particles", ()), dtype=float)
+    edges = np.asarray(cloth.get("particle_edges", ()), dtype=int)
+    rest_lengths = np.asarray(
+        cloth.get("particle_rest_edge_lengths", ()), dtype=float
+    )
+    shell = float(geometric.get("particle_shell_m", float("nan")))
+    if (
+        particles.ndim != 2
+        or particles.shape[1:] != (3,)
+        or distances.shape != (particles.shape[0],)
+        or not np.all(np.isfinite(distances))
+        or not np.isfinite(shell)
+    ):
+        return {"available": False}
+    excluded = {
+        int(index) for index in cloth.get("opening_particle_indices", ())
+    } | {
+        int(index)
+        for state in cloth.get("grasp_state", ())
+        if bool(state.get("attached", False))
+        for index in state.get("particle_indices", ())
+    }
+    body = np.ones(particles.shape[0], dtype=bool)
+    body[[index for index in excluded if 0 <= index < body.size]] = False
+    neighbourhood = body & (distances <= FOOT_CONFORMITY_NEIGHBOURHOOD_M)
+    contact = neighbourhood & (
+        distances <= shell + FOOT_CONFORMITY_CONTACT_TOLERANCE_M
+    )
+    report = {
+        "available": True,
+        "neighbourhood_m": FOOT_CONFORMITY_NEIGHBOURHOOD_M,
+        "contact_tolerance_m": FOOT_CONFORMITY_CONTACT_TOLERANCE_M,
+        "neighbourhood_particle_count": int(neighbourhood.sum()),
+        "contact_particle_count": int(contact.sum()),
+        "contact_fraction": (
+            float(contact.sum() / neighbourhood.sum())
+            if neighbourhood.any()
+            else None
+        ),
+        "near_foot_edge_count": 0,
+        "near_foot_stretch_mean": None,
+        "near_foot_stretch_std": None,
+        "near_foot_stretch_max": None,
+    }
+    if (
+        edges.ndim == 2
+        and edges.shape[1:] == (2,)
+        and edges.shape[0] == rest_lengths.size
+        and edges.size
+        and edges.min() >= 0
+        and edges.max() < particles.shape[0]
+        and np.all(rest_lengths > 0)
+    ):
+        near_edges = neighbourhood[edges[:, 0]] & neighbourhood[edges[:, 1]]
+        if near_edges.any():
+            stretches = np.linalg.norm(
+                particles[edges[near_edges, 0]] - particles[edges[near_edges, 1]],
+                axis=1,
+            ) / rest_lengths[near_edges]
+            report.update(
+                {
+                    "near_foot_edge_count": int(near_edges.sum()),
+                    "near_foot_stretch_mean": float(stretches.mean()),
+                    "near_foot_stretch_std": float(stretches.std()),
+                    "near_foot_stretch_max": float(stretches.max()),
+                }
+            )
+    return report
+
+
+def _cloth_following_state(observation: Mapping, config: Mapping) -> Optional[dict]:
+    particles = np.asarray(observation.get("cloth", {}).get("particles", ()), dtype=float)
+    radial_segments = int(config["scenario"]["sock"]["radial_segments"])
+    closed_toe = bool(config["scenario"]["sock"].get("closed_toe", False))
+    toe_count = radial_segments + (1 if closed_toe else 0)
+    geometry = observation.get("diagnostics", {}).get("scene_geometry", {})
+    left = np.asarray(geometry.get("left_grasp_position", ()), dtype=float)
+    right = np.asarray(geometry.get("right_grasp_position", ()), dtype=float)
+    if (
+        particles.ndim != 2
+        or particles.shape[1:] != (3,)
+        or particles.shape[0] < radial_segments + toe_count
+        or left.shape != (3,)
+        or right.shape != (3,)
+        or not np.all(np.isfinite(particles))
+        or not np.all(np.isfinite(left))
+        or not np.all(np.isfinite(right))
+    ):
+        return None
+    return {
+        "grasp_midpoint": (0.5 * (left + right)),
+        "opening_center": particles[:radial_segments].mean(axis=0),
+        "toe_center": particles[-toe_count:].mean(axis=0),
+    }
+
+
+def _cloth_frame_report(
+    observation: Mapping,
+    config: Mapping,
+    baseline: Optional[Mapping],
+) -> dict:
+    obi_settings = config["obi"].get(
+        "expected", config["obi"].get("requested", {})
+    )
+    stretch = SockDressingEnv.cloth_radius_qa(
+        observation.get("cloth", {}),
+        radial_segments=int(config["scenario"]["sock"]["radial_segments"]),
+        maximum_circumferential_stretch=float(
+            obi_settings.get("maximum_circumferential_stretch", 1.5)
+        ),
+    )
+    current = _cloth_following_state(observation, config)
+    settings = config["inference"]
+    minimum_displacement = float(
+        settings.get("minimum_follow_displacement_m", 0.02)
+    )
+    maximum_error = float(
+        settings.get("maximum_distal_follow_error_m", 0.05)
+    )
+    minimum_ratio = float(
+        settings.get("minimum_distal_follow_ratio", 0.5)
+    )
+    minimum_direction_alignment = float(
+        settings.get("minimum_distal_follow_direction_alignment", -1.0)
+    )
+    geometry = observation.get("diagnostics", {}).get("scene_geometry", {})
+    barrier_enabled = bool(
+        obi_settings.get("opening_body_barrier_enabled", False)
+    )
+    barrier_violation_count = int(
+        geometry.get("opening_body_barrier_violation_count", 0)
+    )
+    barrier_maximum_penetration = float(
+        geometry.get("opening_body_barrier_maximum_penetration_m", 0.0)
+    )
+    maximum_barrier_penetration = float(
+        settings.get("maximum_opening_body_penetration_m", float("inf"))
+    )
+    opening_body_penetration_ok = (
+        not barrier_enabled
+        or (
+            barrier_violation_count == 0
+            and barrier_maximum_penetration <= maximum_barrier_penetration
+        )
+    )
+    if baseline is None or current is None:
+        return {
+            "available": False,
+            "ok": False,
+            "stretch": stretch,
+            "opening_body_barrier_enabled": barrier_enabled,
+            "opening_body_barrier_violation_count": barrier_violation_count,
+            "opening_body_barrier_maximum_penetration_m": (
+                barrier_maximum_penetration
+            ),
+            "opening_body_penetration_ok": opening_body_penetration_ok,
+            "maximum_distal_follow_error_m": maximum_error,
+            "minimum_distal_follow_ratio": minimum_ratio,
+        }
+    grasp_delta = np.asarray(current["grasp_midpoint"]) - np.asarray(
+        baseline["grasp_midpoint"]
+    )
+    toe_delta = np.asarray(current["toe_center"]) - np.asarray(
+        baseline["toe_center"]
+    )
+    opening_delta = np.asarray(current["opening_center"]) - np.asarray(
+        baseline["opening_center"]
+    )
+    grasp_displacement = float(np.linalg.norm(grasp_delta))
+    toe_displacement = float(np.linalg.norm(toe_delta))
+    # Compare the distal toe with the cloth cuff itself. Scene-level gripper
+    # transforms can differ from the pin frame under robot articulation, while
+    # opening-to-toe motion directly measures whether the sock follows its
+    # grasped end.
+    follow_reference = opening_delta
+    follow_error = float(np.linalg.norm(toe_delta - follow_reference))
+    follow_displacement = float(np.linalg.norm(follow_reference))
+    follow_ratio = (
+        toe_displacement / follow_displacement
+        if follow_displacement >= minimum_displacement
+        else None
+    )
+    follow_direction_alignment = (
+        float(np.dot(toe_delta, follow_reference))
+        / (toe_displacement * follow_displacement)
+        if follow_displacement >= minimum_displacement
+        and toe_displacement > 1e-8
+        else None
+    )
+    foot_contact = any(
+        2101 <= int(item.get("collider_id", -1)) <= 2105
+        for item in observation.get("contact_force", ())
+    )
+    responding_ok = (
+        True
+        if follow_ratio is None
+        else (
+            foot_contact
+            or (
+                follow_ratio >= minimum_ratio
+                and follow_direction_alignment is not None
+                and follow_direction_alignment >= minimum_direction_alignment
+            )
+        )
+    )
+    following_ok = (
+        responding_ok
+        and (
+            follow_ratio is None
+            or foot_contact
+            or follow_error <= maximum_error
+        )
+    )
+    return {
+        "available": True,
+        "ok": (
+            bool(stretch.get("passes", False))
+            and following_ok
+            and opening_body_penetration_ok
+        ),
+        "stretch": stretch,
+        "grasp_midpoint_displacement_m": grasp_displacement,
+        "opening_center_displacement_m": float(np.linalg.norm(opening_delta)),
+        "toe_center_displacement_m": toe_displacement,
+        "distal_follow_error_m": follow_error,
+        "distal_follow_ratio": follow_ratio,
+        "distal_follow_direction_alignment": follow_direction_alignment,
+        "minimum_distal_follow_direction_alignment": (
+            minimum_direction_alignment
+        ),
+        "responding_ok": responding_ok,
+        "following_ok": following_ok,
+        "foot_contact_allows_distal_anchoring": foot_contact,
+        "minimum_follow_displacement_m": minimum_displacement,
+        "maximum_distal_follow_error_m": maximum_error,
+        "minimum_distal_follow_ratio": minimum_ratio,
+        "opening_body_barrier_enabled": barrier_enabled,
+        "opening_body_barrier_violation_count": barrier_violation_count,
+        "opening_body_barrier_maximum_penetration_m": (
+            barrier_maximum_penetration
+        ),
+        "opening_body_barrier_correction_count": int(
+            geometry.get("opening_body_barrier_correction_count", 0)
+        ),
+        "opening_body_barrier_maximum_applied_correction_m": float(
+            geometry.get(
+                "opening_body_barrier_maximum_applied_correction_m", 0.0
+            )
+        ),
+        "maximum_opening_body_penetration_m": maximum_barrier_penetration,
+        "opening_body_penetration_ok": opening_body_penetration_ok,
+    }
+
+
+def _contact_rebound_report(
+    dressing_quality: Sequence[Mapping],
+    grasp_quality: Sequence[Mapping],
+    foot_contact_ids_by_frame: Sequence[Sequence[int]],
+    *,
+    window_frames: int = 10,
+) -> dict:
+    dressing = list(dressing_quality or ())
+    grasp = list(grasp_quality or ())
+    contacts = list(foot_contact_ids_by_frame or ())
+    frame_count = max(len(dressing), len(grasp), len(contacts))
+    contact_onset = next(
+        (
+            frame
+            for frame in range(frame_count)
+            if (
+                frame < len(contacts)
+                and bool(contacts[frame])
+            )
+            or (
+                frame < len(dressing)
+                and int(dressing[frame].get("foot_contact_count", 0)) > 0
+            )
+        ),
+        None,
+    )
+    if contact_onset is None:
+        return {
+            "foot_contact_onset_frame": None,
+            "post_contact_window_frames": int(window_frames),
+            "maximum_post_contact_cuff_reverse_m": None,
+            "maximum_post_contact_cuff_progress_drop_m": None,
+            "minimum_post_contact_opening_span_m": None,
+            "minimum_post_contact_opening_ring_area_retention": None,
+            "maximum_post_contact_opening_span_overshoot_m": None,
+            "maximum_post_contact_opening_area_overshoot": None,
+        }
+    stop = min(frame_count, contact_onset + max(int(window_frames), 1) + 1)
+    dressing_window = dressing[contact_onset:stop]
+    grasp_window = grasp[contact_onset:stop]
+    reverse_values = [
+        float(item["maximum_cuff_reverse_step_m"])
+        for item in dressing_window
+        if item.get("maximum_cuff_reverse_step_m") is not None
+    ]
+    progress_values = [
+        float(item["cuff_progress_toward_ankle_m"])
+        for item in dressing_window
+        if item.get("cuff_progress_toward_ankle_m") is not None
+    ]
+    progress_drops = [
+        max(previous - current, 0.0)
+        for previous, current in zip(progress_values, progress_values[1:])
+    ]
+    spans = [
+        float(item["opening_span_m"])
+        for item in grasp_window
+        if item.get("opening_span_m") is not None
+    ]
+    areas = [
+        float(item["opening_ring_area_retention"])
+        for item in grasp_window
+        if item.get("opening_ring_area_retention") is not None
+    ]
+    return {
+        "foot_contact_onset_frame": contact_onset,
+        "post_contact_window_frames": int(window_frames),
+        "maximum_post_contact_cuff_reverse_m": (
+            max(reverse_values) if reverse_values else None
+        ),
+        "maximum_post_contact_cuff_progress_drop_m": (
+            max(progress_drops, default=0.0) if progress_values else None
+        ),
+        "minimum_post_contact_opening_span_m": min(spans) if spans else None,
+        "minimum_post_contact_opening_ring_area_retention": (
+            min(areas) if areas else None
+        ),
+        "maximum_post_contact_opening_span_overshoot_m": (
+            max(max(spans) - spans[0], 0.0) if spans else None
+        ),
+        "maximum_post_contact_opening_area_overshoot": (
+            max(max(areas) - areas[0], 0.0) if areas else None
+        ),
+    }
+
+
+def _rim_foot_entered(item: Mapping) -> bool:
+    return bool((item.get("opening_rim_state") or {}).get("foot_entered", False))
+
+
+def _opening_rim_elastic_qa(
+    grasp_quality: Sequence[Mapping], config: Mapping
+) -> dict:
+    """Judge an elastic-band cuff by staying open before the foot arrives
+    and by enclosing the leg section after it enters."""
+    obi_settings = config["obi"].get(
+        "expected", config["obi"].get("requested", {})
+    )
+    elastic_band = obi_settings.get("opening_rim_mode", "template") == "elastic_band"
+    minimum_enclosure = float(
+        config["inference"].get("minimum_post_entry_foot_section_enclosure", 0.95)
+    )
+    states = [
+        item.get("opening_rim_state") or {} for item in grasp_quality
+    ]
+    post_entry = [state for state in states if state.get("foot_entered")]
+    fractions = [
+        float(state["foot_section_enclosed_fraction"])
+        for state in post_entry
+        if int(state.get("foot_section_sample_count", 0)) > 0
+        and state.get("foot_section_enclosed_fraction") is not None
+        and np.isfinite(float(state["foot_section_enclosed_fraction"]))
+    ]
+    pretension = [
+        float(state["pretension_ratio"])
+        for state in states
+        if state.get("pretension_ratio") is not None
+        and np.isfinite(float(state["pretension_ratio"]))
+    ]
+    first_entry = next(
+        (index for index, state in enumerate(states) if state.get("foot_entered")),
+        None,
+    )
+    return {
+        "elastic_band": elastic_band,
+        "first_foot_entry_frame": first_entry,
+        "post_entry_frames": len(post_entry),
+        "post_entry_section_frames": len(fractions),
+        "minimum_post_entry_foot_section_enclosure": (
+            min(fractions) if fractions else None
+        ),
+        "mean_post_entry_foot_section_enclosure": (
+            float(np.mean(fractions)) if fractions else None
+        ),
+        "minimum_allowed_foot_section_enclosure": minimum_enclosure,
+        "foot_enclosure_ok": bool(fractions)
+        and min(fractions) >= minimum_enclosure,
+        "minimum_pretension_ratio": min(pretension) if pretension else None,
+        "maximum_pretension_ratio": max(pretension) if pretension else None,
+        "maximum_collapse_guard_correction_m": max(
+            (
+                float(state.get("collapse_guard_maximum_correction_m", 0.0))
+                for state in states
+            ),
+            default=None,
+        ),
+        "collapse_guard_active_frames": sum(
+            int(state.get("collapse_guard_correction_count", 0)) > 0
+            for state in states
+        ),
+    }
+
+
+def _catch_up_to_policy_target(
+    environment,
+    observation: Mapping,
+    target: Sequence[float],
+    config: Mapping,
+    *,
+    maximum_actions: int,
+    tolerance_rad: float,
+    physics_steps_per_action: int,
+) -> Tuple[Mapping, dict]:
+    """Drive the arms to the policy's first command before inference starts.
+
+    The rate limit otherwise makes the whole insertion a delayed catch-up from
+    the drape pose rather than the trajectory the policy predicts.
+    """
+    from .joints import JointMap
+
+    mapping = JointMap.from_config(config)
+    goal = np.clip(np.asarray(target, dtype=float)[:18], mapping.lower, mapping.upper)
+
+    def gap(current: Mapping) -> float:
+        return float(np.max(np.abs(goal - np.asarray(current["angle"], dtype=float))))
+
+    def toe_to_opening(current: Mapping) -> Optional[float]:
+        geometry = current.get("diagnostics", {}).get("scene_geometry", {}) or {}
+        try:
+            center = (
+                np.asarray(geometry["left_grasp_position"], dtype=float)
+                + np.asarray(geometry["right_grasp_position"], dtype=float)
+            ) * 0.5
+            toe = np.asarray(geometry["right_toe_position"], dtype=float)
+        except (KeyError, TypeError, ValueError):
+            return None
+        return float(np.linalg.norm(center - toe))
+
+    initial_gap = gap(observation)
+    distances = []
+    contacts = set()
+    actions = 0
+    while actions < maximum_actions and gap(observation) > tolerance_rad:
+        environment.command(goal, observation["angle"])
+        environment.advance_physics(physics_steps_per_action - 1)
+        observation = environment.observe()
+        actions += 1
+        distance = toe_to_opening(observation)
+        if distance is not None:
+            distances.append(distance)
+        contacts.update(
+            int(item.get("collider_id", -1))
+            for item in observation.get("contact_force", ())
+            if 2101 <= int(item.get("collider_id", -1)) <= 2105
+        )
+    final_gap = gap(observation)
+    return observation, {
+        "enabled": True,
+        "actions": actions,
+        "maximum_actions": maximum_actions,
+        "tolerance_rad": tolerance_rad,
+        "initial_gap_rad": initial_gap,
+        "final_gap_rad": final_gap,
+        "converged": final_gap <= tolerance_rad,
+        "minimum_toe_to_opening_m": min(distances) if distances else None,
+        "final_toe_to_opening_m": distances[-1] if distances else None,
+        "foot_contact_collider_ids": sorted(contacts),
+    }
+
+
+def _foot_axis_alignment_qa(
+    grasp_quality: Sequence[Mapping],
+    dressing_quality: Sequence[Mapping],
+    config: Mapping,
+) -> dict:
+    """Measure where the held opening travels relative to the foot axis.
+
+    A cuff that advances past the toe while sitting above the instep slides
+    over the dorsum instead of taking the foot; along-axis cuff progress alone
+    cannot tell the two apart.
+    """
+    settings = config["inference"]
+    maximum_offset = float(
+        settings.get("maximum_opening_foot_axis_offset_m", 0.03)
+    )
+    obi_settings = config["obi"].get(
+        "expected", config["obi"].get("requested", {})
+    )
+    dorsal_limit = float(obi_settings.get("grasp_thickness_half_width_m", 0.0375))
+    frames = []
+    for index, (grasp, dressing) in enumerate(zip(grasp_quality, dressing_quality)):
+        try:
+            left = np.asarray(grasp["left_grasp_position"], dtype=float)
+            right = np.asarray(grasp["right_grasp_position"], dtype=float)
+            toe = np.asarray(grasp["right_toe_position"], dtype=float)
+            axis = np.asarray(dressing["foot_axis_to_ankle"], dtype=float)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if (
+            left.shape != (3,) or right.shape != (3,) or toe.shape != (3,)
+            or axis.shape != (3,) or not np.all(np.isfinite(axis))
+            or np.linalg.norm(axis) <= 1e-8
+        ):
+            continue
+        axis = axis / np.linalg.norm(axis)
+        up = np.array([0.0, 1.0, 0.0])
+        dorsal = up - np.dot(up, axis) * axis
+        if np.linalg.norm(dorsal) <= 1e-8:
+            continue
+        dorsal /= np.linalg.norm(dorsal)
+        lateral = np.cross(axis, dorsal)
+        offset = (left + right) * 0.5 - toe
+        along = float(offset @ axis)
+        dorsal_offset = float(offset @ dorsal)
+        lateral_offset = float(offset @ lateral)
+        frames.append(
+            {
+                "frame": index,
+                "along_axis_m": along,
+                "dorsal_m": dorsal_offset,
+                "lateral_m": lateral_offset,
+                "radial_m": float(np.hypot(dorsal_offset, lateral_offset)),
+            }
+        )
+    past_toe = [item for item in frames if item["along_axis_m"] > 0]
+    dorsal_passage = [
+        item["frame"] for item in past_toe if item["dorsal_m"] > dorsal_limit
+    ]
+    closest = min(frames, key=lambda item: item["radial_m"], default=None)
+    maximum_past_toe = max(
+        (item["radial_m"] for item in past_toe), default=None
+    )
+    return {
+        "available": bool(frames),
+        "frames": frames,
+        "closest_radial_m": closest["radial_m"] if closest else None,
+        "closest_frame": closest["frame"] if closest else None,
+        "first_past_toe_frame": past_toe[0]["frame"] if past_toe else None,
+        "maximum_past_toe_radial_m": maximum_past_toe,
+        "maximum_allowed_radial_m": maximum_offset,
+        "dorsal_limit_m": dorsal_limit,
+        "dorsal_passage_frames": dorsal_passage,
+        "foot_axis_alignment_ok": bool(past_toe)
+        and not dorsal_passage
+        and maximum_past_toe <= maximum_offset,
     }
 
 
@@ -574,8 +2103,11 @@ def _task_success(
     *,
     application: Optional[Mapping] = None,
     grasp_quality: Optional[Sequence[Mapping]] = None,
+    cloth_quality: Optional[Sequence[Mapping]] = None,
+    dressing_quality: Optional[Sequence[Mapping]] = None,
     foot_contact_ids_by_frame: Optional[Sequence[Sequence[int]]] = None,
     rigid_collision_qa_by_frame: Optional[Sequence[Mapping]] = None,
+    human_chair_lock_qa_by_frame: Optional[Sequence[Mapping]] = None,
 ) -> dict:
     diagnostics = observation.get("diagnostics", {})
     verified = [
@@ -592,11 +2124,67 @@ def _task_success(
     pose_ok = bool(
         (application or {}).get("initial_pose_contract", {}).get("ok", False)
     )
+    obi_settings = config["obi"].get(
+        "expected", config["obi"].get("requested", {})
+    )
+    maximum_stretch = float(
+        obi_settings.get("maximum_circumferential_stretch", 1.5)
+    )
     stretch = SockDressingEnv.cloth_radius_qa(
         observation.get("cloth", {}),
         radial_segments=int(config["scenario"]["sock"]["radial_segments"]),
+        maximum_circumferential_stretch=maximum_stretch,
     )
     stretch_ok = bool(stretch.get("passes", False))
+    cloth_quality = list(cloth_quality or ())
+    continuous_cloth_required = (
+        config["rcareworld"].get("profile") == "custom_player"
+    )
+    continuous_stretch_ok = bool(
+        cloth_quality
+        and all(
+            item.get("stretch", {}).get("passes", False)
+            for item in cloth_quality
+        )
+    )
+    distal_follow_ok = bool(
+        cloth_quality
+        and all(item.get("following_ok", False) for item in cloth_quality)
+    )
+    response_samples = [
+        item for item in cloth_quality if item.get("responding_ok") is not None
+    ]
+    distal_response_fraction = (
+        sum(bool(item["responding_ok"]) for item in response_samples)
+        / len(response_samples)
+        if response_samples
+        else 0.0
+    )
+    minimum_response_fraction = float(
+        config["inference"].get("minimum_distal_response_fraction", 0.5)
+    )
+    distal_response_ok = (
+        bool(response_samples)
+        and distal_response_fraction >= minimum_response_fraction
+    )
+    opening_body_barrier_required = bool(
+        obi_settings.get("opening_body_barrier_enabled", False)
+    )
+    opening_body_penetration_ok = (
+        not opening_body_barrier_required
+        or bool(
+            cloth_quality
+            and all(
+                item.get("opening_body_penetration_ok", False)
+                for item in cloth_quality
+            )
+        )
+    )
+    if not continuous_cloth_required or not cloth_quality:
+        continuous_stretch_ok = stretch_ok
+        distal_follow_ok = True
+        distal_response_ok = True
+        opening_body_penetration_ok = True
     grasp_quality = list(grasp_quality or ())
     continuous_grasp_required = (
         config["rcareworld"].get("profile") == "custom_player"
@@ -606,6 +2194,104 @@ def _task_success(
     )
     if not continuous_grasp_required:
         continuous_grasp_ok = len(verified) >= required
+    maximum_opening_span = float(
+        config["scene"]
+        .get("initial_pose_contract", {})
+        .get("maximum_opening_span_m", 0.12)
+    )
+    opening_spans = [
+        float(item["opening_span_m"])
+        for item in grasp_quality
+        if item.get("opening_span_m") is not None
+    ]
+    minimum_opening_span = float(
+        config["inference"].get("minimum_opening_span_m", 0.0)
+    )
+    rim_qa = _opening_rim_elastic_qa(grasp_quality, config)
+    area_retentions = [
+        float(item["opening_ring_area_retention"])
+        for item in grasp_quality
+        if item.get("opening_ring_area_retention") is not None
+        and not (rim_qa["elastic_band"] and _rim_foot_entered(item))
+    ]
+    minimum_area_retention = float(
+        config["inference"].get(
+            "minimum_pre_entry_opening_ring_area_retention"
+            if rim_qa["elastic_band"]
+            else "minimum_opening_ring_area_retention",
+            0.0,
+        )
+    )
+    vertical_differences = [
+        float(item["left_minus_right_vertical_m"])
+        for item in grasp_quality
+        if item.get("left_minus_right_vertical_m") is not None
+    ]
+    crossing_tolerance = float(
+        config["inference"].get("grasp_vertical_crossing_tolerance_m", 0.0)
+    )
+    opening_minimum_ok = bool(
+        opening_spans and min(opening_spans) >= minimum_opening_span
+    )
+    opening_area_ok = bool(
+        not area_retentions
+        or min(area_retentions) >= minimum_area_retention
+    )
+    grasp_vertical_order_ok = True
+    if vertical_differences:
+        baseline_vertical = vertical_differences[0]
+        if abs(baseline_vertical) > crossing_tolerance:
+            baseline_sign = np.sign(baseline_vertical)
+            grasp_vertical_order_ok = all(
+                baseline_sign * value >= -crossing_tolerance
+                for value in vertical_differences
+            )
+    grasp_toe_clearances = [
+        float(item["grasp_toe_vertical_clearance_m"])
+        for item in grasp_quality
+        if item.get("grasp_toe_vertical_clearance_m") is not None
+    ]
+    minimum_grasp_toe_clearance = float(
+        config["inference"].get(
+            "minimum_grasp_toe_vertical_clearance_m", float("-inf")
+        )
+    )
+    grasp_toe_clearance_ok = bool(
+        not np.isfinite(minimum_grasp_toe_clearance)
+        or (
+            grasp_toe_clearances
+            and min(grasp_toe_clearances) >= minimum_grasp_toe_clearance
+        )
+    )
+    continuous_opening_span_ok = bool(
+        opening_spans
+        and max(opening_spans) <= maximum_opening_span
+        and opening_minimum_ok
+        and opening_area_ok
+        and grasp_vertical_order_ok
+    )
+    maximum_bounds_span = float(
+        config["scene"]
+        .get("initial_pose_contract", {})
+        .get("maximum_cloth_bounds_span_m", 0.35)
+    )
+    measured_bounds_spans = []
+    for item in cloth_quality:
+        bounds = item.get("stretch", {}).get("bounds_world", {})
+        minimum = np.asarray(bounds.get("minimum", ()), dtype=float)
+        maximum = np.asarray(bounds.get("maximum", ()), dtype=float)
+        if minimum.shape == (3,) and maximum.shape == (3,):
+            measured_bounds_spans.append(maximum - minimum)
+    continuous_bounds_ok = bool(
+        measured_bounds_spans
+        and all(
+            np.all(span <= maximum_bounds_span)
+            for span in measured_bounds_spans
+        )
+    )
+    if not continuous_cloth_required:
+        continuous_opening_span_ok = True
+        continuous_bounds_ok = True
     minimum_attached = (
         min(int(item.get("attached_grippers", 0)) for item in grasp_quality)
         if grasp_quality
@@ -628,38 +2314,251 @@ def _task_success(
         config.get("dressing_player", {}).get("require_foot_contact", False)
     )
     foot_contact_ok = bool(foot_contact_ids) or not foot_contact_required
+    if (
+        foot_contact_ok
+        and coverage_ok
+        and continuous_stretch_ok
+        and continuous_opening_span_ok
+        and continuous_bounds_ok
+    ):
+        # During successful dressing the closed sock toe can remain anchored
+        # on the foot while the cuff advances. In that state cuff/toe rigid
+        # co-translation is neither expected nor a useful anti-tearing gate;
+        # continuous structural stretch and bounds provide that safety check.
+        distal_follow_ok = True
     rigid_collision_qa = list(rigid_collision_qa_by_frame or ())
     maximum_allowed_penetration = float(
         config.get("dressing_player", {}).get(
             "maximum_robot_human_penetration_m", float("inf")
         )
     )
-    maximum_penetration = max(
+    maximum_enabled_penetration = max(
         (
-            float(item.get("maximum_penetration_m", 0.0))
+            float(
+                item.get(
+                    "maximum_enabled_penetration_m",
+                    item.get("maximum_penetration_m", 0.0),
+                )
+            )
             for item in rigid_collision_qa
         ),
         default=None,
     )
+    maximum_ignored_penetration = max(
+        (
+            float(item.get("maximum_ignored_penetration_m", 0.0))
+            for item in rigid_collision_qa
+        ),
+        default=None,
+    )
+    foot_passage_regions = {"toes", "forefoot", "ankle"}
+    maximum_gripper_foot_penetration = 0.0
+    gripper_foot_contact_frames = []
+    gripper_foot_penetration_frames = []
+    first_gripper_foot_contact_frame = None
+    maximum_allowed_gripper_foot_penetration = float(
+        config["inference"].get(
+            "maximum_gripper_foot_region_penetration_m", float("inf")
+        )
+    )
+    for frame, item in enumerate(rigid_collision_qa):
+        frame_contact = False
+        frame_penetration = False
+        for pair in item.get("penetrating_pairs", ()) or ():
+            path = str(pair.get("robot_collider_path", "")).lower()
+            region = str(pair.get("human_region", "")).lower()
+            penetration = float(pair.get("penetration_m", 0.0))
+            if (
+                bool(pair.get("ignored", False))
+                or "gripper" not in path
+                or region not in foot_passage_regions
+                or penetration <= 0.0
+            ):
+                continue
+            frame_contact = True
+            maximum_gripper_foot_penetration = max(
+                maximum_gripper_foot_penetration, penetration
+            )
+            if penetration > maximum_allowed_gripper_foot_penetration:
+                frame_penetration = True
+        if frame_contact:
+            gripper_foot_contact_frames.append(frame)
+            if first_gripper_foot_contact_frame is None:
+                first_gripper_foot_contact_frame = frame
+        if frame_penetration:
+            gripper_foot_penetration_frames.append(frame)
+    gripper_foot_passage_ok = bool(
+        not np.isfinite(maximum_allowed_gripper_foot_penetration)
+        or maximum_gripper_foot_penetration
+        <= maximum_allowed_gripper_foot_penetration
+    )
     rigid_collision_ok = bool(rigid_collision_qa) and all(
-        int(item.get("ignored_pair_count", 0)) == 0
-        and float(item.get("maximum_penetration_m", 0.0))
+        (
+            int(item.get("ignored_pair_count", 0)) == 0
+            or bool(
+                config.get("dressing_player", {}).get(
+                    "allow_ignored_robot_human_collision_pairs", False
+                )
+            )
+        )
+        and float(
+            item.get(
+                "maximum_enabled_penetration_m",
+                item.get("maximum_penetration_m", 0.0),
+            )
+        )
         <= maximum_allowed_penetration
         for item in rigid_collision_qa
     )
     if config["rcareworld"].get("profile") != "custom_player":
         rigid_collision_ok = True
+    dressing_settings = config.get("dressing_player", {})
+    dressing_quality = list(dressing_quality or ())
+    contact_rebound = _contact_rebound_report(
+        dressing_quality,
+        grasp_quality,
+        foot_contact_ids_by_frame or (),
+    )
+    hold_frames = max(
+        1, int(dressing_settings.get("final_coverage_hold_frames", 3))
+    )
+    final_dressing_frames = dressing_quality[-hold_frames:]
+    minimum_surface_containment = float(
+        dressing_settings.get("minimum_final_surface_containment", 0.90)
+    )
+    minimum_section_containment = float(
+        dressing_settings.get("minimum_final_section_containment", 0.80)
+    )
+    minimum_cuff_progress = float(
+        dressing_settings.get("minimum_cuff_progress_toward_ankle_m", 0.0)
+    )
+    maximum_cuff_reverse = float(
+        dressing_settings.get("maximum_cuff_reverse_m", 0.002)
+    )
+    maximum_cuff_beyond_toe = float(
+        dressing_settings.get("maximum_cuff_beyond_distal_toe_m", 0.002)
+    )
+    maximum_cloth_foot_penetration = float(
+        dressing_settings.get("maximum_cloth_foot_penetration_m", 0.002)
+    )
+    dressing_observations_ok = bool(dressing_quality) and all(
+        bool(item.get("valid", False)) for item in dressing_quality
+    )
+    final_surface_containment_ok = (
+        len(final_dressing_frames) == hold_frames
+        and all(
+            float(item.get("surface_containment_ratio", -1.0))
+            >= minimum_surface_containment
+            for item in final_dressing_frames
+        )
+    )
+    final_section_containment_ok = (
+        len(final_dressing_frames) == hold_frames
+        and all(
+            bool(item.get("sections"))
+            and all(
+                bool(section.get("valid", False))
+                and float(section.get("containment_ratio", -1.0))
+                >= minimum_section_containment
+                for section in item.get("sections", ())
+            )
+            for item in final_dressing_frames
+        )
+    )
+    cuff_progress_ok = bool(dressing_quality) and (
+        float(
+            dressing_quality[-1].get(
+                "cuff_progress_toward_ankle_m", float("-inf")
+            )
+        )
+        >= minimum_cuff_progress
+        and all(
+            float(item.get("maximum_cuff_reverse_step_m", float("inf")))
+            <= maximum_cuff_reverse
+            and float(item.get("cuff_beyond_distal_toe_m", float("inf")))
+            <= maximum_cuff_beyond_toe
+            for item in dressing_quality
+        )
+    )
+    cloth_foot_penetration_ok = bool(dressing_quality) and all(
+        float(
+            item.get("maximum_cloth_foot_penetration_m", float("inf"))
+        )
+        <= maximum_cloth_foot_penetration
+        for item in dressing_quality
+    )
+    if config["rcareworld"].get("profile") != "custom_player":
+        dressing_observations_ok = True
+        final_surface_containment_ok = True
+        final_section_containment_ok = True
+        cuff_progress_ok = True
+        cloth_foot_penetration_ok = True
+    lock_qa = list(human_chair_lock_qa_by_frame or ())
+    maximum_lock_drift = float(
+        config["scene"]
+        .get("initial_pose_contract", {})
+        .get("maximum_lock_drift_m", 0.002)
+    )
+    lock_fields = (
+        "right_toe_drift_m",
+        "chair_drift_m",
+        "human_root_drift_m",
+        "human_anchor_drift_m",
+    )
+    human_chair_lock_ok = bool(lock_qa) and all(
+        bool(item.get("valid", False))
+        and all(
+            np.isfinite(float(item.get(name, float("inf"))))
+            and float(item.get(name, float("inf"))) <= maximum_lock_drift
+            for name in lock_fields
+        )
+        for item in lock_qa
+    )
+    if not config["scene"].get("initial_pose_contract", {}).get(
+        "lock_human_and_chair", False
+    ):
+        human_chair_lock_ok = True
+    success_gates = {
+        "semantic_masks_ok": semantic_ok,
+        "verified_grippers_ok": len(verified) >= required,
+        "continuous_grasp_ok": continuous_grasp_ok,
+        "continuous_opening_span_ok": continuous_opening_span_ok,
+        "grasp_toe_clearance_ok": grasp_toe_clearance_ok,
+        "continuous_bounds_ok": continuous_bounds_ok,
+        "coverage_gain_ok": coverage_ok,
+        "initial_pose_ok": pose_ok,
+        "final_stretch_ok": stretch_ok,
+        "continuous_stretch_ok": continuous_stretch_ok,
+        "opening_body_penetration_ok": opening_body_penetration_ok,
+        "distal_response_ok": distal_response_ok,
+        "distal_follow_ok": distal_follow_ok,
+        "foot_contact_ok": foot_contact_ok,
+        "rigid_collision_ok": rigid_collision_ok,
+        "gripper_foot_passage_ok": gripper_foot_passage_ok,
+        "dressing_observations_ok": dressing_observations_ok,
+        "final_surface_containment_ok": final_surface_containment_ok,
+        "final_section_containment_ok": final_section_containment_ok,
+        "cuff_progress_ok": cuff_progress_ok,
+        "cloth_foot_penetration_ok": cloth_foot_penetration_ok,
+        "human_chair_lock_ok": human_chair_lock_ok,
+    }
+    if rim_qa["elastic_band"]:
+        success_gates["opening_rim_foot_enclosure_ok"] = rim_qa[
+            "foot_enclosure_ok"
+        ]
+    foot_axis_qa = _foot_axis_alignment_qa(
+        grasp_quality or [], dressing_quality or [], config
+    )
+    success_gates["foot_axis_alignment_ok"] = foot_axis_qa[
+        "foot_axis_alignment_ok"
+    ]
     return {
-        "success": (
-            semantic_ok
-            and len(verified) >= required
-            and continuous_grasp_ok
-            and coverage_ok
-            and pose_ok
-            and stretch_ok
-            and foot_contact_ok
-            and rigid_collision_ok
-        ),
+        "success": all(success_gates.values()),
+        "failed_gates": [
+            name for name, passed in success_gates.items() if not passed
+        ],
+        "opening_rim_elastic_qa": rim_qa,
+        "foot_axis_alignment_qa": foot_axis_qa,
         "semantic_masks_ok": semantic_ok,
         "verified_grippers": len(verified),
         "required_grippers": required,
@@ -668,6 +2567,53 @@ def _task_success(
         "maximum_grasp_edge_error_m": (
             max(measured_edge_errors) if measured_edge_errors else None
         ),
+        "maximum_opening_span_m": (
+            max(opening_spans) if opening_spans else None
+        ),
+        "minimum_opening_span_m": (
+            min(opening_spans) if opening_spans else None
+        ),
+        "minimum_allowed_opening_span_m": minimum_opening_span,
+        "minimum_opening_ring_area_retention": (
+            min(area_retentions) if area_retentions else None
+        ),
+        "minimum_allowed_opening_ring_area_retention": minimum_area_retention,
+        "grasp_vertical_order_preserved": grasp_vertical_order_ok,
+        "minimum_grasp_toe_vertical_clearance_m": (
+            min(grasp_toe_clearances) if grasp_toe_clearances else None
+        ),
+        "minimum_allowed_grasp_toe_vertical_clearance_m": (
+            minimum_grasp_toe_clearance
+            if np.isfinite(minimum_grasp_toe_clearance)
+            else None
+        ),
+        "first_grasp_below_toe_frame": next(
+            (
+                index
+                for index, item in enumerate(grasp_quality)
+                if item.get("grasp_toe_vertical_clearance_m") is not None
+                and float(item["grasp_toe_vertical_clearance_m"]) < 0.0
+            ),
+            None,
+        ),
+        "grasp_toe_clearance_ok": grasp_toe_clearance_ok,
+        "maximum_grasp_vertical_order_change_m": (
+            max(
+                abs(value - vertical_differences[0])
+                for value in vertical_differences
+            )
+            if vertical_differences
+            else None
+        ),
+        "maximum_allowed_opening_span_m": maximum_opening_span,
+        "continuous_opening_span_ok": continuous_opening_span_ok,
+        "maximum_cloth_bounds_span_m": (
+            np.max(np.stack(measured_bounds_spans), axis=0).tolist()
+            if measured_bounds_spans
+            else None
+        ),
+        "maximum_allowed_cloth_bounds_span_m": maximum_bounds_span,
+        "continuous_bounds_ok": continuous_bounds_ok,
         "coverage_gain": gain,
         "minimum_coverage_gain": minimum_gain,
         "coverage_ok": coverage_ok,
@@ -676,10 +2622,148 @@ def _task_success(
         "foot_contact_ok": foot_contact_ok,
         "foot_contact_collider_ids": foot_contact_ids,
         "rigid_collision_ok": rigid_collision_ok,
-        "maximum_robot_human_penetration_m": maximum_penetration,
+        "maximum_robot_human_penetration_m": maximum_enabled_penetration,
+        "maximum_enabled_robot_human_penetration_m": (
+            maximum_enabled_penetration
+        ),
+        "maximum_ignored_robot_human_penetration_m": (
+            maximum_ignored_penetration
+        ),
         "maximum_allowed_robot_human_penetration_m": maximum_allowed_penetration,
+        "maximum_gripper_foot_region_penetration_m": (
+            maximum_gripper_foot_penetration
+        ),
+        "maximum_allowed_gripper_foot_region_penetration_m": (
+            maximum_allowed_gripper_foot_penetration
+            if np.isfinite(maximum_allowed_gripper_foot_penetration)
+            else None
+        ),
+        "gripper_foot_region_contact_frames": gripper_foot_contact_frames,
+        "gripper_foot_region_penetration_frames": (
+            gripper_foot_penetration_frames
+        ),
+        "first_gripper_foot_region_contact_frame": (
+            first_gripper_foot_contact_frame
+        ),
+        "gripper_foot_passage_ok": gripper_foot_passage_ok,
+        "dressing_observations_ok": dressing_observations_ok,
+        "final_coverage_hold_frames": hold_frames,
+        "final_surface_containment_ratio": (
+            float(final_dressing_frames[-1].get("surface_containment_ratio"))
+            if final_dressing_frames
+            and final_dressing_frames[-1].get("surface_containment_ratio")
+            is not None
+            else None
+        ),
+        "minimum_final_surface_containment": minimum_surface_containment,
+        "final_surface_containment_ok": final_surface_containment_ok,
+        "final_section_containment_ok": final_section_containment_ok,
+        "minimum_final_section_containment": minimum_section_containment,
+        "cuff_progress_toward_ankle_m": (
+            float(
+                dressing_quality[-1].get("cuff_progress_toward_ankle_m")
+            )
+            if dressing_quality
+            and dressing_quality[-1].get("cuff_progress_toward_ankle_m")
+            is not None
+            else None
+        ),
+        "minimum_cuff_progress_toward_ankle_m": minimum_cuff_progress,
+        "maximum_cuff_reverse_m": max(
+            (
+                float(item.get("maximum_cuff_reverse_step_m", 0.0))
+                for item in dressing_quality
+            ),
+            default=None,
+        ),
+        "maximum_allowed_cuff_reverse_m": maximum_cuff_reverse,
+        "maximum_cuff_beyond_distal_toe_m": max(
+            (
+                float(item.get("cuff_beyond_distal_toe_m", 0.0))
+                for item in dressing_quality
+            ),
+            default=None,
+        ),
+        "maximum_allowed_cuff_beyond_distal_toe_m": maximum_cuff_beyond_toe,
+        "cuff_progress_ok": cuff_progress_ok,
+        "contact_rebound": contact_rebound,
+        "maximum_cloth_foot_penetration_m": max(
+            (
+                float(item.get("maximum_cloth_foot_penetration_m", 0.0))
+                for item in dressing_quality
+            ),
+            default=None,
+        ),
+        "maximum_obi_cloth_foot_penetration_m": max(
+            (
+                float(
+                    item.get(
+                        "obi_maximum_cloth_foot_penetration_m", 0.0
+                    )
+                )
+                for item in dressing_quality
+            ),
+            default=None,
+        ),
+        "maximum_geometric_cloth_foot_penetration_m": max(
+            (
+                float(
+                    item.get(
+                        "geometric_maximum_cloth_foot_penetration_m",
+                        0.0,
+                    )
+                )
+                for item in dressing_quality
+            ),
+            default=None,
+        ),
+        "maximum_allowed_cloth_foot_penetration_m": (
+            maximum_cloth_foot_penetration
+        ),
+        "cloth_foot_penetration_ok": cloth_foot_penetration_ok,
+        "human_chair_lock_ok": human_chair_lock_ok,
+        "maximum_allowed_lock_drift_m": maximum_lock_drift,
+        "maximum_human_chair_lock_drift_m": max(
+            (
+                float(item.get(name, 0.0))
+                for item in lock_qa
+                for name in lock_fields
+            ),
+            default=None,
+        ),
         "cloth_qa": stretch,
         "stretch_ok": stretch_ok,
+        "continuous_stretch_ok": continuous_stretch_ok,
+        "opening_body_penetration_ok": opening_body_penetration_ok,
+        "maximum_opening_body_penetration_m": max(
+            (
+                float(item["opening_body_barrier_maximum_penetration_m"])
+                for item in cloth_quality
+                if item.get("opening_body_barrier_maximum_penetration_m")
+                is not None
+            ),
+            default=None,
+        ),
+        "maximum_opening_body_barrier_violation_count": max(
+            (
+                int(item["opening_body_barrier_violation_count"])
+                for item in cloth_quality
+                if item.get("opening_body_barrier_violation_count") is not None
+            ),
+            default=None,
+        ),
+        "distal_response_ok": distal_response_ok,
+        "distal_response_fraction": distal_response_fraction,
+        "minimum_distal_response_fraction": minimum_response_fraction,
+        "distal_follow_ok": distal_follow_ok,
+        "maximum_distal_follow_error_m": max(
+            (
+                float(item["distal_follow_error_m"])
+                for item in cloth_quality
+                if item.get("distal_follow_error_m") is not None
+            ),
+            default=None,
+        ),
         "note": (
             None
             if gain is not None

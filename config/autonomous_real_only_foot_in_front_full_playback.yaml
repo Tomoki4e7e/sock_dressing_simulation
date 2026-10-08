@@ -1,0 +1,13 @@
+extends: autonomous_real_only_downward_plate_human_chair.yaml
+
+scene:
+  initial_pose_contract:
+    # Preserve the articulated foot pose while translating the human, chair,
+    # anchor, and toe together onto the gripper opening's normal line.
+    right_toe_offset_world_m: null
+    away_from_robot_m: null
+    down_m: null
+
+dressing_player:
+  # Complete the rollout while retaining collision QA in the metadata.
+  abort_on_rigid_collision_qa_failure: false

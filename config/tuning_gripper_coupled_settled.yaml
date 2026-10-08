@@ -1,0 +1,6 @@
+extends: tuning_gripper_coupled_slow.yaml
+
+inference:
+  # Give the distal cloth twice as many solver intervals to follow each
+  # bounded gripper update while keeping the policy and drape unchanged.
+  physics_steps_per_action: 20

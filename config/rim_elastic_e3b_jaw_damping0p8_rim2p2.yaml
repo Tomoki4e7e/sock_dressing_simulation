@@ -1,0 +1,7 @@
+extends: rim_elastic_e3a_jaw_damping0p8.yaml
+
+# Looser rim limit: the band may give more around the forefoot instead of
+# dragging the lip off the foot outline.
+obi:
+  expected:
+    opening_rim_elastic_maximum_stretch: 2.2

@@ -1,0 +1,7 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_recorded_pose_gripper_coupled_head_camera_frame_zero_physics.yaml
+
+inference:
+  # Initialize each post-drape SAM mask from its own renderer centroid. The
+  # prior cross-negative prompts can suppress the sock when it overlaps the
+  # leg in the policy camera after the fixed +180-degree drape.
+  post_pre_drape_prompt_mode: single_centroid

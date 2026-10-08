@@ -37,6 +37,10 @@ def _load_config_payload(config_path: Path, seen: set[Path]) -> Dict[str, Any]:
 
 def load_config(path: Path = DEFAULT_CONFIG) -> Dict[str, Any]:
     config = _load_config_payload(Path(path), set())
+    # Native configuration is applied from expected. Report that same request,
+    # rather than an obsolete material request inherited from a parent YAML.
+    if config.get("obi", {}).get("expected"):
+        config["obi"]["requested"] = dict(config["obi"]["expected"])
     profile = str(config["rcareworld"].get("profile", "canonical"))
     if profile not in SUPPORTED_RCAREWORLD_PROFILES:
         raise ValueError(f"unsupported RCareWorld profile: {profile}")

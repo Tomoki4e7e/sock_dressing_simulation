@@ -55,9 +55,11 @@ def _prepare(config, scenario=None):
         radius=scenario.sock_mesh.radius_m,
         radial_segments=scenario.sock_mesh.radial_segments,
         length_segments=scenario.sock_mesh.length_segments,
+        closed_toe=scenario.sock_mesh.closed_toe,
         bend_start=scenario.sock_mesh.rest_bend_start_m,
         bend_length=scenario.sock_mesh.rest_bend_length_m,
         bend_degrees=scenario.sock_mesh.rest_bend_degrees,
+        bend_azimuth_degrees=scenario.sock_mesh.rest_bend_azimuth_degrees,
     )
     return {
         "urdf": str(urdf),
@@ -485,6 +487,20 @@ def main(argv=None) -> int:
         type=Path,
         default=resolve_package_path("artifacts/phase4/data"),
     )
+    drape = commands.add_parser("drape")
+    drape.add_argument("--rotation-degrees", type=float, required=True)
+    drape.add_argument("--rotation-steps", type=int, default=180)
+    drape.add_argument("--settle-steps", type=int, default=250)
+    drape.add_argument("--side-distance-m", type=float, default=0.65)
+    drape.add_argument("--side-reverse", action="store_true")
+    drape.add_argument("--seed", type=int)
+    drape.add_argument("--graphics", action="store_true")
+    drape.add_argument("--headless", action="store_true")
+    drape.add_argument(
+        "--output-root",
+        type=Path,
+        default=resolve_package_path("artifacts/phase4/drape"),
+    )
     dressing_probe = commands.add_parser("dressing-probe")
     dressing_probe.add_argument(
         "--output",
@@ -614,6 +630,48 @@ def main(argv=None) -> int:
             args.output.write_text(json.dumps(result, indent=2), encoding="utf-8")
             result["report"] = str(args.output.resolve())
         except (OSError, RuntimeError, ValueError, KeyError) as error:
+            print(json.dumps({"ok": False, "error": str(error)}, indent=2))
+            return 2
+        print(json.dumps(result, indent=2))
+        return 0 if result["ok"] else 3
+    if args.command == "drape":
+        if config["rcareworld"].get("profile") != "custom_player":
+            parser.error("drape requires the custom_player profile")
+        if args.graphics and args.headless:
+            parser.error("drape accepts only one of --graphics and --headless")
+        if config["inference"].get("require_graphics", False) and not args.graphics:
+            parser.error("this drape profile requires --graphics")
+        config["rcareworld"]["graphics"] = bool(args.graphics)
+        config["scene"].setdefault("side_recording_camera_id", 1302)
+        report = run_doctor(config)
+        if not report["ok"]:
+            failed = [name for name, ok in report["checks"].items() if not ok]
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": "core doctor failed",
+                        "failed": failed,
+                    },
+                    indent=2,
+                )
+            )
+            return 2
+        try:
+            from .drape import run_signed_opening_drape
+
+            result = run_signed_opening_drape(
+                config,
+                prepared=_prepare(config),
+                output_root=args.output_root.resolve(),
+                rotation_degrees=args.rotation_degrees,
+                rotation_steps=args.rotation_steps,
+                settle_steps=args.settle_steps,
+                side_distance_m=args.side_distance_m,
+                side_reverse=args.side_reverse,
+                seed=args.seed,
+            )
+        except (ImportError, OSError, RuntimeError, ValueError, KeyError) as error:
             print(json.dumps({"ok": False, "error": str(error)}, indent=2))
             return 2
         print(json.dumps(result, indent=2))

@@ -1,0 +1,20 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_recorded_pose_gripper_coupled_head_camera_frame_zero_physics_single_centroid_fast_policy_human_chair_away2cm_down8cm_left_camera_foot_axis_vertical.yaml
+
+# Preserve the inherited sock shape, opening angle, drape, camera, and
+# human/chair pose. Only the bimanual grasp span contract changes.
+scene:
+  grasp_alignment:
+    target_span_m: 0.115
+
+obi:
+  expected:
+    # Keep the virtual cuff grasp targets separated when independent arm
+    # motion would otherwise cross them and collapse the held opening.
+    slip_minimum_opening_span_m: 0.092
+    slip_opening_span_m: 0.115
+
+inference:
+  # These are rollout QA thresholds only; they do not alter policy actions.
+  minimum_opening_span_m: 0.09
+  minimum_opening_ring_area_retention: 0.95
+  grasp_vertical_crossing_tolerance_m: 0.0

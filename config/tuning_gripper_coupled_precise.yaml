@@ -1,0 +1,10 @@
+extends: tuning_gripper_coupled_stiff.yaml
+
+joints:
+  # Match the slow, shape-preserving motion in the reference video. A 2.5
+  # mrad cap gives the distal body four times longer to follow than baseline.
+  max_delta: [0.0025, 0.0025, 0.0025, 0.0025, 0.0025, 0.0025, 0.0025, 0.0025, 0.00125, 0.0025, 0.0025, 0.0025, 0.0025, 0.0025, 0.0025, 0.0025, 0.0025, 0.00125]
+
+obi:
+  expected:
+    damping: 0.40

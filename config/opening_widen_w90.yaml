@@ -1,0 +1,7 @@
+extends: foot_lateral_l1_zero.yaml
+
+# L1 with the opening short edge widened to 90 mm nominal (70 mm clearance
+# after the two 10 mm particle shells) so the 65 mm-tall toe box fits.
+obi:
+  expected:
+    grasp_thickness_half_width_m: 0.045

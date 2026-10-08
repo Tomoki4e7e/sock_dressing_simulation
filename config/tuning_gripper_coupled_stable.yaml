@@ -1,0 +1,12 @@
+extends: tuning_gripper_coupled_slow.yaml
+
+inference:
+  # Allow the hanging body to settle between bounded gripper commands so its
+  # distal center follows without the visible lag in the baseline rollout.
+  physics_steps_per_action: 30
+
+obi:
+  expected:
+    # Add projection passes to suppress transient structural stretch while
+    # preserving the same 1.5x fail-closed material limit.
+    strain_limit_iterations: 320

@@ -1,0 +1,8 @@
+extends: tuning_gripper_coupled_settled.yaml
+
+obi:
+  expected:
+    # Match the reference sock's bend resistance so the long J-shaped body
+    # translates with the cuff instead of folding behind it.
+    bend_compliance: 0.01
+    strain_limit_iterations: 240

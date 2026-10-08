@@ -1,0 +1,19 @@
+extends: autonomous_real_only_opening_short_edge_75mm.yaml
+
+# Knit cuff as an elastic band: rim edges keep the 40 mm-radius mesh rest
+# length, so the 114 x 75 mm grasp rectangle holds the band at about 1.5x
+# average (about 1.8x along the long sides). The opening angle, camera,
+# drape and human pose are inherited.
+obi:
+  expected:
+    opening_rim_mode: elastic_band
+    # 0.93 limiter headroom x 2.0 = 1.86 covers the 1.82x long-side stretch.
+    opening_rim_elastic_maximum_stretch: 2.0
+    opening_rim_elastic_restoring_stiffness: 0.0
+    opening_rim_shape_release_steps: 25
+    opening_rim_collapse_guard_ratio: 0.0
+    grasp_jaw_line: false
+
+inference:
+  minimum_pre_entry_opening_ring_area_retention: 0.85
+  minimum_post_entry_foot_section_enclosure: 0.95

@@ -1,0 +1,72 @@
+extends: autonomous_real_only_opening_reverse_90deg_close.yaml
+
+obi:
+  expected:
+    # Let the released straight tube flex and transmit cuff motion naturally.
+    damping: 0.40
+    bend_compliance: 0.03
+    self_collision: true
+    strain_limit_iterations: 240
+    opening_body_barrier_enabled: true
+    opening_body_barrier_clearance_m: 0.008
+    opening_body_barrier_stiffness: 1.0
+    opening_body_barrier_maximum_correction_m: 0.030
+
+scenario:
+  sock:
+    # Use a straight rest mesh. The initial pose and inward drape must come
+    # from temporary tip guidance and gravity, not retained bend geometry.
+    rest_bend_start_m: 0.0
+    rest_bend_length_m: 0.0
+    rest_bend_degrees: 0.0
+    rest_bend_azimuth_degrees: 0.0
+
+scene:
+  initial_pose_contract:
+    # Cumulative reverse-270 is the opposite-signed 90-degree orientation.
+    opening_rotation_about_span_degrees: 90.0
+    opening_rotation_away_from_toe: false
+    # Express a 29 cm world-down vector in the rotated opening frame. The small
+    # span component avoids the previous rightward preload while negative cross
+    # still selects the Dry-AIREC-side release branch.
+    sock_tip_span_axis_offset_max_m: 0.060
+    sock_tip_target_span_axis_offset_m: 0.026
+    sock_tip_cross_axis_offset_min_m: -0.250
+    sock_tip_cross_axis_offset_max_m: -0.200
+    sock_tip_target_cross_axis_offset_m: -0.229
+    sock_tip_guidance_weight_exponent: 0.10
+    sock_tip_opening_depth_min_m: 0.150
+    sock_tip_opening_depth_max_m: 0.200
+    sock_tip_target_opening_depth_m: 0.176
+    # Alignment with the original grasp-plate normal is cos(270) = 0.
+    opening_plate_normal_alignment_min: -0.02
+    opening_ring_plate_alignment_min: -0.02
+
+inference:
+  # The inward-hanging sock can occupy less than 0.01% of the fixed head view;
+  # exact renderer agreement remains authoritative for mask quality.
+  mask_min_fraction: 0.00001
+  # The vertical body can pass behind a forearm and reappear between frames.
+  # Renderer IoU remains exact, so do not reject this physical occlusion solely
+  # because its projected area changes sharply.
+  mask_max_area_change: 1000.0
+  tip_drape_wait:
+    # Guidance already places the straight body below the cuff. Accept a
+    # settled vertical hang without demanding an additional post-release drop.
+    require_tip_drop: false
+    minimum_tip_drop_m: 0.000
+    minimum_tip_below_opening_m: 0.150
+    tip_radius_allowance_m: 0.050
+    minimum_tip_cross_axis_offset_m: -0.350
+    maximum_tip_cross_axis_offset_m: -0.150
+    minimum_tip_opening_depth_m: -0.080
+    maximum_tip_opening_depth_m: 0.080
+    maximum_tip_rise_per_step_m: 0.010
+    minimum_sock_body_gravity_alignment: 0.800
+    # Stretch diagnostics refresh every fifth synchronized sample; four
+    # consecutive passing samples provide the longest uninterrupted window.
+    consecutive_steps: 4
+    maximum_steps: 250
+  minimum_distal_follow_direction_alignment: 0.0
+  minimum_distal_response_fraction: 0.5
+  maximum_opening_body_penetration_m: 0.0005

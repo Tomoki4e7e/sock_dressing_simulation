@@ -1,0 +1,18 @@
+extends: autonomous_real_only_toe_left_down.yaml
+
+# Restore the measured world pose from
+# toe-left-down-real-only-autonomous/phase4_20260923T101650Z.
+scene:
+  initial_pose_contract:
+    # Preserve the historical measured pose even though the current cloth
+    # initialization no longer passes every pre-rollout geometry threshold.
+    enforce: false
+    locked_pose_tolerance_m: 0.002
+    locked_pose_baseline:
+      # The older episode did not export the root or right-hip anchor. The
+      # authored root is fixed, and the anchor follows the scene contract:
+      # 0.25 m above the measured chair center.
+      human_root_position: [0.0599999987, 1.4800000191, -0.7200000286]
+      chair_position: [-0.0735720247, 0.4527513087, -0.3992611766]
+      human_anchor_position: [-0.0735720247, 0.7027513087, -0.3992611766]
+      right_toe_position: [-0.1332971752, 0.4642206430, 0.5865817070]

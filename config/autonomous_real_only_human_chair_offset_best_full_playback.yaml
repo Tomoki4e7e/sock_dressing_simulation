@@ -1,0 +1,11 @@
+extends: autonomous_real_only_human_chair_offset_search.yaml
+
+scene:
+  initial_pose_contract:
+    away_from_robot_m: 0.03
+    down_m: 0.08
+
+dressing_player:
+  # Preserve the complete 250-step playback while retaining collision QA
+  # measurements and failed gates in metadata.
+  abort_on_rigid_collision_qa_failure: false

@@ -1,0 +1,7 @@
+extends: autonomous_real_only_plate_normal_four_point.yaml
+
+scene:
+  initial_pose_contract:
+    away_from_robot_m: 0.10
+    up_m: 0.10
+    right_from_robot_m: 0.05

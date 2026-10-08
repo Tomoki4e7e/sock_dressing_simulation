@@ -1,0 +1,8 @@
+extends: foot_axis_h4_max_delta0p04_foot0p11.yaml
+
+# H4 with the in-plane toe offset (span and cross components of the 0.051 m
+# lateral offset) cancelled by the same rigid human+chair translation, so the
+# toe starts on the held opening axis, 0.11 m from the opening plane.
+scene:
+  initial_pose_contract:
+    foot_lateral_target_m: 0.0

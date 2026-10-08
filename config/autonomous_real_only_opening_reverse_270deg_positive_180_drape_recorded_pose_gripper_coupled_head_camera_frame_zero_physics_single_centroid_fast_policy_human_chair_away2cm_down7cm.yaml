@@ -1,0 +1,15 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_recorded_pose_gripper_coupled_head_camera_frame_zero_physics_single_centroid_fast_policy.yaml
+
+scene:
+  initial_pose_contract:
+    # Conservative neighbor of the prior 3 cm / 8 cm grid winner. Keep the
+    # translated foot closer to the checkpoint's original image distribution.
+    away_from_robot_m: 0.02
+    down_m: 0.07
+
+obi:
+  expected:
+    # Relax only the span-aligned top and bottom opening edges. The side-edge
+    # limits continue to use the inherited 1.05 stretch and 1.0 shape values.
+    opening_rim_span_maximum_stretch: 1.20
+    opening_rim_span_shape_stiffness: 0.25

@@ -1,13 +1,16 @@
+from copy import deepcopy
 import json
+from pathlib import Path
+
 import numpy as np
 import pytest
-from pathlib import Path
 
 from sock_dressing_simulation.config import load_config
 from sock_dressing_simulation.quality import assess_observation_quality
 from sock_dressing_simulation.sock_cloth import (
     PROTOCOL_VERSION,
     ClothContact,
+    DressingQA,
     GraspState,
     SceneGeometry,
     SockClothAttr,
@@ -76,25 +79,1265 @@ def test_custom_player_obeys_canonical_sock_physics_contract():
     assert config["obi"]["timestep_s"] == contract["timestep_s"]
     assert config["obi"]["substeps"] == contract["substeps"]
     assert config["obi"]["solver_iterations"] == contract["solver_iterations"]
-    assert expected["grasp_linear_compliance"] == 0.00005
+    assert expected["grasp_linear_compliance"] == pytest.approx(0.00005)
     assert expected["grasp_rotational_compliance"] == 1000000.0
-    assert expected["grasp_break_threshold"] == 20.0
-    assert expected["slip_constraint_error_m"] == 0.20
+    assert expected["grasp_break_threshold"] == pytest.approx(20.0)
+    assert expected["slip_constraint_error_m"] == pytest.approx(0.20)
     assert expected["slip_opening_span_m"] == 0.11
     assert expected["slip_consecutive_steps"] == 2
-    assert expected["maximum_grasp_particles_per_side"] == 2
+    assert expected["maximum_grasp_particles_per_side"] == 4
+    assert expected["grasp_thickness_half_width_m"] > 0
+    assert not expected["tether_constraints"]
+    assert expected["tether_compliance"] == 0.0
+    assert expected["tether_scale"] == 1.0
+
+
+def test_strict_autonomous_profile_restores_straight_leg_pose_baseline():
+    config = load_config(
+        Path("config/autonomous_real_only_strict_dressing.yaml")
+    )
+    scene = config["scene"]
+    pose = scene["initial_pose_contract"]
+
+    assert scene["human_position"] == [0.06, 1.48, -0.72]
+    assert scene["chair"]["parts"][0]["position"] == [0.0, 0.48, -0.18]
+    assert pose["straight_right_leg"]
+    assert pose["right_knee_flexion_max_degrees"] == pytest.approx(2.0)
+    assert pose["right_leg_raise_degrees"] == pytest.approx(90.0)
+    assert "right_toe_offset_world_m" not in pose
+    assert config["scenario"]["foot"]["plantarflexion_degrees"] == pytest.approx(
+        30.0
+    )
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+    assert config["inference"]["reference_actions"] is None
+
+
+def test_wide_cuff_small_foot_profile_uses_requested_geometry():
+    config = load_config(
+        Path(
+            "config/"
+            "autonomous_real_only_straight_neutral_wide_cuff_small_foot.yaml"
+        )
+    )
+
+    assert config["obi"]["expected"][
+        "grasp_thickness_half_width_m"
+    ] == pytest.approx(0.035)
+    assert config["scene"][
+        "right_foot_collider_cross_section_scale"
+    ] == pytest.approx(0.8)
+    assert config["scenario"]["foot"][
+        "plantarflexion_degrees"
+    ] == pytest.approx(0.0)
+    assert config["scene"]["initial_pose_contract"]["straight_right_leg"]
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+    assert config["inference"]["reference_actions"] is None
+
+
+def test_rigid_collision_corrected_profile_enables_gripper_foot_contacts():
+    config = load_config(
+        Path(
+            "config/"
+            "autonomous_real_only_straight_neutral_wide_cuff_"
+            "rigid_collision_corrected.yaml"
+        )
+    )
+    scene = config["scene"]
+    player = config["dressing_player"]
+
+    assert not scene["ignore_robot_human_rigid_collisions"]
+    assert scene["ignore_non_gripper_robot_human_rigid_collisions"]
+    assert scene["initial_pose_contract"][
+        "maximum_robot_human_penetration_m"
+    ] == pytest.approx(0.005)
+    assert player["abort_on_rigid_collision_qa_failure"]
+    assert not player["allow_ignored_robot_human_collision_pairs"]
+    assert player["maximum_robot_human_penetration_m"] == pytest.approx(0.005)
+
+
+def test_plate_normal_profile_uses_exactly_four_grasp_points():
+    config = load_config(
+        Path("config/autonomous_real_only_plate_normal_four_point.yaml")
+    )
+    scene = config["scene"]
+    pose = scene["initial_pose_contract"]
+
+    assert scene["grasp_anchors"]["align_sock_to_gripper_plate"]
+    assert config["obi"]["expected"]["maximum_grasp_particles_per_side"] == 2
+    assert config["obi"]["expected"][
+        "grasp_thickness_half_width_m"
+    ] == pytest.approx(0.022)
+    assert pose["required_grasp_particles_per_side"] == 2
+    assert pose["lock_human_and_chair"]
+    assert pose["vertical_toe_drop_m"] == pytest.approx(0.40)
+    assert pose["away_from_robot_m"] is None
+    assert pose["down_m"] is None
+    assert pose["opening_to_toe_alignment_min"] == pytest.approx(0.90)
+    assert pose["opening_plate_normal_alignment_min"] == pytest.approx(0.98)
+    assert pose["plate_downward_alignment_min"] == pytest.approx(0.50)
+    assert pose["opening_ring_plate_alignment_min"] == pytest.approx(0.98)
+    assert pose["opening_ring_maximum_sag_m"] == pytest.approx(0.005)
+    assert pose["opening_ring_area_retention_min"] == pytest.approx(0.90)
+    assert config["obi"]["expected"]["opening_rim_maximum_stretch"] == pytest.approx(
+        1.05
+    )
+    assert config["obi"]["expected"][
+        "opening_body_maximum_stretch"
+    ] == pytest.approx(1.10)
+    assert config["obi"]["expected"]["opening_rim_plane_stiffness"] == pytest.approx(
+        1.00
+    )
+    assert config["obi"]["expected"]["opening_rim_shape_stiffness"] == pytest.approx(
+        1.00
+    )
+    assert config["obi"]["expected"][
+        "opening_rim_maximum_correction_m"
+    ] == pytest.approx(1.00)
+    assert pose["enforce"]
+
+
+def test_taut_rim_profile_bends_sock_tip_toward_arm_loop_interior():
+    config = load_config(
+        Path("config/autonomous_real_only_plate_normal_taut_rim.yaml")
+    )
+
+    assert config["scenario"]["sock"]["rest_bend_degrees"] == pytest.approx(-105.0)
+    assert config["scenario"]["sock"]["rest_bend_azimuth_degrees"] == pytest.approx(
+        90.0
+    )
+    pose = config["scene"]["initial_pose_contract"]
+    assert pose["sock_tip_span_axis_offset_max_m"] == pytest.approx(0.070)
+    assert pose["sock_tip_cross_axis_offset_min_m"] == pytest.approx(-0.080)
+    assert pose["sock_tip_cross_axis_offset_max_m"] == pytest.approx(-0.020)
+    assert pose["sock_tip_opening_depth_min_m"] == pytest.approx(-0.090)
+    assert pose["sock_tip_opening_depth_max_m"] == pytest.approx(-0.030)
+    assert pose["sock_tip_target_span_axis_offset_m"] == pytest.approx(0.0)
+    assert pose["sock_tip_target_cross_axis_offset_m"] == pytest.approx(-0.050)
+    assert pose["sock_tip_target_opening_depth_m"] == pytest.approx(-0.060)
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(30.0)
+    assert pose["opening_target_normal_alignment_min"] == pytest.approx(0.98)
+    assert pose["opening_ring_target_alignment_min"] == pytest.approx(0.98)
+    assert pose["opening_plate_normal_alignment_min"] == pytest.approx(0.85)
+    assert config["obi"]["expected"]["bend_compliance"] == pytest.approx(0.03)
+    assert config["obi"]["expected"]["strain_limit_iterations"] == 160
+    assert config["obi"]["expected"]["damping"] == pytest.approx(0.50)
+    assert pose["sock_tip_guidance_maximum_correction_m"] == pytest.approx(0.300)
+    drape = config["inference"]["tip_drape_wait"]
+    assert drape["enabled"]
+    assert drape["minimum_tip_drop_m"] == pytest.approx(0.015)
+    assert drape["minimum_tip_below_opening_m"] == pytest.approx(0.020)
+    assert drape["span_margin_m"] == pytest.approx(0.005)
+    assert drape["tip_radius_allowance_m"] == pytest.approx(0.015)
+    assert drape["minimum_tip_cross_axis_offset_m"] == pytest.approx(-0.300)
+    assert drape["maximum_tip_cross_axis_offset_m"] == pytest.approx(-0.100)
+    assert drape["minimum_tip_opening_depth_m"] == pytest.approx(-0.120)
+    assert drape["maximum_tip_opening_depth_m"] == pytest.approx(0.030)
+    assert drape["maximum_tip_rise_per_step_m"] == pytest.approx(0.002)
+    assert drape["consecutive_steps"] == 3
+    assert drape["maximum_steps"] == 250
+    baseline = pose["locked_pose_baseline"]
+    assert baseline["human_root_position"][1] == pytest.approx(1.4800000191)
+    assert baseline["chair_position"][1] == pytest.approx(0.4062173188)
+    assert baseline["human_anchor_position"][1] == pytest.approx(0.6562172587)
+    assert baseline["right_toe_position"][1] == pytest.approx(0.4676867247)
+    assert config["scene"]["grasp_anchors"]["align_sock_to_gripper_plate"]
+
+
+def test_reverse_opening_profile_uses_gravity_aligned_tip_drape_gate():
+    config = load_config(
+        Path("config/autonomous_real_only_opening_reverse_60deg.yaml")
+    )
+    pose = config["scene"]["initial_pose_contract"]
+    sock = config["scenario"]["sock"]
+    drape = config["inference"]["tip_drape_wait"]
+
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(60.0)
+    assert pose["opening_rotation_away_from_toe"]
+    assert sock["rest_bend_degrees"] == pytest.approx(-105.0)
+    assert sock["rest_bend_azimuth_degrees"] == pytest.approx(150.0)
+    assert pose["sock_tip_target_span_axis_offset_m"] == pytest.approx(0.0)
+    assert pose["sock_tip_target_cross_axis_offset_m"] == pytest.approx(-0.050)
+    assert pose["sock_tip_target_opening_depth_m"] == pytest.approx(-0.060)
+    assert drape["enabled"]
+    assert drape["coordinate_frame"] == "gravity_aligned"
+    assert drape["minimum_tip_drop_m"] == pytest.approx(0.015)
+    assert drape["minimum_tip_cross_axis_offset_m"] == pytest.approx(-0.300)
+    assert drape["maximum_tip_cross_axis_offset_m"] == pytest.approx(-0.100)
+    assert drape["minimum_tip_opening_depth_m"] == pytest.approx(-0.120)
+    assert drape["maximum_tip_opening_depth_m"] == pytest.approx(0.030)
+
+
+def test_reverse_180_opening_profile_flips_tip_depth_contract():
+    config = load_config(
+        Path("config/autonomous_real_only_opening_reverse_180deg.yaml")
+    )
+    pose = config["scene"]["initial_pose_contract"]
+    sock = config["scenario"]["sock"]
+    drape = config["inference"]["tip_drape_wait"]
+
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(180.0)
+    assert pose["opening_rotation_away_from_toe"]
+    assert pose["opening_plate_normal_alignment_min"] == pytest.approx(-1.0)
+    assert pose["opening_ring_plate_alignment_min"] == pytest.approx(-1.0)
+    assert pose["opening_target_normal_alignment_min"] == pytest.approx(0.98)
+    assert pose["opening_ring_target_alignment_min"] == pytest.approx(0.98)
+    assert sock["rest_bend_degrees"] == pytest.approx(-105.0)
+    assert sock["rest_bend_azimuth_degrees"] == pytest.approx(90.0)
+    assert pose["sock_tip_target_span_axis_offset_m"] == pytest.approx(0.020)
+    assert pose["sock_tip_opening_depth_min_m"] == pytest.approx(0.030)
+    assert pose["sock_tip_opening_depth_max_m"] == pytest.approx(0.090)
+    assert pose["sock_tip_target_opening_depth_m"] == pytest.approx(0.060)
+    assert drape["enabled"]
+    assert drape["coordinate_frame"] == "gravity_aligned"
+    assert drape["minimum_tip_drop_m"] == pytest.approx(0.015)
+    assert drape["minimum_tip_cross_axis_offset_m"] == pytest.approx(-0.300)
+    assert drape["maximum_tip_cross_axis_offset_m"] == pytest.approx(-0.100)
+    assert drape["minimum_tip_opening_depth_m"] == pytest.approx(-0.120)
+    assert drape["maximum_tip_opening_depth_m"] == pytest.approx(0.030)
+
+
+def test_reverse_240_opening_profile_uses_equivalent_positive_120_rotation():
+    config = load_config(
+        Path("config/autonomous_real_only_opening_reverse_240deg.yaml")
+    )
+    pose = config["scene"]["initial_pose_contract"]
+    sock = config["scenario"]["sock"]
+    drape = config["inference"]["tip_drape_wait"]
+
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(120.0)
+    assert not pose["opening_rotation_away_from_toe"]
+    assert pose["opening_plate_normal_alignment_min"] == pytest.approx(-0.52)
+    assert pose["opening_ring_plate_alignment_min"] == pytest.approx(-0.52)
+    assert pose["opening_target_normal_alignment_min"] == pytest.approx(0.98)
+    assert pose["opening_ring_target_alignment_min"] == pytest.approx(0.98)
+    assert sock["rest_bend_degrees"] == pytest.approx(-105.0)
+    assert sock["rest_bend_azimuth_degrees"] == pytest.approx(30.0)
+    assert pose["sock_tip_target_span_axis_offset_m"] == pytest.approx(0.040)
+    assert pose["sock_tip_target_cross_axis_offset_m"] == pytest.approx(-0.050)
+    assert pose["sock_tip_target_opening_depth_m"] == pytest.approx(0.080)
+    assert drape["enabled"]
+    assert drape["coordinate_frame"] == "gravity_aligned"
+    assert drape["minimum_tip_drop_m"] == pytest.approx(0.015)
+    assert drape["minimum_tip_cross_axis_offset_m"] == pytest.approx(-0.300)
+    assert drape["maximum_tip_cross_axis_offset_m"] == pytest.approx(-0.100)
+    assert drape["minimum_tip_opening_depth_m"] == pytest.approx(-0.120)
+    assert drape["maximum_tip_opening_depth_m"] == pytest.approx(0.030)
+
+
+def test_reverse_120_close_profile_returns_rotation_and_moves_overview_camera():
+    config = load_config(
+        Path("config/autonomous_real_only_opening_reverse_120deg_close.yaml")
+    )
+    scene = config["scene"]
+    pose = scene["initial_pose_contract"]
+    sock = config["scenario"]["sock"]
+    drape = config["inference"]["tip_drape_wait"]
+
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(120.0)
+    assert pose["opening_rotation_away_from_toe"]
+    assert pose["opening_plate_normal_alignment_min"] == pytest.approx(-0.52)
+    assert pose["opening_ring_plate_alignment_min"] == pytest.approx(-0.52)
+    assert pose["opening_target_normal_alignment_min"] == pytest.approx(0.98)
+    assert pose["opening_ring_target_alignment_min"] == pytest.approx(0.98)
+    assert sock["rest_bend_degrees"] == pytest.approx(-105.0)
+    assert sock["rest_bend_azimuth_degrees"] == pytest.approx(120.0)
+    assert pose["sock_tip_target_span_axis_offset_m"] == pytest.approx(0.0)
+    assert pose["sock_tip_cross_axis_offset_min_m"] == pytest.approx(0.020)
+    assert pose["sock_tip_cross_axis_offset_max_m"] == pytest.approx(0.080)
+    assert pose["sock_tip_target_cross_axis_offset_m"] == pytest.approx(0.060)
+    assert pose["sock_tip_opening_depth_min_m"] == pytest.approx(-0.090)
+    assert pose["sock_tip_opening_depth_max_m"] == pytest.approx(-0.030)
+    assert pose["sock_tip_target_opening_depth_m"] == pytest.approx(-0.060)
+    assert drape["enabled"]
+    assert drape["coordinate_frame"] == "gravity_aligned"
+    assert scene["recording_camera_position"] == pytest.approx(
+        [-0.75, 0.73, -0.10]
+    )
+    assert scene["recording_camera_rotation"] == pytest.approx([10.0, 42.0, 0.0])
+    assert not scene["recording_camera_frame_opening"]
+    assert config["inference"]["recording_crop_xywh"] == [300, 330, 520, 390]
+
+
+def test_reverse_90_close_profile_returns_rotation_and_preserves_camera():
+    config = load_config(
+        Path("config/autonomous_real_only_opening_reverse_90deg_close.yaml")
+    )
+    scene = config["scene"]
+    pose = scene["initial_pose_contract"]
+    sock = config["scenario"]["sock"]
+    drape = config["inference"]["tip_drape_wait"]
+
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(90.0)
+    assert pose["opening_rotation_away_from_toe"]
+    assert pose["opening_plate_normal_alignment_min"] == pytest.approx(-0.02)
+    assert pose["opening_ring_plate_alignment_min"] == pytest.approx(-0.02)
+    assert pose["opening_target_normal_alignment_min"] == pytest.approx(0.98)
+    assert pose["opening_ring_target_alignment_min"] == pytest.approx(0.98)
+    assert sock["rest_bend_degrees"] == pytest.approx(-105.0)
+    assert sock["rest_bend_azimuth_degrees"] == pytest.approx(135.0)
+    assert pose["sock_tip_target_span_axis_offset_m"] == pytest.approx(-0.025)
+    assert pose["sock_tip_target_cross_axis_offset_m"] == pytest.approx(0.005)
+    assert pose["sock_tip_target_opening_depth_m"] == pytest.approx(-0.060)
+    assert drape["enabled"]
+    assert drape["coordinate_frame"] == "gravity_aligned"
+    assert scene["recording_camera_position"] == pytest.approx(
+        [-0.75, 0.73, -0.10]
+    )
+    assert scene["recording_camera_rotation"] == pytest.approx([10.0, 42.0, 0.0])
+    assert not scene["recording_camera_frame_opening"]
+    assert config["inference"]["recording_crop_xywh"] == [300, 330, 520, 390]
+
+
+def test_reverse_270_close_profile_uses_equivalent_rotation_and_close_camera():
+    config = load_config(
+        Path("config/autonomous_real_only_opening_reverse_270deg_close.yaml")
+    )
+    scene = config["scene"]
+    pose = scene["initial_pose_contract"]
+    sock = config["scenario"]["sock"]
+    drape = config["inference"]["tip_drape_wait"]
+
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(90.0)
+    assert not pose["opening_rotation_away_from_toe"]
+    assert pose["opening_plate_normal_alignment_min"] == pytest.approx(-0.02)
+    assert pose["opening_ring_plate_alignment_min"] == pytest.approx(-0.02)
+    assert pose["opening_target_normal_alignment_min"] == pytest.approx(0.98)
+    assert pose["opening_ring_target_alignment_min"] == pytest.approx(0.98)
+    assert sock["rest_bend_start_m"] == pytest.approx(0.0)
+    assert sock["rest_bend_length_m"] == pytest.approx(0.0)
+    assert sock["rest_bend_degrees"] == pytest.approx(0.0)
+    assert sock["rest_bend_azimuth_degrees"] == pytest.approx(0.0)
+    assert pose["sock_tip_span_axis_offset_max_m"] == pytest.approx(0.060)
+    assert pose["sock_tip_target_span_axis_offset_m"] == pytest.approx(0.026)
+    assert pose["sock_tip_cross_axis_offset_min_m"] == pytest.approx(-0.250)
+    assert pose["sock_tip_cross_axis_offset_max_m"] == pytest.approx(-0.200)
+    assert pose["sock_tip_target_cross_axis_offset_m"] == pytest.approx(-0.229)
+    assert pose["sock_tip_guidance_weight_exponent"] == pytest.approx(0.10)
+    assert pose["sock_tip_opening_depth_min_m"] == pytest.approx(0.150)
+    assert pose["sock_tip_opening_depth_max_m"] == pytest.approx(0.200)
+    assert pose["sock_tip_target_opening_depth_m"] == pytest.approx(0.176)
+    assert drape["enabled"]
+    assert drape["coordinate_frame"] == "gravity_aligned"
+    assert drape["require_tip_drop"] is False
+    assert drape["minimum_tip_drop_m"] == pytest.approx(0.0)
+    assert drape["minimum_tip_below_opening_m"] == pytest.approx(0.150)
+    assert drape["maximum_tip_cross_axis_offset_m"] == pytest.approx(-0.150)
+    assert drape["tip_radius_allowance_m"] == pytest.approx(0.050)
+    assert drape["minimum_tip_opening_depth_m"] == pytest.approx(-0.080)
+    assert drape["maximum_tip_opening_depth_m"] == pytest.approx(0.080)
+    assert drape["maximum_tip_rise_per_step_m"] == pytest.approx(0.010)
+    assert drape["minimum_sock_body_gravity_alignment"] == pytest.approx(0.8)
+    assert config["obi"]["expected"]["damping"] == pytest.approx(0.40)
+    assert config["obi"]["expected"]["bend_compliance"] == pytest.approx(0.03)
+    assert config["obi"]["expected"]["self_collision"] is True
+    assert config["obi"]["expected"]["strain_limit_iterations"] == 240
+    assert config["obi"]["expected"]["opening_body_barrier_enabled"] is True
+    assert config["obi"]["expected"][
+        "opening_body_barrier_clearance_m"
+    ] == pytest.approx(0.008)
+    assert config["obi"]["expected"][
+        "opening_body_barrier_stiffness"
+    ] == pytest.approx(1.0)
+    assert config["obi"]["expected"][
+        "opening_body_barrier_maximum_correction_m"
+    ] == pytest.approx(0.030)
+    assert drape["consecutive_steps"] == 4
+    assert drape["maximum_steps"] == 250
+    assert config["inference"][
+        "minimum_distal_follow_direction_alignment"
+    ] == pytest.approx(0.0)
+    assert config["inference"]["minimum_distal_response_fraction"] == pytest.approx(
+        0.5
+    )
+    assert config["inference"][
+        "maximum_opening_body_penetration_m"
+    ] == pytest.approx(0.0005)
+    assert config["inference"]["mask_min_fraction"] == pytest.approx(0.00001)
+    assert config["inference"]["mask_max_area_change"] == pytest.approx(1000.0)
+    assert scene["recording_camera_position"] == pytest.approx(
+        [-0.75, 0.73, -0.10]
+    )
+    assert scene["recording_camera_rotation"] == pytest.approx([10.0, 42.0, 0.0])
+    assert not scene["recording_camera_frame_opening"]
+    assert config["inference"]["recording_crop_xywh"] == [300, 330, 520, 390]
+
+
+def test_reverse_270_positive_drape_lowered_toe_up_profile_contract():
+    config = load_config(
+        Path(
+            "config/"
+            "autonomous_real_only_opening_reverse_270deg_positive_180_drape_"
+            "lower5cm_toe20deg.yaml"
+        )
+    )
+    foot = config["scenario"]["foot"]
+    pose = config["scene"]["initial_pose_contract"]
+    baseline = pose["locked_pose_baseline"]
+    pre_drape = config["inference"]["pre_inference_drape"]
+
+    assert foot["rotation"] == pytest.approx([20.0, 0.0, 0.0])
+    assert foot["plantarflexion_degrees"] == pytest.approx(20.0)
+    assert pose["down_m"] == pytest.approx(0.05)
+    assert baseline["human_root_position"][1] == pytest.approx(1.4800000191)
+    assert baseline["chair_position"][1] - pose["down_m"] == pytest.approx(
+        0.3562173188
+    )
+    assert baseline["human_anchor_position"][1] - pose["down_m"] == pytest.approx(
+        0.6062172587
+    )
+    assert baseline["right_toe_position"] == pytest.approx(
+        [-0.1826222241, 0.4936948466, 0.5976466234]
+    )
+    assert baseline["right_toe_position"][1] - pose["down_m"] == pytest.approx(
+        0.4436948466
+    )
+    assert pose["sock_tip_cross_axis_offset_max_m"] == pytest.approx(-0.190)
+    assert pre_drape["enabled"]
+    assert pre_drape["rotation_degrees"] == pytest.approx(180.0)
+    assert pre_drape["rotation_steps"] == 180
+    assert pre_drape["settle_steps"] == 250
+    assert config["inference"]["mask_min_fraction"] == pytest.approx(0.0000001)
+    assert config["inference"]["semantic_mask"][
+        "sock_min_fraction"
+    ] == pytest.approx(0.0000001)
+
+
+def test_reverse_270_natural_hang_changes_only_sock_physics_contract():
+    config = load_config(
+        Path(
+            "config/"
+            "autonomous_real_only_opening_reverse_270deg_positive_180_drape_"
+            "lower5cm_toe20deg_natural_hang.yaml"
+        )
+    )
+    sock = config["scenario"]["sock"]
+    obi = config["obi"]["expected"]
+    pose = config["scene"]["initial_pose_contract"]
+    pre_drape = config["inference"]["pre_inference_drape"]
+
+    assert sock["rest_bend_start_m"] == pytest.approx(0.03)
+    assert sock["rest_bend_length_m"] == pytest.approx(0.18)
+    assert sock["rest_bend_degrees"] == pytest.approx(45.0)
+    assert sock["rest_bend_azimuth_degrees"] == pytest.approx(0.0)
+    assert obi["damping"] == pytest.approx(0.95)
+    assert obi["bend_compliance"] == pytest.approx(0.03)
+    assert pose["sock_tip_opening_depth_min_m"] == pytest.approx(0.085)
+    assert pose["sock_tip_cross_axis_offset_max_m"] == pytest.approx(-0.150)
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(90.0)
+    assert not pose["opening_rotation_away_from_toe"]
+    assert pre_drape["enabled"]
+    assert pre_drape["rotation_degrees"] == pytest.approx(180.0)
+    assert pre_drape["rotation_steps"] == 180
+    assert pre_drape["settle_steps"] == 250
+
+
+def test_reverse_270_frame_zero_catch_preserves_pose_and_drape_contract():
+    config = load_config(
+        Path(
+            "config/"
+            "autonomous_real_only_opening_reverse_270deg_positive_180_drape_"
+            "lower5cm_toe20deg_frame_zero_catch.yaml"
+        )
+    )
+    sock = config["scenario"]["sock"]
+    foot = config["scenario"]["foot"]
+    pose = config["scene"]["initial_pose_contract"]
+    pre_drape = config["inference"]["pre_inference_drape"]
+
+    assert sock["rest_bend_start_m"] == pytest.approx(0.03)
+    assert sock["rest_bend_length_m"] == pytest.approx(0.18)
+    assert sock["rest_bend_degrees"] == pytest.approx(45.0)
+    assert sock["rest_bend_azimuth_degrees"] == pytest.approx(180.0)
+    assert config["obi"]["expected"]["damping"] == pytest.approx(0.95)
+    assert config["obi"]["expected"]["bend_compliance"] == pytest.approx(0.10)
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(90.0)
+    assert not pose["opening_rotation_away_from_toe"]
+    assert pose["down_m"] == pytest.approx(0.05)
+    assert foot["plantarflexion_degrees"] == pytest.approx(20.0)
+    assert pre_drape["enabled"]
+    assert pre_drape["rotation_degrees"] == pytest.approx(180.0)
+    assert pre_drape["rotation_steps"] == 180
+    assert pre_drape["settle_steps"] == 250
+
+
+def test_reverse_270_gripper_coupled_preserves_opening_and_drape_contract():
+    config = load_config(
+        Path(
+            "config/"
+            "autonomous_real_only_opening_reverse_270deg_positive_180_drape_"
+            "lower5cm_toe20deg_gripper_coupled.yaml"
+        )
+    )
+    sock = config["scenario"]["sock"]
+    obi = config["obi"]["expected"]
+    pose = config["scene"]["initial_pose_contract"]
+    pre_drape = config["inference"]["pre_inference_drape"]
+
+    assert sock["rest_bend_degrees"] == pytest.approx(45.0)
+    assert sock["rest_bend_azimuth_degrees"] == pytest.approx(180.0)
+    assert obi["bend_compliance"] == pytest.approx(0.03)
+    assert obi["damping"] == pytest.approx(0.40)
+    assert config["inference"]["physics_steps_per_action"] == 20
+    assert config["joints"]["max_delta"] == pytest.approx(
+        [0.005] * 8 + [0.0025] + [0.005] * 8 + [0.0025]
+    )
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(90.0)
+    assert not pose["opening_rotation_away_from_toe"]
+    assert pre_drape["enabled"]
+    assert pre_drape["rotation_degrees"] == pytest.approx(180.0)
+    assert pre_drape["rotation_steps"] == 180
+    assert pre_drape["settle_steps"] == 250
+
+
+def test_reverse_270_recorded_pose_gripper_coupled_contract():
+    config = load_config(
+        Path(
+            "config/autonomous_real_only_opening_reverse_270deg_"
+            "positive_180_drape_recorded_pose_gripper_coupled.yaml"
+        )
+    )
+    foot = config["scenario"]["foot"]
+    pose = config["scene"]["initial_pose_contract"]
+    baseline = pose["locked_pose_baseline"]
+    pre_drape = config["inference"]["pre_inference_drape"]
+
+    assert pose["down_m"] is None
+    assert pose["enforce"] is False
+    assert pose["right_toe_offset_world_m"] == [0.0, 0.0, 0.0]
+    assert pose["locked_pose_tolerance_m"] == pytest.approx(0.002)
+    assert baseline["human_root_position"] == pytest.approx(
+        [0.0599999987, 1.4800000191, -0.7200000286]
+    )
+    assert baseline["chair_position"] == pytest.approx(
+        [-0.0735720247, 0.4527513087, -0.3992611766]
+    )
+    assert baseline["human_anchor_position"] == pytest.approx(
+        [-0.0735720247, 0.7027513087, -0.3992611766]
+    )
+    assert baseline["right_toe_position"] == pytest.approx(
+        [-0.1332971752, 0.4642206430, 0.5865817070]
+    )
+    assert foot["plantarflexion_degrees"] == pytest.approx(20.0)
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(90.0)
+    assert not pose["opening_rotation_away_from_toe"]
+    assert pre_drape["enabled"]
+    assert pre_drape["rotation_degrees"] == pytest.approx(180.0)
+    assert pre_drape["rotation_steps"] == 180
+    assert pre_drape["settle_steps"] == 250
+    assert config["inference"]["tip_drape_wait"]["enabled"]
+    assert not config["inference"]["tip_drape_wait"]["require_stretch"]
+    assert config["inference"]["physics_steps_per_action"] == 20
+    assert config["inference"]["reference_actions"] is None
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+    assert config["joints"]["max_delta"] == pytest.approx(
+        [0.005] * 8 + [0.0025] + [0.005] * 8 + [0.0025]
+    )
+
+
+def test_front_right_camera_profile_preserves_autonomous_drape_contract():
+    config = load_config(
+        Path(
+            "config/autonomous_real_only_opening_reverse_270deg_"
+            "positive_180_drape_recorded_pose_gripper_coupled_"
+            "front_right_camera.yaml"
+        )
+    )
+    scene = config["scene"]
+    pose = scene["initial_pose_contract"]
+    pre_drape = config["inference"]["pre_inference_drape"]
+
+    assert (
+        scene["camera_parent_link"]
+        == "head/see3cam_left/camera_color_frame"
+    )
+    assert scene["camera_local_position"] == pytest.approx([0.0, -0.04, 0.1])
+    assert scene["camera_local_rotation"] == pytest.approx([60.0, 0.0, 0.0])
+    assert config["inference"]["record_inference_camera_video"]
+    assert pose["down_m"] is None
+    assert pose["locked_pose_baseline"]["chair_position"] == pytest.approx(
+        [-0.0735720247, 0.4527513087, -0.3992611766]
+    )
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(90.0)
+    assert not pose["opening_rotation_away_from_toe"]
+    assert pre_drape["enabled"]
+    assert pre_drape["rotation_degrees"] == pytest.approx(180.0)
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+
+
+def test_front_right_frame_zero_physics_preserves_policy_only_drape_contract():
+    config = load_config(
+        Path(
+            "config/autonomous_real_only_opening_reverse_270deg_"
+            "positive_180_drape_recorded_pose_gripper_coupled_"
+            "front_right_camera_frame_zero_physics.yaml"
+        )
+    )
+    scene = config["scene"]
+    pose = scene["initial_pose_contract"]
+    pre_drape = config["inference"]["pre_inference_drape"]
+
+    assert (
+        scene["camera_parent_link"]
+        == "head/see3cam_left/camera_color_frame"
+    )
+    assert scene["camera_local_position"] == pytest.approx([0.0, -0.04, 0.1])
+    assert scene["camera_local_rotation"] == pytest.approx([60.0, 0.0, 0.0])
+    assert config["obi"]["expected"]["bend_compliance"] == pytest.approx(0.10)
+    assert config["obi"]["expected"]["damping"] == pytest.approx(0.95)
+    assert config["inference"]["physics_steps_per_action"] == 10
+    assert config["inference"]["reference_actions"] is None
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+    assert config["inference"]["reference_cartesian_pull_m"] == pytest.approx(0.0)
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(90.0)
+    assert not pose["opening_rotation_away_from_toe"]
+    assert pre_drape["enabled"]
+    assert pre_drape["rotation_degrees"] == pytest.approx(180.0)
+    assert pre_drape["rotation_steps"] == 180
+    assert pre_drape["settle_steps"] == 250
+
+
+def test_head_camera_frame_zero_physics_restores_policy_observation_contract():
+    config = load_config(
+        Path(
+            "config/autonomous_real_only_opening_reverse_270deg_"
+            "positive_180_drape_recorded_pose_gripper_coupled_"
+            "head_camera_frame_zero_physics.yaml"
+        )
+    )
+    scene = config["scene"]
+    pose = scene["initial_pose_contract"]
+    pre_drape = config["inference"]["pre_inference_drape"]
+
+    assert (
+        scene["camera_parent_link"]
+        == "head/see3cam_right/camera_color_frame"
+    )
+    assert scene["camera_local_position"] == pytest.approx([0.0, 0.0, 0.0])
+    assert scene["camera_local_rotation"] == pytest.approx([20.0, 0.0, 0.0])
+    assert config["obi"]["expected"]["bend_compliance"] == pytest.approx(0.10)
+    assert config["obi"]["expected"]["damping"] == pytest.approx(0.95)
+    assert config["inference"]["physics_steps_per_action"] == 10
+    assert config["inference"]["record_inference_camera_video"]
+    assert config["inference"]["reference_actions"] is None
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+    assert config["inference"]["reference_cartesian_pull_m"] == pytest.approx(0.0)
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(90.0)
+    assert not pose["opening_rotation_away_from_toe"]
+    assert pre_drape["enabled"]
+    assert pre_drape["rotation_degrees"] == pytest.approx(180.0)
+    assert pre_drape["rotation_steps"] == 180
+    assert pre_drape["settle_steps"] == 250
+
+
+def test_single_centroid_profile_changes_only_post_drape_prompt_contract():
+    config = load_config(
+        Path(
+            "config/autonomous_real_only_opening_reverse_270deg_"
+            "positive_180_drape_recorded_pose_gripper_coupled_"
+            "head_camera_frame_zero_physics_single_centroid.yaml"
+        )
+    )
+    pose = config["scene"]["initial_pose_contract"]
+    pre_drape = config["inference"]["pre_inference_drape"]
+
+    assert (
+        config["inference"]["post_pre_drape_prompt_mode"]
+        == "single_centroid"
+    )
+    assert config["inference"]["reference_actions"] is None
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+    assert config["inference"]["reference_cartesian_pull_m"] == pytest.approx(0.0)
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(90.0)
+    assert not pose["opening_rotation_away_from_toe"]
+    assert pre_drape["rotation_degrees"] == pytest.approx(180.0)
+
+
+def test_fast_policy_profile_restores_autonomous_absolute_target_rate():
+    config = load_config(
+        Path(
+            "config/autonomous_real_only_opening_reverse_270deg_"
+            "positive_180_drape_recorded_pose_gripper_coupled_"
+            "head_camera_frame_zero_physics_single_centroid_fast_policy.yaml"
+        )
+    )
+
+    assert config["joints"]["max_delta"] == pytest.approx(
+        [0.02] * 7
+        + [0.005, 0.0025]
+        + [0.02] * 7
+        + [0.005, 0.0025]
+    )
+    assert config["inference"]["post_pre_drape_prompt_mode"] == "single_centroid"
+    assert config["inference"]["reference_actions"] is None
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+    assert config["inference"]["reference_cartesian_pull_m"] == pytest.approx(0.0)
+    assert config["inference"]["pre_inference_drape"][
+        "rotation_degrees"
+    ] == pytest.approx(180.0)
+
+
+def test_human_chair_offset_changes_only_locked_pose_translation_contract():
+    config = load_config(
+        Path(
+            "config/autonomous_real_only_opening_reverse_270deg_"
+            "positive_180_drape_recorded_pose_gripper_coupled_"
+            "head_camera_frame_zero_physics_single_centroid_fast_policy_"
+            "human_chair_away3cm_down8cm.yaml"
+        )
+    )
+    pose = config["scene"]["initial_pose_contract"]
+
+    assert pose["away_from_robot_m"] == pytest.approx(0.03)
+    assert pose["down_m"] == pytest.approx(0.08)
+    assert pose["right_toe_offset_world_m"] == pytest.approx([0.0, 0.0, 0.0])
+    assert pose["locked_pose_tolerance_m"] == pytest.approx(0.002)
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(90.0)
+    assert not pose["opening_rotation_away_from_toe"]
+    assert config["inference"]["pre_inference_drape"][
+        "rotation_degrees"
+    ] == pytest.approx(180.0)
+    assert config["inference"]["post_pre_drape_prompt_mode"] == "single_centroid"
+    assert config["inference"]["reference_actions"] is None
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+    assert config["inference"]["reference_cartesian_pull_m"] == pytest.approx(0.0)
+
+
+def test_conservative_human_chair_offset_preserves_policy_contract():
+    config = load_config(
+        Path(
+            "config/autonomous_real_only_opening_reverse_270deg_"
+            "positive_180_drape_recorded_pose_gripper_coupled_"
+            "head_camera_frame_zero_physics_single_centroid_fast_policy_"
+            "human_chair_away2cm_down7cm.yaml"
+        )
+    )
+    pose = config["scene"]["initial_pose_contract"]
+
+    assert pose["away_from_robot_m"] == pytest.approx(0.02)
+    assert pose["down_m"] == pytest.approx(0.07)
+    assert pose["right_toe_offset_world_m"] == pytest.approx([0.0, 0.0, 0.0])
+    assert config["inference"]["pre_inference_drape"][
+        "rotation_degrees"
+    ] == pytest.approx(180.0)
+    assert config["inference"]["reference_actions"] is None
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+    assert config["inference"]["reference_cartesian_pull_m"] == pytest.approx(0.0)
+    expected = config["obi"]["expected"]
+    assert expected["opening_rim_span_maximum_stretch"] == pytest.approx(1.20)
+    assert expected["opening_rim_span_shape_stiffness"] == pytest.approx(0.25)
+    assert expected.get("opening_rim_maximum_stretch", 1.05) == pytest.approx(1.05)
+    assert expected["opening_rim_shape_stiffness"] == pytest.approx(1.0)
+
+
+def test_left_camera_profile_changes_only_inference_view_contract():
+    config = load_config(
+        Path(
+            "config/autonomous_real_only_opening_reverse_270deg_"
+            "positive_180_drape_recorded_pose_gripper_coupled_"
+            "head_camera_frame_zero_physics_single_centroid_fast_policy_"
+            "human_chair_away2cm_down7cm_left_camera.yaml"
+        )
+    )
+    scene = config["scene"]
+    pose = scene["initial_pose_contract"]
+    expected = config["obi"]["expected"]
+
+    assert scene["camera_parent_link"] == (
+        "head/see3cam_left/camera_color_frame"
+    )
+    assert scene["camera_local_position"] == pytest.approx([0.0, -0.04, 0.1])
+    assert scene["camera_local_rotation"] == pytest.approx([60.0, 0.0, 0.0])
+    assert scene["recording_camera_id"] == 1301
+    assert pose["away_from_robot_m"] == pytest.approx(0.02)
+    assert pose["down_m"] == pytest.approx(0.07)
+    assert expected["opening_rim_span_maximum_stretch"] == pytest.approx(1.20)
+    assert expected["opening_rim_span_shape_stiffness"] == pytest.approx(0.25)
+    assert config["inference"]["reference_actions"] is None
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+    assert config["inference"]["record_inference_camera_video"]
+
+
+def test_wide_opening_profile_expands_span_within_safety_limit():
+    config = load_config(
+        Path(
+            "config/autonomous_real_only_opening_reverse_270deg_"
+            "positive_180_drape_recorded_pose_gripper_coupled_"
+            "front_right_camera_wide_opening.yaml"
+        )
+    )
+    scene = config["scene"]
+
+    assert scene["grasp_alignment"]["target_span_m"] == pytest.approx(0.115)
+    assert config["obi"]["expected"]["slip_opening_span_m"] == pytest.approx(
+        0.115
+    )
+    assert scene["initial_pose_contract"][
+        "maximum_opening_span_m"
+    ] == pytest.approx(0.12)
+    assert scene["grasp_alignment"]["target_span_m"] < scene[
+        "initial_pose_contract"
+    ]["maximum_opening_span_m"]
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+
+
+def test_reverse_150_close_profile_advances_rotation_and_preserves_camera():
+    config = load_config(
+        Path("config/autonomous_real_only_opening_reverse_150deg_close.yaml")
+    )
+    scene = config["scene"]
+    pose = scene["initial_pose_contract"]
+    sock = config["scenario"]["sock"]
+    drape = config["inference"]["tip_drape_wait"]
+
+    assert pose["opening_rotation_about_span_degrees"] == pytest.approx(150.0)
+    assert pose["opening_rotation_away_from_toe"]
+    assert pose["opening_plate_normal_alignment_min"] == pytest.approx(-0.88)
+    assert pose["opening_ring_plate_alignment_min"] == pytest.approx(-0.88)
+    assert pose["opening_target_normal_alignment_min"] == pytest.approx(0.98)
+    assert pose["opening_ring_target_alignment_min"] == pytest.approx(0.98)
+    assert sock["rest_bend_degrees"] == pytest.approx(-150.0)
+    assert sock["rest_bend_azimuth_degrees"] == pytest.approx(100.0)
+    assert pose["sock_tip_target_span_axis_offset_m"] == pytest.approx(0.0)
+    assert pose["sock_tip_target_cross_axis_offset_m"] == pytest.approx(0.060)
+    assert pose["sock_tip_opening_depth_min_m"] == pytest.approx(-0.050)
+    assert pose["sock_tip_opening_depth_max_m"] == pytest.approx(-0.010)
+    assert pose["sock_tip_target_opening_depth_m"] == pytest.approx(-0.030)
+    assert config["obi"]["expected"]["damping"] == pytest.approx(0.55)
+    assert config["obi"]["expected"]["strain_limit_iterations"] == 240
+    assert drape["enabled"]
+    assert drape["coordinate_frame"] == "gravity_aligned"
+    assert drape["maximum_steps"] == 60
+    assert scene["recording_camera_position"] == pytest.approx(
+        [-0.75, 0.73, -0.10]
+    )
+    assert scene["recording_camera_rotation"] == pytest.approx([10.0, 42.0, 0.0])
+    assert config["inference"]["recording_crop_xywh"] == [300, 330, 520, 390]
+
+
+def test_triaxial_offset_profile_only_adds_requested_pose_offsets():
+    baseline = load_config(
+        Path("config/autonomous_real_only_plate_normal_four_point.yaml")
+    )
+    config = load_config(
+        Path(
+            "config/"
+            "autonomous_real_only_plate_normal_four_point_"
+            "human_triaxial_offset.yaml"
+        )
+    )
+    pose = config["scene"]["initial_pose_contract"]
+
+    assert pose["away_from_robot_m"] == pytest.approx(0.10)
+    assert pose["up_m"] == pytest.approx(0.10)
+    assert pose["right_from_robot_m"] == pytest.approx(0.05)
+    assert pose["down_m"] is None
+    assert pose["required_grasp_particles_per_side"] == 2
+    assert pose["opening_to_toe_alignment_min"] == pytest.approx(0.90)
+    assert config["scene"]["grasp_anchors"]["align_sock_to_gripper_plate"]
+    assert config["obi"]["expected"]["maximum_grasp_particles_per_side"] == 2
+    expected = deepcopy(baseline)
+    expected["scene"]["initial_pose_contract"].update(
+        {
+            "away_from_robot_m": 0.10,
+            "up_m": 0.10,
+            "right_from_robot_m": 0.05,
+        }
+    )
+    assert config == expected
+
+
+def test_human_chair_locked_profile_restores_recorded_world_coordinates():
+    config = load_config(
+        Path("config/autonomous_real_only_human_chair_locked_pose.yaml")
+    )
+    pose = config["scene"]["initial_pose_contract"]
+    baseline = pose["locked_pose_baseline"]
+
+    assert baseline["human_root_position"] == pytest.approx(
+        [0.0599999987, 1.4800000191, -0.7200000286]
+    )
+    assert baseline["chair_position"] == pytest.approx(
+        [-0.0712867528, 0.5095953941, -0.3411580324]
+    )
+    assert baseline["human_anchor_position"] == pytest.approx(
+        [-0.0712867528, 0.7595953345, -0.3411580324]
+    )
+    assert baseline["right_toe_position"] == pytest.approx(
+        [-0.1310119629, 0.5210645795, 0.6446849108]
+    )
+    assert pose["right_toe_offset_world_m"] == [0.05, -0.05, 0.0]
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+
+
+def test_toe_left_down_recorded_pose_profile_restores_world_coordinates():
+    config = load_config(
+        Path(
+            "config/"
+            "autonomous_real_only_toe_left_down_recorded_pose.yaml"
+        )
+    )
+    pose = config["scene"]["initial_pose_contract"]
+    baseline = pose["locked_pose_baseline"]
+
+    assert baseline["human_root_position"] == pytest.approx(
+        [0.0599999987, 1.4800000191, -0.7200000286]
+    )
+    assert baseline["chair_position"] == pytest.approx(
+        [-0.0735720247, 0.4527513087, -0.3992611766]
+    )
+    assert baseline["human_anchor_position"] == pytest.approx(
+        [-0.0735720247, 0.7027513087, -0.3992611766]
+    )
+    assert baseline["right_toe_position"] == pytest.approx(
+        [-0.1332971752, 0.4642206430, 0.5865817070]
+    )
+    assert pose["enforce"] is False
+    assert pose["locked_pose_tolerance_m"] == pytest.approx(0.002)
+    assert pose["right_toe_offset_world_m"] == [0.05, -0.05, 0.0]
+    assert config["inference"]["reference_actions"] is None
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+
+
+def test_downward_plate_profile_enables_autonomous_geometry_contract():
+    config = load_config(
+        Path("config/autonomous_real_only_downward_plate_human_chair.yaml")
+    )
+    pose = config["scene"]["initial_pose_contract"]
+
+    assert config["scene"]["grasp_anchors"]["align_sock_to_gripper_plate"]
+    assert pose["right_toe_offset_world_m"] is None
+    assert pose["vertical_toe_drop_m"] == pytest.approx(0.05)
+    assert pose["enforce"]
+    assert config["inference"]["reference_actions"] is None
+    assert config["inference"]["reference_action_blend"] == pytest.approx(0.0)
+
+
+def test_restore_human_chair_world_pose_sends_recorded_vectors():
+    environment = FakeEnvironment()
+    cloth = SockClothAttr(environment, 1200)
+
+    cloth.restore_human_chair_world_pose(
+        [0.06, 1.48, -0.72],
+        [-0.071, 0.510, -0.341],
+        [-0.071, 0.760, -0.341],
+        [-0.131, 0.521, 0.645],
+        2301,
+    )
+
+    message = environment.messages[-1]
+    assert message[:2] == (1200, "RestoreHumanChairWorldPose")
+    assert message[-1] == 2301
+    assert len(message) == 15
 
 
 def test_sock_opening_alignment_writes_solver_local_particle_positions():
     source = Path(
         "RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs"
     ).read_text()
+    alignment = source[
+        source.index("public void AlignSockOpeningToGraspTargets"):
+        source.index("public void AlignSockOpeningToGraspTargetsAndGrasp")
+    ]
 
-    assert "solver.transform.InverseTransformPoint(aligned)" in source
-    assert "Vector3.ProjectOnPlane(" in source
-    assert "Physics.gravity" in source
+    assert "GetParticleEndpoints(openingParticles" in alignment
+    assert "GetParticleEndpoints(cuffGraspParticles" not in alignment
+    assert "openingAxisScale = targetOpeningSpan / sourceOpeningSpan" in alignment
+    assert "openingCrossAxisScale" in alignment
+    assert "rectangleBoundary" in alignment
+    assert "CaptureStructuralRestLengths();" in alignment
+    assert "openingStretchWeight" in alignment
+    assert "SnapNearestOpeningParticle(" in alignment
+    assert "alignedLeftOpeningCorners" in source
+    assert "alignedRightOpeningCorners" in source
+    assert "left.transform.TransformPoint(" in alignment
+    assert "right.transform.TransformPoint(" in alignment
+    assert "solver.transform.InverseTransformPoint(aligned)" in alignment
+    assert "Vector3.ProjectOnPlane(" in alignment
+    assert "Physics.gravity" not in alignment
+    assert "Quaternion.AngleAxis(" in alignment
+    assert "Quaternion.LookRotation(" in alignment
+    assert "left.transform.rotation = targetFrameRotation;" in alignment
+    assert "right.transform.rotation = targetFrameRotation;" in alignment
+    assert "graspOrientationLocked = true;" in alignment
+    assert "targetMidpoint - toeTarget" in alignment
+    assert alignment.index("left.transform.rotation = targetFrameRotation;") < (
+        alignment.index("SnapNearestOpeningParticle(")
+    )
+    assert "CaptureResetStateIfReady(true)" in alignment
+    assert "AlignSockOpeningToGraspTargetsAndGrasp" in source
+    assert "AlignSockOpeningToGraspPlateAndGrasp" in source
+    assert "Vector3.Cross(openingAxis, shortAxis)" in source
+    assert "Vector3.Dot(plateOutwardNormal, down) < 0" in source
+    assert "graspPlateOutwardNormal = plateOutwardNormal;" in source
     assert "Quaternion.AngleAxis(" in source
-    assert "CaptureResetStateIfReady(true)" in source
+    assert "Vector3.Dot(negative, toeDirection)" in source
+    assert '"grasp_plate_outward_normal", plateOutwardNormal' in source
+    assert '"opening_plate_normal_alignment"' in source
+    assert '"opening_target_normal_alignment"' in source
+    assert '"opening_ring_target_alignment"' in source
+    assert '"plate_downward_alignment"' in source
+    assert "OpeningRingPlaneMetrics(" in source
+    assert "EnforceOpeningRimPlane();" in source
+    assert "openingRimMaximumStretch" in source
+    assert "openingRimSpanMaximumStretch" in source
+    assert "openingRimSpanShapeStiffness" in source
+    assert "IsOpeningRimSpanParticle(item.Key)" in source
+    assert "IsOpeningRimSpanEdge(edge.x, edge.y)" in source
+    assert "Mathf.Abs(delta.x) >= Mathf.Abs(delta.y)" in source
+    assert '"opening_rim_span_maximum_stretch"' in source
+    assert '"opening_rim_span_shape_stiffness"' in source
+    assert 'Grasp("left", leftTargetId, maxDistance);' in source
+    assert 'Grasp("right", rightTargetId, maxDistance);' in source
+
+
+def test_custom_player_keeps_grasp_targets_at_frames_and_enforces_edge_match():
+    config = load_config(Path("config/custom_player.yaml"))
+
+    anchors = config["scene"]["grasp_anchors"]
+    contract = config["scene"]["initial_pose_contract"]
+    assert anchors["maximum_anchor_span_m"] is None
+    assert all(anchor["local_position"] == [0.0, 0.0, 0.0] for anchor in anchors["anchors"])
+    assert contract["minimum_cuff_insertion_depth_m"] == 0.0
+    assert contract["maximum_opening_edge_error_m"] == pytest.approx(0.01)
+    assert contract["required_grasp_particles_per_side"] == 4
+    assert config["obi"]["expected"]["grasp_thickness_half_width_m"] > 0
+    assert config["scene"]["grasp_alignment"]["target_span_m"] == pytest.approx(
+        0.105
+    )
+    assert 0.105 * (2 * 0.022) == pytest.approx(0.00462)
+
+
+def test_custom_player_models_cuff_as_elastic_band():
+    source = Path(
+        "RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs"
+    ).read_text()
+
+    assert "public void ConfigureOpeningRimElasticBand(" in source
+    material = source[
+        source.index("private float MaterialRestLength("):
+        source.index("private float StructuralRestLength(")
+    ]
+    assert "BlueprintRestLength(first, second, blueprint)" in material
+    limiter = source[
+        source.index("private FootMaterialStencil MaterialStencil("):
+        source.index("private void EnforceGraspParticlePositions()")
+    ]
+    assert "MaterialRestLength(" in limiter
+    assert "openingRimElasticMaximumStretch" in limiter
+    assert "openingRimElasticRestoringStiffness" in limiter
+    rim = source[
+        source.index("private void EnforceOpeningRimPlane("):
+        source.index("private bool IsOpeningRimSpanParticle(")
+    ]
+    # The plane term keeps the opening angle; the in-plane term is released
+    # after foot entry and skips particles touching the foot.
+    assert "openingRimPlaneStiffness * cuffWeight" in rim
+    assert "openingRimShapeStiffness * shapeWeight" in rim
+    assert "openingRimFootContacts.Contains(item.Key)" in rim
+    assert "guardMinimum - guardedSide" in rim
+    assert "UpdateOpeningRimRelease();" in source
+    entry = source[
+        source.index("private bool FootCrossedOpeningPlane()"):
+        source.index("private float MinimumFootSignedDistance(")
+    ]
+    # The draped sock hangs beside the foot, so entry must be a toe sample in
+    # a thin slab behind the rim, oriented toward the sock body, not anywhere
+    # in the infinite prism behind the opening rectangle.
+    assert "openingRimFootEntryDepth <= OpeningRimEntrySlabDepth" in entry
+    assert "bodyCentroid - center, inward) < 0" in entry
+    assert '"calf"' not in entry
+    assert '"foot_entry_depth_m"' in source
+    assert "JawLineGraspParticles(" in source
+    assert '"opening_rim_state", OpeningRimState()' in source
+    assert '"foot_section_enclosed_fraction"' in source
+    assert '"pretension_ratio"' in source
+    assert '"opening_rim_elastic_maximum_stretch"' in source
+
+
+def test_opening_rim_elastic_band_configuration_is_fail_closed():
+    cloth = SockClothAttr(FakeEnvironment(), 1200)
+    for kwargs in (
+        {"mode": "rubber"},
+        {"elastic_maximum_stretch": 0.9},
+        {"restoring_stiffness": 1.5},
+        {"shape_release_steps": 0},
+        {"collapse_guard_ratio": 1.0},
+    ):
+        with pytest.raises(ValueError):
+            cloth.configure_opening_rim_elastic_band(**kwargs)
+
+
+def test_custom_player_reports_geometric_dressing_qa():
+    source = Path(
+        "RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs"
+    ).read_text()
+
+    assert "public void GetDressingQA()" in source
+    assert "FootSurfaceSamples" in source
+    assert "PointInsideSock" in source
+    assert "RayIntersectsTriangle" in source
+    assert '"surface_containment_ratio"' in source
+    assert '"cuff_progress_toward_ankle_m"' in source
+    assert '"maximum_cloth_foot_penetration_m"' in source
+    assert '"geometric_maximum_cloth_foot_penetration_m"' in source
+    assert '"geometric_overlap_particle_count"' in source
+    assert '"minimum_particle_foot_distance_m"' in source
+    assert '{ "toes", "forefoot", "heel", "ankle", "calf" }' in source
+
+
+def test_custom_player_projects_strain_before_collision_solving():
+    source = Path(
+        "RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs"
+    ).read_text()
+
+    assert "solver.OnSimulationStart += OnSolverSimulationStart;" in source
+    assert "solver.OnSimulationEnd += OnSolverSimulationEnd;" in source
+    callback = source.split("private void OnSolverSimulationStart(", 1)[1].split(
+        "private void OnSolverCollision(", 1
+    )[0]
+    assert "SyncRightLegCollidersToBones();" in callback
+    assert 'TraceFootStage("strain_before_obi", LimitStructuralStretch);' in callback
+    assert 'TraceFootStage("grasp_transport", ApplyGraspCenterTranslation);' in callback
+    assert callback.index(
+        'TraceFootStage("grasp_transport", ApplyGraspCenterTranslation);'
+    ) < callback.index('TraceFootStage("strain_before_obi", LimitStructuralStretch);')
+    end_callback = source.split("private void OnSolverSimulationEnd(", 1)[1].split(
+        "private Dictionary<string, object> GeometricFootPenetration()", 1
+    )[0]
+    assert 'TraceFootStage("strain_after_obi", LimitStructuralStretch);' in end_callback
+    assert "ApplyGraspCenterTranslation" not in end_callback
+    assert 'TraceFootStage("contact_after_obi", () => EnforceFootGeometricDepenetration());' in end_callback
+    assert end_callback.index(
+        'TraceFootStage("strain_after_obi", LimitStructuralStretch);'
+    ) < end_callback.index('TraceFootStage("contact_after_obi", () => EnforceFootGeometricDepenetration());')
+    late_update = source.split("private void LateUpdate()", 1)[1].split(
+        "[RFUAPI]", 1
+    )[0]
+    get_particles = source.split("public void GetParticles()", 1)[1].split(
+        "[RFUAPI]", 1
+    )[0]
+    assert "LimitStructuralStretch();" not in late_update
+    assert "LimitStructuralStretch();" not in get_particles
+    collision_callback = source.split(
+        "private void OnSolverCollision(", 1
+    )[1].split("private Dictionary<string, object> GeometricFootPenetration()", 1)[
+        0
+    ]
+    assert "contacts.Clear();" not in collision_callback
+    assert "MaximumAggregatedContactRecords" in collision_callback
+    get_contacts = source.split("public void GetClothContacts()", 1)[1].split(
+        "[RFUAPI]", 1
+    )[0]
+    assert "contacts.Clear();" in get_contacts
+    rest_length = source.split(
+        "private float StructuralRestLength", 1
+    )[1].split("private void LimitStructuralStretch", 1)[0]
+    assert "Mathf.Max(alignedRest, blueprintRest)" in rest_length
+
+
+def test_strain_limiter_does_not_reapply_barrier_after_final_projection():
+    source = Path(
+        "RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs"
+    ).read_text()
+    limiter = source.split(
+        "private void LimitStructuralStretch()", 1
+    )[1].split("private void EnforceGraspParticlePositions()", 1)[0]
+    final_projection = limiter.split(
+        "Do not reapply those", 1
+    )[1]
+
+    assert "EnforceOpeningRimPlane();" not in final_projection
+    assert "EnforceOpeningBodyBarrier(false);" not in final_projection
+
+
+def test_opening_body_seam_and_foot_projection_are_explicit_constraints():
+    source = Path(
+        "RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs"
+    ).read_text()
+    limiter = source.split(
+        "private void LimitStructuralStretch()", 1
+    )[1].split("private void EnforceGraspParticlePositions()", 1)[0]
+    foot_projection = source.split(
+        "private int EnforceFootGeometricDepenetration(", 1
+    )[1].split("private static List<Vector3> FootSurfaceSamples(", 1)[0]
+
+    assert "bool openingBodyEdge" in limiter
+    assert "openingBodyMaximumStretch" in limiter
+    assert "rightLegRegions.Values" in foot_projection
+    assert "configuredParticleRadius + configuredCollisionMargin" in (
+        foot_projection
+    )
+    assert "for (int i = 0; i < cloth.particleCount; ++i)" in foot_projection
+    assert "solver.prevPositions[solverIndex]" in foot_projection
+    assert "solver.renderablePositions[solverIndex]" in foot_projection
+    assert "UpdateGraspOffsetAfterFootProjection(" in foot_projection
+    assert "grasp.batch.offsets[i] = offset;" in source
+    assert "graspThicknessHalfWidth = Mathf.Min(" in source
+
+
+def test_dressing_qa_requires_finite_cross_section_observations():
+    value = {
+        "valid": True,
+        "simulation_frame": 12,
+        "surface_containment_ratio": 0.95,
+        "sections": [
+            {"name": "toes", "valid": True, "containment_ratio": 0.875}
+        ],
+        "cuff_progress_toward_ankle_m": 0.03,
+        "maximum_cuff_reverse_step_m": 0.001,
+        "cuff_beyond_distal_toe_m": 0.0,
+        "foot_contact_count": 4,
+        "maximum_cloth_foot_penetration_m": 0.001,
+        "maximum_cloth_foot_force_proxy": 0.2,
+    }
+
+    report = DressingQA.from_mapping(value)
+
+    assert report.valid
+    assert report.surface_containment_ratio == pytest.approx(0.95)
+    with pytest.raises(ValueError):
+        DressingQA.from_mapping(
+            {**value, "surface_containment_ratio": float("nan")}
+        )
+
+
+def test_dressing_qa_preserves_geometric_overlap_without_obi_contacts():
+    value = {
+        "valid": True,
+        "simulation_frame": 12,
+        "surface_containment_ratio": 0.0,
+        "sections": [
+            {"name": "calf", "valid": True, "containment_ratio": 0.0}
+        ],
+        "cuff_progress_toward_ankle_m": 0.0,
+        "maximum_cuff_reverse_step_m": 0.0,
+        "cuff_beyond_distal_toe_m": 0.0,
+        "foot_contact_count": 0,
+        "obi_foot_contact_count": 0,
+        "obi_maximum_cloth_foot_penetration_m": 0.0,
+        "geometric_overlap_particle_count": 3,
+        "geometric_maximum_cloth_foot_penetration_m": 0.004,
+        "geometric_foot_penetration": {
+            "regions": [
+                {
+                    "name": "calf",
+                    "overlap_particle_count": 3,
+                    "maximum_penetration_m": 0.004,
+                }
+            ]
+        },
+        "maximum_cloth_foot_penetration_m": 0.004,
+        "maximum_cloth_foot_force_proxy": 0.0,
+    }
+
+    report = DressingQA.from_mapping(value)
+
+    assert report.foot_contact_count == 0
+    assert report.geometric_overlap_particle_count == 3
+    assert report.geometric_maximum_cloth_foot_penetration_m == pytest.approx(
+        0.004
+    )
+    assert report.geometric_regions[0]["name"] == "calf"
 
 
 def test_sock_geometry_reports_particle_derived_hanging_direction():
@@ -105,11 +1348,22 @@ def test_sock_geometry_reports_particle_derived_hanging_direction():
 
     assert "Vector3 sockBodyDirection = ClothCenter() - openingCenter;" in source
     assert "Vector3 openingNormal = OpeningNormal();" in source
+    assert "Vector3 pinnedNormal = Vector3.Cross(" in source
     assert "normal += Vector3.Cross(current, next);" in source
     assert '"opening_target_center", openingTargetCenter' in source
     assert '"opening_target_normal", openingTargetNormal' in source
     assert '"opening_outward_normal", -openingNormal' in source
     assert '"opening_to_toe_alignment", openingToToeAlignment' in source
+    assert '"sock_tip_center", sockTipCenter' in source
+    assert '"sock_tip_span_axis_offset_m", sockTipSpanAxisOffset' in source
+    assert '"sock_tip_cross_axis_offset_m", sockTipCrossAxisOffset' in source
+    assert '"sock_tip_opening_depth_m", sockTipOpeningDepth' in source
+    assert "private Vector3 SockTipCenter()" in source
+    assert "maximumDistance - distances[i] <= distalTolerance" in source
+    assert "public void ConfigureInitialTipGuidance(" in source
+    assert "Mathf.Pow(weight, initialTipGuidanceWeightExponent)" in source
+    assert "private void EnforceInitialTipGuidance()" in source
+    assert "public void ReleaseInitialTipGuidance()" in source
     assert "targetMidpoint - toeTarget" in source
     assert "Physics.gravity," not in source[
         source.index("public void AlignSockOpeningToGraspTargets"):
@@ -119,12 +1373,32 @@ def test_sock_geometry_reports_particle_derived_hanging_direction():
     assert "Vector3.Dot(footOffset, openingTargetNormal)" in source
     assert '"sock_body_direction", sockBodyDirection' in source
     assert '"sock_body_gravity_alignment", sockBodyGravityAlignment' in source
+    assert "private void EnforceOpeningBodyBarrier(bool resetMetrics = true," in source
+    assert "private void UpdateOpeningBodyBarrierContacts()" in source
+    assert "private void RecordOpeningBodyBarrierState()" in source
+    assert "public void ArmOpeningBodyBarrierPredictiveSkin(" in source
+    assert "public void RotateGraspedOpeningAboutSpan(" in source
+    assert '"signed_opening_span_rotation_degrees"' in source
+    assert "crossedFromInwardSide" in source
+    assert "IsInsideOpeningBarrierRectangle(" in source
+    assert source.count("initialTipGuidanceEnabled ||") >= 2
+    assert "EnforceOpeningBodyBarrier(false, frames);" in source
+    assert '"opening_body_barrier_violation_count"' in source
+    assert '"opening_body_barrier_maximum_penetration_m"' in source
     assert "solver.positions[solverIndex] = aligned;" not in source
     assert "Vector3.Dot(point, axis)" in source
     assert "Physics.IgnoreCollision(robotCollider, humanCollider, true)" in source
     assert "Physics.ComputePenetration(" in source
     assert "IgnoreNonGripperRobotHumanRigidCollisions" in source
-    assert "IsGripperCollider(value)" in source
+    assert "IsGripperCollider(value, robot.transform)" in source
+    classifier = source[
+        source.index("private static bool IsGripperCollider"):
+        source.index("private static string TransformPath")
+    ]
+    assert "current != robotRoot" in classifier
+    assert '"maximum_enabled_penetration_m"' in source
+    assert '"maximum_ignored_penetration_m"' in source
+    assert '"robot_collider_path"' in source
     assert not config["scene"]["ignore_robot_human_rigid_collisions"]
     assert config["scene"]["ignore_non_gripper_robot_human_rigid_collisions"]
     assert config["scene"]["robot_direct_joint_control"]
@@ -138,16 +1412,64 @@ def test_grasp_pins_small_inner_cuff_patches_and_leaves_rim_dynamic():
 
     assert ".Take(maximumGraspParticlesPerSide)" in source
     assert "graspRotationalCompliance" in source
+    assert "float.PositiveInfinity" in source
     assert '"non_cuff_grasp_particle_count"' in source
-    assert "int[] selected = openingParticles" in source
-    assert "targetMidpoint - toeTarget" in source
-    assert "minimum + cuffInsertionDepth" in source
+    assert "int[] selected = selectedValues.ToArray();" in source
+    assert "HashSet<long> structuralEdges" in source
+    assert "adjacentToPinned" in source
+    assert ".ThenBy(value => value.index)" in source
+    assert "Array.IndexOf(alignedCorners, actorIndex)" in source
+    assert "new Vector3(-graspThicknessHalfWidth, 0, 0)" in source
+    assert "new Vector3(graspThicknessHalfWidth, 0, 0)" in source
+    assert "triangle[0].index" in source
+    assert "counts.Where(item => item.Value == 1)" in source
+    assert "RestDistancesFromOpening" in source
+    assert "closest + neighbor.Value" in source
+    assert "distance - cuffInsertionDepth" in source
     assert '"cuff_insertion_depth_m", cuffInsertionDepth' in source
-    assert "cloth.tetherConstraintsEnabled = false;" in source
+    assert "cloth.tetherConstraintsEnabled = tetherEnabled;" in source
+    assert "cloth.tetherCompliance = tetherCompliance;" in source
+    assert "cloth.tetherScale = tetherScale;" in source
+    assert 'TraceFootStage("strain_final", LimitStructuralStretch);' in source
+    assert source.index('TraceFootStage("strain_final", LimitStructuralStretch);', source.index("public void GetParticles")) > 0
+    assert "solver.positions[cloth.GetParticleRuntimeIndex(i)]" in source
+    assert "EnforceGraspParticlePositions();" in source
+    assert "EnforceGraspTargetOrientations();" in source
+    assert "Vector3.ProjectOnPlane(" in source
+    assert "Mathf.Clamp(" in source
+    assert "slipMinimumOpeningSpan" in source
+    assert "graspLockedOpeningAxis = targetOpeningAxis;" in source
+    assert "preferredAxis = graspLockedOpeningAxis" in source
+    assert "rawOpeningAxis.magnitude" in source
+    assert "slipOpeningSpan" in source
+    assert "grasp.target.TransformPoint(grasp.localOffsets[i])" in source
+    assert 'TraceFootStage("grasp_transport", ApplyGraspCenterTranslation);' in source
+    translation = source.split(
+        "private void ApplyGraspCenterTranslation()", 1
+    )[1].split("private float[] RestDistancesFromOpening", 1)[0]
+    assert "solver.renderablePositions[solverIndex] +=" in translation
+    assert "rest * stretchLimit" in source
+    assert ": openingRimMaximumStretch" in source
+    assert "? openingRimSpanMaximumStretch" in source
+    assert '"aligned_grasp_initialization"' in source
+    assert "StructuralRestLength(" in source
+    assert "if (pinned.Count == 0)" in source
+    limiter = source[
+        source.index("private FootMaterialStencil MaterialStencil("):
+        source.index("private void EnforceGraspParticlePositions")
+    ]
+    assert "openingParticles.Contains(edge.x)" in limiter
+    assert "openingParticles.Contains(edge.y)" in limiter
+    assert "solver.prevPositions[firstSolver]" in limiter
+    assert "solver.prevPositions[secondSolver]" in limiter
     assert "cloth.volumeConstraintsEnabled = false;" in source
     assert "solver.invMasses[solverIndex] = 1.0f / particleMass;" in source
     assert "leftOpeningEdge = GraspParticleCenter(grasps[\"left\"]);" not in source
     assert "rightOpeningEdge = GraspParticleCenter(grasps[\"right\"]);" not in source
+    assert "alignedLeftOpeningCorners" in source
+    assert "alignedRightOpeningCorners" in source
+    assert '"left_grasp_patch_span_m", leftGraspPatchSpan' in source
+    assert '"right_grasp_patch_span_m", rightGraspPatchSpan' in source
     assert '"opening_span_m", openingSpan' in source
     assert "Release(movingSide, \"over_tension\")" not in source
 
@@ -162,6 +1484,32 @@ def test_right_leg_colliders_follow_actual_bones():
     assert "Transform toes = bones.RightToes ?? foot;" in source
     assert "item.SetParent(bone, false);" in source
     assert "toe + new Vector3(0, 0, -0.15f)" not in source
+    assert "configuredFootColliderCrossSectionScale" in source
+    assert "ScaleFootCrossSection" in source
+
+
+def test_right_leg_mask_uses_canonical_skin_without_changing_box_colliders():
+    source = Path(
+        "RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs"
+    ).read_text()
+    create_region = source[
+        source.index("private void CreateRegion("):
+        source.index("private float ReadParticleRadius()")
+    ]
+    config = load_config(Path("config/custom_player.yaml"))
+
+    assert "BoxCollider box = item.AddComponent<BoxCollider>();" in create_region
+    assert "obiCollider.sourceCollider = box;" in create_region
+    assert "EnsureRightLegMaskRenderer();" in source
+    assert "BuildRightLegMaskMesh(" in create_region
+    assert "source.boneWeights" in create_region
+    assert "bones[index].IsChildOf(rightLowerLeg)" in create_region
+    assert "SkinnedMeshRenderer renderer" in create_region
+    assert "renderer.bones = source.bones;" in create_region
+    assert "renderer.rootBone = source.rootBone;" in create_region
+    assert "attr.ID = RightLegMaskId;" in create_region
+    assert "CreateRoundedMaskProxy" not in source
+    assert config["scene"]["human_leg_mask_ids"] == [2099]
 
 
 def test_human_task_pose_preserves_rig_bone_lengths():
@@ -214,6 +1562,29 @@ def test_canonical_human_pose_contains_terminal_bones():
     assert "AssetDatabase.CreateAsset(pose, CanonicalHumanPosePath);" in build_source
 
 
+def test_human_chair_lock_restores_world_anchors_and_reports_drift():
+    source = Path(
+        "RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs"
+    ).read_text()
+
+    assert "EnforceHumanChairLock();" in source
+    assert "bodyRoot.position = lockedHumanRootPosition;" in source
+    assert "visualRightHip = lockedVisualRightHip;" in source
+    assert "chair.transform.position = lockedChairPosition;" in source
+    assert '"human_root_drift_m"' in source
+    assert '"human_anchor_drift_m"' in source
+    restore = source.split(
+        "public void RestoreHumanChairWorldPose", 1
+    )[1].split("public void LockHumanAndChair", 1)[0]
+    assert "rigidTaskPoseTranslation = true;" in restore
+    assert "UpdateCanonicalHumanTaskPose();" in restore
+    diagnostics = source.split(
+        "public void GetVisualDiagnostics", 1
+    )[1].split("[RFUAPI]", 1)[0]
+    assert "if (sockHuman != null)" in diagnostics
+    assert '{ "locked", humanChairLocked }' in diagnostics
+
+
 def test_human_task_pose_rejects_nonfinite_plantarflexion():
     cloth = SockClothAttr(FakeEnvironment(), 1200)
     with pytest.raises(ValueError, match="plantarflexion"):
@@ -240,6 +1611,7 @@ def test_sock_cloth_commands_match_unity_contract():
     cloth = SockClothAttr(env, 1200)
     cloth.request_particles()
     cloth.request_particle_velocities()
+    cloth.stabilize_constraints()
     cloth.configure(
         stretch_compliance=0.0,
         bend_compliance=0.01,
@@ -258,18 +1630,46 @@ def test_sock_cloth_commands_match_unity_contract():
         rotational_compliance=1000000.0,
         break_threshold=20.0,
         slip_constraint_error_m=0.20,
+        slip_minimum_opening_span_m=0.09,
         slip_opening_span_m=0.11,
         slip_consecutive_steps=2,
         maximum_particles_per_side=2,
         cuff_insertion_depth_m=0.03,
+        grasp_thickness_half_width_m=0.02,
+        opening_rim_span_maximum_stretch=1.20,
+        opening_rim_span_shape_stiffness=0.25,
+    )
+    cloth.configure_opening_body_barrier(
+        enabled=True,
+        clearance_m=0.008,
+        stiffness=1.0,
+        maximum_correction_m=0.03,
+    )
+    cloth.arm_opening_body_barrier_predictive_skin()
+    cloth.configure_opening_rim_elastic_band(
+        mode="elastic_band",
+        elastic_maximum_stretch=1.9,
+        restoring_stiffness=0.1,
+        shape_release_steps=30,
+        collapse_guard_ratio=0.7,
+        jaw_line_grasp=True,
     )
     cloth.set_grasp_targets(2201, 2202)
     cloth.align_grasp_targets_to_opening()
     cloth.clamp_grasp_target_span(0.115)
     cloth.align_sock_opening_to_grasp_targets([0.0, 0.5, 0.6])
+    cloth.align_sock_opening_to_grasp_targets_and_grasp(
+        [0.0, 0.5, 0.6], 0.03
+    )
+    cloth.align_sock_opening_to_grasp_plate_and_grasp(
+        0.03, 30.0, rotate_away_from_toe=True
+    )
+    cloth.configure_initial_tip_guidance(0.048, 0.142, 0.091, 0.015)
+    cloth.release_initial_tip_guidance()
+    cloth.rotate_grasped_opening_about_span(-1.0)
     cloth.ignore_robot_human_rigid_collisions(1100)
     cloth.ignore_non_gripper_robot_human_rigid_collisions(1100)
-    cloth.configure_right_leg_colliders(2000)
+    cloth.configure_right_leg_colliders(2000, 0.8)
     cloth.translate_human_and_ik([0.1, 0.0, -0.2])
     cloth.freeze_human_right_toe_at([0.0, 0.5, 0.6])
     cloth.configure_human_task_pose(
@@ -281,7 +1681,7 @@ def test_sock_cloth_commands_match_unity_contract():
     cloth.set_task_right_toe_position_articulated([0.1, 0.5, 0.8])
     cloth.set_foot_clearance_target(0.1, 2301)
     cloth.stop_foot_clearance_tracking()
-    cloth.lock_human_and_chair()
+    cloth.lock_human_and_chair(2301)
     cloth.arm_slip_detection()
     cloth.configure_mask_proxy_cameras()
     cloth.request_configuration()
@@ -299,6 +1699,7 @@ def test_sock_cloth_commands_match_unity_contract():
     assert env.messages == [
         (1200, "GetParticles"),
         (1200, "GetParticleVelocities"),
+        (1200, "StabilizeClothConstraints"),
         (
             1200,
             "ConfigureSock",
@@ -313,6 +1714,12 @@ def test_sock_cloth_commands_match_unity_contract():
             0.95,
             8,
             20,
+            True,
+            0.0,
+            1.0,
+            1.5,
+            8,
+                1.1,
         ),
         (
             1200,
@@ -321,18 +1728,58 @@ def test_sock_cloth_commands_match_unity_contract():
             1000000.0,
             20.0,
             0.20,
+            0.09,
             0.11,
             2,
             2,
             0.03,
+            0.02,
+            1.05,
+            0.75,
+            0.5,
+            0.01,
+            1.20,
+            0.25,
+        ),
+        (1200, "ConfigureOpeningBodyBarrier", True, 0.008, 1.0, 0.03),
+        (1200, "ArmOpeningBodyBarrierPredictiveSkin", True),
+        (
+            1200,
+            "ConfigureOpeningRimElasticBand",
+            True,
+            1.9,
+            0.1,
+            30,
+            0.7,
+            True,
         ),
         (1200, "SetGraspTargets", 2201, 2202),
         (1200, "AlignGraspTargetsToOpening"),
         (1200, "ClampGraspTargetSpan", 0.115),
         (1200, "AlignSockOpeningToGraspTargets", 0.0, 0.5, 0.6),
+        (
+            1200,
+            "AlignSockOpeningToGraspTargetsAndGrasp",
+            0.0,
+            0.5,
+            0.6,
+            0.03,
+        ),
+        (1200, "AlignSockOpeningToGraspPlateAndGrasp", 0.03, 30.0, True),
+        (
+            1200,
+            "ConfigureInitialTipGuidance",
+            0.048,
+            0.142,
+            0.091,
+            0.015,
+            1.0,
+        ),
+        (1200, "ReleaseInitialTipGuidance"),
+        (1200, "RotateGraspedOpeningAboutSpan", -1.0),
         (1200, "IgnoreRobotHumanRigidCollisions", 1100),
         (1200, "IgnoreNonGripperRobotHumanRigidCollisions", 1100),
-        (1200, "ConfigureRightLegColliders", 2000),
+        (1200, "ConfigureRightLegColliders", 2000, 0.8),
         (1200, "TranslateHumanAndIK", 0.1, 0.0, -0.2),
         (1200, "FreezeHumanRightToeAt", 0.0, 0.5, 0.6),
         (
@@ -354,7 +1801,7 @@ def test_sock_cloth_commands_match_unity_contract():
         (1200, "SetTaskRightToePositionArticulated", 0.1, 0.5, 0.8),
         (1200, "SetFootClearanceTarget", 0.1, 2301),
         (1200, "StopFootClearanceTracking"),
-        (1200, "LockHumanAndChair"),
+        (1200, "LockHumanAndChair", 2301),
         (1200, "ArmSlipDetection", True),
         (1200, "ConfigureMaskProxyCameras", 31),
         (1200, "GetClothConfiguration"),
@@ -437,6 +1884,20 @@ def test_scene_geometry_is_typed_and_fail_closed():
             "opening_center": [0, 0, 0],
             "opening_normal": [1, 0, 0],
             "opening_outward_normal": [-1, 0, 0],
+            "grasp_plate_outward_normal": [-1, 0, 0],
+            "opening_plate_normal_alignment": 0.99,
+            "plate_downward_alignment": 0.75,
+            "opening_ring_inward_normal": [1, 0, 0],
+            "opening_ring_plate_alignment": 0.985,
+            "opening_ring_plane_rms_m": 0.001,
+            "opening_ring_plane_maximum_m": 0.002,
+            "opening_ring_maximum_sag_m": 0.003,
+            "opening_ring_area_m2": 0.004,
+            "opening_ring_area_retention": 0.95,
+            "sock_tip_center": [0.01, 0.12, 0.20],
+            "sock_tip_span_axis_offset_m": 0.01,
+            "sock_tip_cross_axis_offset_m": 0.12,
+            "sock_tip_opening_depth_m": 0.20,
             "opening_to_toe_alignment": 1.0,
             "left_cuff_insertion_depth_m": 0.03,
             "right_cuff_insertion_depth_m": 0.03,
@@ -448,16 +1909,33 @@ def test_scene_geometry_is_typed_and_fail_closed():
             "right_leg_raise_degrees": 90,
             "left_grasp_position": [0, -0.04, 0],
             "right_grasp_position": [0, 0.04, 0],
+            "left_grasp_thickness_axis": [0, 0, 1],
+            "right_grasp_thickness_axis": [0, 0, 1],
+            "left_grasp_inward_axis": [1, 0, 0],
+            "right_grasp_inward_axis": [1, 0, 0],
         }
     )
     assert geometry.foot_to_opening_plane_m == pytest.approx(0.1)
     assert geometry.opening_target_normal == (1.0, 0.0, 0.0)
     assert geometry.opening_outward_normal == (-1.0, 0.0, 0.0)
+    assert geometry.grasp_plate_outward_normal == (-1.0, 0.0, 0.0)
+    assert geometry.opening_plate_normal_alignment == pytest.approx(0.99)
+    assert geometry.plate_downward_alignment == pytest.approx(0.75)
+    assert geometry.opening_ring_inward_normal == (1.0, 0.0, 0.0)
+    assert geometry.opening_ring_plate_alignment == pytest.approx(0.985)
+    assert geometry.opening_ring_maximum_sag_m == pytest.approx(0.003)
+    assert geometry.opening_ring_area_retention == pytest.approx(0.95)
+    assert geometry.sock_tip_center == (0.01, 0.12, 0.20)
+    assert geometry.sock_tip_span_axis_offset_m == pytest.approx(0.01)
+    assert geometry.sock_tip_cross_axis_offset_m == pytest.approx(0.12)
+    assert geometry.sock_tip_opening_depth_m == pytest.approx(0.20)
     assert geometry.opening_to_toe_alignment == pytest.approx(1.0)
     assert geometry.left_cuff_insertion_depth_m == pytest.approx(0.03)
     assert geometry.sock_body_direction == (0.0, -1.0, 0.0)
     assert geometry.sock_body_gravity_alignment == pytest.approx(0.95)
     assert geometry.opening_span_m == pytest.approx(0.08)
+    assert geometry.left_grasp_thickness_axis == (0.0, 0.0, 1.0)
+    assert geometry.right_grasp_inward_axis == (1.0, 0.0, 0.0)
     with pytest.raises(ValueError, match="valid"):
         SceneGeometry.from_mapping({"valid": False})
 
@@ -470,11 +1948,21 @@ def test_grasp_configuration_rejects_invalid_thresholds():
             rotational_compliance=0.01,
             break_threshold=10,
             slip_constraint_error_m=0,
+            slip_minimum_opening_span_m=0.09,
             slip_opening_span_m=0.085,
             slip_consecutive_steps=3,
             maximum_particles_per_side=2,
             cuff_insertion_depth_m=0.03,
+            grasp_thickness_half_width_m=0.02,
         )
+
+
+@pytest.mark.parametrize("scale", [0.0, -0.1, 1.01, np.nan, np.inf])
+def test_foot_collider_scale_rejects_invalid_values(scale):
+    cloth = SockClothAttr(FakeEnvironment(), 1200)
+
+    with pytest.raises(ValueError, match="foot_cross_section_scale"):
+        cloth.configure_right_leg_colliders(2000, scale)
 
 
 def test_particle_arrays_are_finite_n_by_three():

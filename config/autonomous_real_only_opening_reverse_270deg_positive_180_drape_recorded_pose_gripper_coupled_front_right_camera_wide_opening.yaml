@@ -1,0 +1,12 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_recorded_pose_gripper_coupled_front_right_camera.yaml
+
+scene:
+  grasp_alignment:
+    # Widen the held rectangular cuff along the line between both grippers.
+    target_span_m: 0.115
+
+obi:
+  expected:
+    # Preserve the wider span during gripper-coupled rollout instead of
+    # clamping it back to the 0.110 m base-profile value.
+    slip_opening_span_m: 0.115

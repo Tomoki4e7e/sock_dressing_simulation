@@ -1,0 +1,5 @@
+extends: autonomous_real_only_opening_reverse_270deg_positive_180_drape_recorded_pose_gripper_coupled_head_camera_frame_zero_physics_single_centroid_fast_policy_human_chair_away2cm_down12cm_plantar20deg_left_camera_foot_axis_vertical_opening_preserved.yaml
+
+obi:
+  expected:
+    grasp_thickness_half_width_m: 0.0375
