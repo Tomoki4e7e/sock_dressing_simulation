@@ -241,7 +241,7 @@ def main():
     (directory/'live_frame_diagnostics.jsonl').write_text('')
     executable=resolve_package_path(config['rcareworld']['executable']).resolve()
     wrapper=directory/'player.sh'
-    wrapper.write_text('#!/bin/bash\nexec '+shlex.quote(str(executable))+
+    wrapper.write_text('#!/bin/bash\nexport SOCK_CONTACT_PROGRESS_PATH='+shlex.quote(str((directory/'contact-progress.log').resolve()))+'\nexec '+shlex.quote(str(executable))+
         ' -logFile '+shlex.quote(str((directory/'player.log').resolve()))+' "$@"\n')
     wrapper.chmod(0o755)
     config['rcareworld']['executable']=str(wrapper.resolve())
