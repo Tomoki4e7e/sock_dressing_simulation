@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Any, Dict, Iterable, Mapping, Sequence, Tuple
 
 import numpy as np
@@ -18,6 +19,18 @@ REQUIRED_COLLIDER_REGIONS = (
     "robot",
     "chair",
 )
+
+
+def validate_prepared_state_readback(reference: str, observed: str) -> Dict[str, Any]:
+    """Verify the native restore by recapturing state before material changes."""
+    expected,actual=json.loads(reference),json.loads(observed)
+    checks={key:expected.get(key) is not None and expected[key]==actual.get(key) for key in (
+        "positions","previousPositions","velocities","angularVelocities","orientations","previousOrientations")}
+    for keys,values in (("restKeys","restValues"),("rimKeys","rimValues"),("barrierDepthKeys","barrierDepthValues")):
+        checks[keys]=dict(zip(expected[keys],expected[values]))==dict(zip(actual.get(keys,[]),actual.get(values,[])))
+    for key in ("barrierInside","barrierContacts","predictiveContacts"):
+        checks[key]=set(expected[key])==set(actual.get(key,[]))
+    return {"ok":all(checks.values()),"checks":checks,"source":"native_state_recapture"}
 
 
 def _finite_vectors(value: Any, width: int, name: str) -> np.ndarray:
@@ -599,6 +612,12 @@ class SockClothAttr:
     def request_particles(self) -> None:
         self._send_data("GetParticles")
 
+    def request_prepared_state(self) -> None:
+        self._send_data("GetPreparedSockState")
+
+    def restore_prepared_state(self, snapshot: str) -> None:
+        self._send_data("RestorePreparedSockState", snapshot)
+
     def particles(self) -> np.ndarray:
         return _finite_vectors(self.data.get("particles", []), 3, "particles")
 
@@ -657,6 +676,17 @@ class SockClothAttr:
             int(strain_limit_iterations),
             float(opening_body_maximum_stretch),
         )
+
+    def configure_foot_conforming(self, *, surface_mode: str = "local",
+                                  bulk_transport: bool = False, fixed_grasp_offsets: bool = True) -> None:
+        if surface_mode not in ("local", "legacy"):
+            raise ValueError("unknown foot surface mode")
+        self._send_data("ConfigureFootConforming", surface_mode, bool(bulk_transport), bool(fixed_grasp_offsets))
+
+    def configure_foot_collider_shape(self, mode: str) -> None:
+        if mode not in ("boxes", "skin-hull"):
+            raise ValueError("unknown foot collider shape")
+        self._send_data("ConfigureFootColliderShape", mode)
 
     def configure_grasp(
         self,

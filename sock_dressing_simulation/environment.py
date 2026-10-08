@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import copy
+import inspect
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
@@ -14,6 +16,12 @@ class SockDressingEnv:
 
     def __init__(self, config: Mapping, backend: Optional[Any] = None):
         self.config = config
+        self._rollout_material_report = None
+        self._cloth_contact_rollout_started = False
+        profile = config.get("foot_conforming_rollout", {})
+        if profile.get("post_preparation_material"):
+            config["obi"]["expected"] = copy.deepcopy(profile["preparation_parameters"])
+            config["obi"]["requested"] = copy.deepcopy(config["obi"]["expected"])
         self._env = backend
         self.robot = None
         self.human = None
@@ -1693,7 +1701,7 @@ class SockDressingEnv:
         observation.update(self.robot_signals())
         return observation
 
-    def _observe_native_custom_player(self) -> Dict[str, Any]:
+    def _request_native_cloth_observation(self) -> None:
         self.sock_cloth.request_particles()
         self.sock_cloth.request_particle_velocities()
         self.sock_cloth.request_configuration()
@@ -1710,10 +1718,15 @@ class SockDressingEnv:
         self.sock_cloth.request_contacts()
         if hasattr(self.robot, "GetJointInverseDynamicsForce"):
             self.robot.GetJointInverseDynamicsForce()
+
+    def _observe_native_custom_player(self) -> Dict[str, Any]:
+        synchronized = bool(getattr(self, "_cloth_contact_rollout_started", False))
+        if not synchronized:
+            self._request_native_cloth_observation()
         self._env.step()
-        cloth = dict(self.sock_cloth.data)
-        robot_data = dict(getattr(self.robot, "data", {}) or {})
-        contacts = list(cloth.get("cloth_contacts", []))
+        if not synchronized:
+            cloth = dict(self.sock_cloth.data)
+            robot_data = dict(getattr(self.robot, "data", {}) or {})
         camera = self._capture_camera() if self.camera is not None else None
         recording = (
             self._capture_recording_camera()
@@ -1725,6 +1738,21 @@ class SockDressingEnv:
             if self.side_recording_camera is not None
             else None
         )
+        if synchronized:
+            # Keep the baseline's physical observation steps above. Capture
+            # all views again at their common final time without more physics;
+            # otherwise front/side videos describe different cloth states.
+            camera=self._capture_camera(simulate=False) if self.camera is not None else None
+            recording=self._capture_recording_camera(simulate=False) if self.recording_camera is not None else None
+            side_recording=self._capture_side_recording_camera(simulate=False) if self.side_recording_camera is not None else None
+            # Camera capture advances the original fixed physics steps. Read
+            # geometry afterwards without advancing time, so reported strain,
+            # contact and grasp state describe the final rendered state.
+            self._request_native_cloth_observation()
+            self._env.step(simulate=False)
+            cloth = dict(self.sock_cloth.data)
+            robot_data = dict(getattr(self.robot, "data", {}) or {})
+        contacts = list(cloth.get("cloth_contacts", []))
         collision_pairs = sorted(
             {
                 (int(self.sock_cloth.id), int(item["collider_id"]))
@@ -3075,23 +3103,23 @@ class SockDressingEnv:
             **diagnostics,
         }
 
-    def _capture_camera(self) -> Dict[str, np.ndarray]:
+    def _capture_camera(self, simulate: bool = True) -> Dict[str, np.ndarray]:
         camera = self.config["camera"]
         scene = self.config["scene"]
         width, height = int(camera["width"]), int(camera["height"])
         fov = float(camera["fov"])
         near, far = float(camera["depth_near_m"]), float(camera["depth_far_m"])
         self.camera.GetRGB(width, height, fov)
-        self._env.step()
+        self._env.step(simulate=simulate)
         rgb = self._decode(self.camera.data["rgb"], "RGB")
         self.camera.GetDepth(near, far, width, height, fov)
-        self._env.step()
+        self._env.step(simulate=simulate)
         depth = self._decode(self.camera.data["depth"], "L").astype(np.uint8)
         self.camera.GetID(width, height, fov)
-        self._env.step()
+        self._env.step(simulate=simulate)
         instance_mask = self._decode(self.camera.data["id_map"], "RGB")
         sock_mask = self._amodal_mask(
-            int(self.config["assets"]["sock_id"]), width, height, fov
+            int(self.config["assets"]["sock_id"]), width, height, fov, simulate=simulate
         )
         leg_mask_ids = [
             int(value) for value in scene.get("human_leg_mask_ids", [])
@@ -3105,7 +3133,7 @@ class SockDressingEnv:
             leg_mask_ids = [int(scene["human_id"])]
         leg_mask = np.zeros((height, width), dtype=bool)
         for target_id in leg_mask_ids:
-            leg_mask |= self._amodal_mask(target_id, width, height, fov)
+            leg_mask |= self._amodal_mask(target_id, width, height, fov, simulate=simulate)
         return {
             "rgb": rgb,
             "camera_depth": depth,
@@ -3120,23 +3148,23 @@ class SockDressingEnv:
             "raw": dict(self.camera.data),
         }
 
-    def _capture_recording_camera(self) -> Dict[str, np.ndarray]:
+    def _capture_recording_camera(self, simulate: bool = True) -> Dict[str, np.ndarray]:
         camera = self.config["camera"]
         width, height = int(camera["width"]), int(camera["height"])
         fov = float(camera["fov"])
         self.recording_camera.GetRGB(width, height, fov)
-        self._env.step()
+        self._env.step(simulate=simulate)
         return {
             "rgb": self._decode(self.recording_camera.data["rgb"], "RGB"),
             "raw": dict(self.recording_camera.data),
         }
 
-    def _capture_side_recording_camera(self) -> Dict[str, np.ndarray]:
+    def _capture_side_recording_camera(self, simulate: bool = True) -> Dict[str, np.ndarray]:
         camera = self.config["camera"]
         width, height = int(camera["width"]), int(camera["height"])
         fov = float(camera["fov"])
         self.side_recording_camera.GetRGB(width, height, fov)
-        self._env.step()
+        self._env.step(simulate=simulate)
         return {
             "rgb": self._decode(
                 self.side_recording_camera.data["rgb"], "RGB"
@@ -3234,8 +3262,78 @@ class SockDressingEnv:
     def begin_cloth_contact_rollout(self) -> None:
         """Enable continuous contact after the prepared drape pose is established."""
         if self.sock_cloth is not None:
+            profile = self.config.get("foot_conforming_rollout", {})
+            if profile.get("collider_shape", "boxes") != "boxes":
+                self.sock_cloth.configure_foot_collider_shape(profile["collider_shape"])
+            self.sock_cloth.configure_foot_conforming(
+                surface_mode=profile.get("surface_mode", "local"),
+                bulk_transport=profile.get("transport", "local") == "bulk",
+                fixed_grasp_offsets=bool(profile.get("fixed_grasp_offsets", True)),
+            )
+            if profile.get("post_preparation_material"):
+                from .sock_cloth import validate_configuration,validate_prepared_state_readback
+                self.sock_cloth.request_prepared_state()
+                self._env.step(simulate=False)
+                prepared_state=self.sock_cloth.data.get("prepared_sock_state")
+                if not prepared_state:
+                    raise RuntimeError("Native preparation state capture unavailable")
+                self._preparation_attempt_state=prepared_state
+                restored=None
+                state_validation={"ok":True,"source":"original_preparation_capture"}
+                if profile.get("prepared_state_path"):
+                    prepared_state=Path(profile["prepared_state_path"]).read_text().strip()
+                    self.sock_cloth.restore_prepared_state(prepared_state)
+                    self._env.step(simulate=False)
+                    restored=self.sock_cloth.data.get("prepared_state_restore_report")
+                    if not restored or not restored.get("ok"):
+                        raise RuntimeError("Canonical preparation restore rejected")
+                    self.sock_cloth.request_prepared_state()
+                    self._env.step(simulate=False)
+                    recaptured=self.sock_cloth.data.get("prepared_sock_state")
+                    state_validation=validate_prepared_state_readback(prepared_state,recaptured) if recaptured else {"ok":False}
+                    if not state_validation["ok"]:
+                        raise RuntimeError(f"Canonical preparation readback differs: {state_validation}")
+                    self.sock_cloth.request_particles()
+                    self._env.step(simulate=False)
+                # Use the cached preparation readback: another GetParticles
+                # request would itself project constraints before arming.
+                preparation_particles = self.sock_cloth.particles().tolist()
+                parameters = profile["parameters"]
+                signature = inspect.signature(self.sock_cloth.configure)
+                self.sock_cloth.configure(**{k: parameters[k] for k in signature.parameters if k in parameters})
+                self._env.step(simulate=False)
+                self.sock_cloth.request_configuration()
+                self._env.step(simulate=False)
+                actual = self.sock_cloth.configuration()
+                check = validate_configuration(actual, parameters)
+                iterations = actual.get("effective_constraint_iterations", {})
+                if set(iterations) != {"distance", "bending", "collision", "particle_collision", "pin"} or any(
+                    value != parameters["solver_iterations"] for value in iterations.values()
+                ):
+                    raise RuntimeError(f"coupled constraint iteration settings mismatch: {iterations}")
+                if not check["ok"]:
+                    raise RuntimeError(f"rollout material settings mismatch: {check}")
+                self._rollout_material_report = {
+                    "prepared_state_json": prepared_state,
+                    "prepared_state_restore": restored,
+                    "prepared_state_readback_validation": state_validation,
+                    "requested": dict(parameters), "actual": dict(actual), "validation": check,
+                    "preparation_parameters": copy.deepcopy(profile["preparation_parameters"]),
+                    "last_reported_preparation_particles_world": preparation_particles,
+                    "material_transition_simulated_steps": 0,
+                }
+                self.config["obi"]["expected"] = copy.deepcopy(parameters)
+                self.config["obi"]["requested"] = copy.deepcopy(parameters)
+                self.config["obi"]["substeps"] = parameters["substeps"]
+                self.config["obi"]["solver_iterations"] = parameters["solver_iterations"]
             self.sock_cloth.arm_foot_collision_safety(True)
+            if profile.get("collider_shape", "boxes") != "boxes":
+                # Newly created mesh colliders must inherit the existing
+                # robot/human pair policy before any Physics.Simulate call.
+                # These commands share the same non-simulating flush as arming.
+                self._configure_robot_human_rigid_collisions()
             self._env.step(simulate=False)
+            self._cloth_contact_rollout_started = True
 
     def advance_physics(self, steps: int) -> None:
         """Advance additional fixed steps after a command without changing its target."""
@@ -3295,9 +3393,9 @@ class SockDressingEnv:
             "release_reason": state.release_reason,
         }
 
-    def _amodal_mask(self, target_id: int, width: int, height: int, fov: float) -> np.ndarray:
+    def _amodal_mask(self, target_id: int, width: int, height: int, fov: float, simulate: bool = True) -> np.ndarray:
         self.camera.GetAmodalMask(target_id, width, height, fov)
-        self._env.step()
+        self._env.step(simulate=simulate)
         image = self._decode(self.camera.data["amodal_mask"], "L")
         return image > 0
 

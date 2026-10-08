@@ -17,6 +17,7 @@ from .joints import JointMap
 from .perception import SAMDepthPerception, select_prompt_points
 from .policy import SAMDAMSARNNPolicy
 from .scenario import scenario_from_config
+from .quality import rigid_collision_stop_required, RIGID_COLLISION_STOP_NUMERICAL_TOLERANCE_M
 
 
 def run_demo(
@@ -146,6 +147,7 @@ def run_demo(
             "cartesian_pull_m": reference_pull,
         },
         "post_pre_drape_prompt_mode": post_drape_prompt_mode,
+        "rigid_collision_stop_numerical_tolerance_m": RIGID_COLLISION_STOP_NUMERICAL_TOLERANCE_M,
     }
     stop_reason = "max_steps"
     frames = 0
@@ -534,7 +536,12 @@ def run_demo(
                             "video": str(pre_drape_video_path),
                         }
                     )
-                    if not pre_drape_ok:
+                    diagnostic_continue = bool(config.get("foot_conforming_rollout", {}).get(
+                        "diagnostic_continue_failed_preparation", False))
+                    if not pre_drape_ok and diagnostic_continue:
+                        pre_drape_report["continued_for_diagnostics"] = True
+                        pre_drape_report["excluded_from_best_selection"] = True
+                    if not pre_drape_ok and not diagnostic_continue:
                         raise RuntimeError(
                             "pre-inference drape geometry QA failed: "
                             + json.dumps(
@@ -881,16 +888,12 @@ def run_demo(
                                 int(rigid_qa.get("ignored_pair_count", 0)) > 0
                                 and not allow_ignored_rigid_pairs
                             )
-                            or float(
+                            or rigid_collision_stop_required(float(
                                 rigid_qa.get(
                                     "maximum_enabled_penetration_m",
-                                    rigid_qa.get(
-                                        "maximum_penetration_m",
-                                        0.0,
-                                    ),
+                                    rigid_qa.get("maximum_penetration_m", 0.0),
                                 )
-                            )
-                            > maximum_penetration
+                            ), maximum_penetration)
                         )
                     ):
                         raise RuntimeError(

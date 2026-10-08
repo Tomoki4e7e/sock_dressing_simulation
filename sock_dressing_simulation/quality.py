@@ -8,6 +8,15 @@ import numpy as np
 from PIL import Image
 
 
+# 0.1 micrometre: single-precision PhysX boundary roundoff only.
+RIGID_COLLISION_STOP_NUMERICAL_TOLERANCE_M = 1e-7
+
+
+def rigid_collision_stop_required(penetration_m: float, limit_m: float) -> bool:
+    return bool(not np.isfinite(penetration_m) or penetration_m < 0 or
+                penetration_m > limit_m + RIGID_COLLISION_STOP_NUMERICAL_TOLERANCE_M)
+
+
 def assess_observation_quality(
     cameras: Sequence[Mapping[str, np.ndarray]],
     *,

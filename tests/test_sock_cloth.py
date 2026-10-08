@@ -1119,14 +1119,14 @@ def test_custom_player_models_cuff_as_elastic_band():
     ]
     assert "BlueprintRestLength(first, second, blueprint)" in material
     limiter = source[
-        source.index("private void LimitStructuralStretch()"):
+        source.index("private FootMaterialStencil MaterialStencil("):
         source.index("private void EnforceGraspParticlePositions()")
     ]
     assert "MaterialRestLength(" in limiter
     assert "openingRimElasticMaximumStretch" in limiter
     assert "openingRimElasticRestoringStiffness" in limiter
     rim = source[
-        source.index("private void EnforceOpeningRimPlane()"):
+        source.index("private void EnforceOpeningRimPlane("):
         source.index("private bool IsOpeningRimSpanParticle(")
     ]
     # The plane term keeps the opening angle; the in-plane term is released
@@ -1196,20 +1196,20 @@ def test_custom_player_projects_strain_before_collision_solving():
         "private void OnSolverCollision(", 1
     )[0]
     assert "SyncRightLegCollidersToBones();" in callback
-    assert "LimitStructuralStretch();" in callback
-    assert "ApplyGraspCenterTranslation();" in callback
+    assert 'TraceFootStage("strain_before_obi", LimitStructuralStretch);' in callback
+    assert 'TraceFootStage("grasp_transport", ApplyGraspCenterTranslation);' in callback
     assert callback.index(
-        "ApplyGraspCenterTranslation();"
-    ) < callback.index("LimitStructuralStretch();")
+        'TraceFootStage("grasp_transport", ApplyGraspCenterTranslation);'
+    ) < callback.index('TraceFootStage("strain_before_obi", LimitStructuralStretch);')
     end_callback = source.split("private void OnSolverSimulationEnd(", 1)[1].split(
         "private Dictionary<string, object> GeometricFootPenetration()", 1
     )[0]
-    assert "LimitStructuralStretch();" in end_callback
-    assert "ApplyGraspCenterTranslation();" not in end_callback
-    assert "EnforceFootGeometricDepenetration();" in end_callback
+    assert 'TraceFootStage("strain_after_obi", LimitStructuralStretch);' in end_callback
+    assert "ApplyGraspCenterTranslation" not in end_callback
+    assert 'TraceFootStage("contact_after_obi", () => EnforceFootGeometricDepenetration());' in end_callback
     assert end_callback.index(
-        "LimitStructuralStretch();"
-    ) < end_callback.index("EnforceFootGeometricDepenetration();")
+        'TraceFootStage("strain_after_obi", LimitStructuralStretch);'
+    ) < end_callback.index('TraceFootStage("contact_after_obi", () => EnforceFootGeometricDepenetration());')
     late_update = source.split("private void LateUpdate()", 1)[1].split(
         "[RFUAPI]", 1
     )[0]
@@ -1258,7 +1258,7 @@ def test_opening_body_seam_and_foot_projection_are_explicit_constraints():
         "private void LimitStructuralStretch()", 1
     )[1].split("private void EnforceGraspParticlePositions()", 1)[0]
     foot_projection = source.split(
-        "private void EnforceFootGeometricDepenetration(", 1
+        "private int EnforceFootGeometricDepenetration(", 1
     )[1].split("private static List<Vector3> FootSurfaceSamples(", 1)[0]
 
     assert "bool openingBodyEdge" in limiter
@@ -1373,7 +1373,7 @@ def test_sock_geometry_reports_particle_derived_hanging_direction():
     assert "Vector3.Dot(footOffset, openingTargetNormal)" in source
     assert '"sock_body_direction", sockBodyDirection' in source
     assert '"sock_body_gravity_alignment", sockBodyGravityAlignment' in source
-    assert "private void EnforceOpeningBodyBarrier(bool resetMetrics = true)" in source
+    assert "private void EnforceOpeningBodyBarrier(bool resetMetrics = true," in source
     assert "private void UpdateOpeningBodyBarrierContacts()" in source
     assert "private void RecordOpeningBodyBarrierState()" in source
     assert "public void ArmOpeningBodyBarrierPredictiveSkin(" in source
@@ -1382,7 +1382,7 @@ def test_sock_geometry_reports_particle_derived_hanging_direction():
     assert "crossedFromInwardSide" in source
     assert "IsInsideOpeningBarrierRectangle(" in source
     assert source.count("initialTipGuidanceEnabled ||") >= 2
-    assert "EnforceOpeningBodyBarrier(false);" in source
+    assert "EnforceOpeningBodyBarrier(false, frames);" in source
     assert '"opening_body_barrier_violation_count"' in source
     assert '"opening_body_barrier_maximum_penetration_m"' in source
     assert "solver.positions[solverIndex] = aligned;" not in source
@@ -1430,8 +1430,8 @@ def test_grasp_pins_small_inner_cuff_patches_and_leaves_rim_dynamic():
     assert "cloth.tetherConstraintsEnabled = tetherEnabled;" in source
     assert "cloth.tetherCompliance = tetherCompliance;" in source
     assert "cloth.tetherScale = tetherScale;" in source
-    assert "LimitStructuralStretch();" in source
-    assert source.index("LimitStructuralStretch();", source.index("public void GetParticles")) > 0
+    assert 'TraceFootStage("strain_final", LimitStructuralStretch);' in source
+    assert source.index('TraceFootStage("strain_final", LimitStructuralStretch);', source.index("public void GetParticles")) > 0
     assert "solver.positions[cloth.GetParticleRuntimeIndex(i)]" in source
     assert "EnforceGraspParticlePositions();" in source
     assert "EnforceGraspTargetOrientations();" in source
@@ -1443,7 +1443,7 @@ def test_grasp_pins_small_inner_cuff_patches_and_leaves_rim_dynamic():
     assert "rawOpeningAxis.magnitude" in source
     assert "slipOpeningSpan" in source
     assert "grasp.target.TransformPoint(grasp.localOffsets[i])" in source
-    assert "ApplyGraspCenterTranslation();" in source
+    assert 'TraceFootStage("grasp_transport", ApplyGraspCenterTranslation);' in source
     translation = source.split(
         "private void ApplyGraspCenterTranslation()", 1
     )[1].split("private float[] RestDistancesFromOpening", 1)[0]
@@ -1455,7 +1455,7 @@ def test_grasp_pins_small_inner_cuff_patches_and_leaves_rim_dynamic():
     assert "StructuralRestLength(" in source
     assert "if (pinned.Count == 0)" in source
     limiter = source[
-        source.index("private void LimitStructuralStretch"):
+        source.index("private FootMaterialStencil MaterialStencil("):
         source.index("private void EnforceGraspParticlePositions")
     ]
     assert "openingParticles.Contains(edge.x)" in limiter

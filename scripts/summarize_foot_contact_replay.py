@@ -20,14 +20,34 @@ def export_diagnostics(metadata_path: Path, target: Path):
     for frame, qa in enumerate(metadata.get('dressing_quality_by_frame', [])):
         record = dict(frame=frame)
         record.update(qa.get('foot_collision_safety', {}))
+        for key,value in list(record.items()):
+            if isinstance(value,(dict,list)):
+                record[key]=json.dumps(value,sort_keys=True)
         for key in ['geometric_maximum_cloth_foot_penetration_m',
                     'obi_maximum_cloth_foot_penetration_m', 'surface_containment_ratio',
                     'cuff_progress_toward_ankle_m', 'foot_contact_count']:
             record[key] = qa.get(key)
+        geometric = qa.get('geometric_foot_penetration', {})
+        # Preserve the historical radius-plus-margin metric alongside the
+        # physical radius metric; predictive discovery is not cloth thickness.
+        for key in ('particle_shell_metric', 'particle_shell_m',
+                    'physical_particle_radius_m',
+                    'maximum_physical_particle_penetration_m'):
+            record['geometric_' + key] = geometric.get(key)
+        sections = {section['name']:section for section in qa.get('sections', [])}
+        for name in ('toes', 'forefoot', 'heel', 'ankle', 'calf'):
+            record[name + '_containment_ratio'] = sections.get(name, {}).get('containment_ratio')
+        record['foot_conformity'] = json.dumps(qa.get('foot_conformity', {}), sort_keys=True)
+        anatomical=qa.get('anatomical_foot_conformity',{})
+        record['anatomical_foot_conformity']=json.dumps(anatomical,sort_keys=True)
+        record['anatomical_surface_containment_ratio']=anatomical.get('surface_containment_ratio')
+        for section in anatomical.get('sections',[]):
+            record['anatomical_'+section['name']+'_containment_ratio']=section.get('containment_ratio')
         material = cloth[frame] if frame < len(cloth) else {}
         record['cloth_quality_ok'] = material.get('ok')
         record['stretch_ok'] = material.get('stretch', {}).get('passes')
         record['circumferential_stretch_proxy'] = material.get('stretch', {}).get('circumferential_stretch_proxy')
+        record['stretch_edge_classes'] = json.dumps(material.get('stretch', {}).get('edge_classes', {}), sort_keys=True)
         records.append(record)
     if records:
         with target.open('w', newline='') as output:
