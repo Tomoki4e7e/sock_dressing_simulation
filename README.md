@@ -204,6 +204,35 @@ unusable for residual training even when all raw modalities are aligned.
 
 ## Phase 4 — AIREC inference demo
 
+`config/real_speed_autonomous40.yaml` approximates the real robot's configured
+0.2 s command interval and speed overrides (arms 0.25, grippers 0.5). It uses
+URDF velocity limits multiplied by those overrides, URDF acceleration limits,
+and an acceleration-limited target update on each 0.02 s fixed step. Native
+articulation velocity caps and moderate drive stiffness/damping are applied
+and read back to limit coupled-joint transient overshoot. This profile replaces
+the per-command `max_delta` limiter during rollout; initialization is unchanged.
+At a prismatic hard stop, outward physical velocity is reconciled to zero
+without changing joint position. Unconstrained velocity is never clipped by
+this reconciliation; raw stop velocities and corrections are retained in the
+fixed-step motion log. `SockDressing.Editor.RealSpeedStopChecks.Run` validates
+both stops, inward motion, and free motion in Unity.
+It does not reproduce a measured robot timing trace or the proprietary online
+controller's interpolation. Observation and recording are read-only, so every
+inference action advances exactly ten fixed steps.
+
+Build a dedicated Player with `scripts/build_custom_player.sh development
+Build/SockDressingPlayer/RealSpeed40`, then run `scripts/replay_foot_contact.py`
+with `--config config/real_speed_autonomous40.yaml --autonomous --device cuda --steps 40
+--physics-video --surface-mode local --transport local --fixed-grasp-offsets
+--post-preparation-material --player-executable
+Build/SockDressingPlayer/RealSpeed40/Player.x86_64 --output-root
+artifacts/phase4/real-speed-autonomous40 --candidate-name <new-run-id>`.
+The existing scene, checkpoint, renderer-mask configuration and task QA remain
+in effect. `scripts/validate_real_speed_demo.py <run-directory>` validates live
+commands, measured joint speeds, 400 physical steps, the 8 s duration, and all
+three decoded MP4 recordings. `joint-motion.jsonl` retains every fixed-step
+target, velocity, acceleration, actual joint state and physics clock.
+
 The `train` command retrains the ShareSet `SAMDAMSARNN` without modifying
 ShareSet. It reads the episode-level split from `dataset_sock.yaml`, validates
 headerless 18-column `angle.csv` and `torque.csv`, and consumes:

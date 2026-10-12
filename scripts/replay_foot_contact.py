@@ -111,7 +111,7 @@ def main():
     parser.add_argument('--steps', type=int, default=100)
     parser.add_argument('--autonomous', action='store_true',
                         help='Generate every command with fresh closed-loop SAMDAMSARNN inference; never load recorded commands')
-    parser.add_argument('--device', choices=('cpu','cuda'), default='cpu')
+    parser.add_argument('--device', choices=('cpu','cuda'), default=None)
     parser.add_argument('--remaining-grid', action='store_true')
     parser.add_argument('--output-root', type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument('--candidate-name')
@@ -162,6 +162,10 @@ def main():
             if result.returncode: raise RuntimeError(f'candidate failed: see {log}')
         return
     config = load_config(args.config)
+    speed_matched = bool(config.get('real_speed', {}).get('enabled', False))
+    args.device = args.device or ('cuda' if speed_matched else 'cpu')
+    if speed_matched and (not args.autonomous or not args.physics_video):
+        raise ValueError('Real-speed profile requires autonomous inference and physics video')
     if config['obi'].get('total_mass_kg') is not None and not args.autonomous:
         raise ValueError('Total-mass override is scoped to the new autonomous run')
     apply_total_cloth_mass(config,args.prepared_state)
@@ -218,7 +222,7 @@ def main():
     native_source_manifest_path = native_source_archive / 'manifest.json'
     native_source_manifest = json.loads(native_source_manifest_path.read_text()) if native_source_manifest_path.exists() else {}
     digest=hashlib.sha256(yaml.safe_dump(config,sort_keys=True).encode())
-    for source in [Path(__file__).resolve(),ROOT/'sock_dressing_simulation/demo.py',
+    for source in [Path(__file__).resolve(),ROOT/'sock_dressing_simulation/real_speed.py',ROOT/'sock_dressing_simulation/demo.py',
             ROOT/'sock_dressing_simulation/quality.py',
             ROOT/'sock_dressing_simulation/environment.py',ROOT/'sock_dressing_simulation/sock_cloth.py',
             ROOT/'RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs',
@@ -262,6 +266,8 @@ def main():
         if expected_library is not None and hashlib.sha256((native_kernel/library).read_bytes()).hexdigest() != expected_library:
             raise RuntimeError('Archived runtime source does not match compiled player: ' + library)
     for source in [Path(__file__).resolve(),
+            ROOT/'sock_dressing_simulation/real_speed.py',
+            ROOT/'RCareUnity/Assets/RCareCommon/Scripts/Attributes/ControllerAttr.cs',
             ROOT/'sock_dressing_simulation/demo.py',
             ROOT/'sock_dressing_simulation/quality.py',
             ROOT/'sock_dressing_simulation/environment.py',
@@ -320,6 +326,7 @@ def main():
     last = {}; side_video = [None]; track_frame = [0]; errors = []; initial_clock = [None]
     foot_views = [None]
     physics_video = [None]
+    speed_rollout = [None]
     commanded_frame = [0]
     inferred_frames = [0]
 
@@ -337,6 +344,9 @@ def main():
                 self._read_only_native_observation = False
         def close(self):
             try:
+                if speed_rollout[0] is not None:
+                    speed_rollout[0].close()
+                    speed_rollout[0] = None
                 if physics_video[0] is not None:
                     physics_video[0].close()
                     physics_video[0] = None
@@ -411,7 +421,14 @@ def main():
             if args.physics_video:
                 from sock_dressing_simulation.physics_video import PhysicsStepRecorder
                 physics_video[0] = PhysicsStepRecorder(self, directory, lambda: commanded_frame[0])
+            if speed_matched:
+                from sock_dressing_simulation.real_speed import SpeedMatchedRollout
+                speed_rollout[0] = SpeedMatchedRollout(self, directory, lambda: commanded_frame[0],
+                    Path(prepared['runtime_urdf']))
+                self._read_only_native_observation = True
         def observe(self):
+            if speed_matched and self._cloth_contact_rollout_started:
+                self._read_only_native_observation = True
             value = super().observe()
             if foot_views[0] is not None:
                 value['foot_views'] = foot_views[0].capture(value['cloth'])
@@ -422,10 +439,19 @@ def main():
             replaying = self._cloth_contact_rollout_started
             if replaying:
                 commanded_frame[0] += 1
+            if speed_matched and replaying:
+                return speed_rollout[0].command(command)
             result = super().command(command, None if replaying and not args.autonomous else previous)
             if replaying:
                 errors.append(float(np.max(np.abs(result-command))))
             return result
+
+        def advance_physics(self, steps):
+            if speed_matched and self._cloth_contact_rollout_started:
+                for _ in range(steps):
+                    speed_rollout[0].step()
+            else:
+                super().advance_physics(steps)
 
     class ReplayPolicy:
         def __init__(self,config,**kwargs):
@@ -479,8 +505,9 @@ def main():
             inferred_frames[0] += 1
             return result
 
+    prepared = prepared_replay_assets(config,directory)
     try:
-        result=run_demo(config,prepared=prepared_replay_assets(config,directory),
+        result=run_demo(config,prepared=prepared,
             output_root=directory,sock_points=None,leg_points=None,max_steps=args.steps,seed=0,
             environment_factory=ReplayEnvironment,
             policy_factory=AutonomousPolicy if args.autonomous else ReplayPolicy,
@@ -508,6 +535,9 @@ def main():
         policy_source='SAMDAMSARNNPolicy' if args.autonomous else 'recorded_applied_commands',
         side_video=str(directory/'side_demo.mp4'))
     metadata['native_player_executable']=str(executable)
+    if speed_matched:
+        metadata['real_speed'] = config['real_speed']
+        metadata['command_contract'] = 'live model output -> joint bounds/mimic -> URDF velocity override and acceleration limits at 0.02 s -> PhysX drive'
     # Keep the baseline preparation values explicitly in the rollout profile,
     # while the saved active expected/requested values match the candidate.
     config['obi']['expected']=copy.deepcopy(parameters)

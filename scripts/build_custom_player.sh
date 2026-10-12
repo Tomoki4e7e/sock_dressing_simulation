@@ -68,6 +68,7 @@ import hashlib,json,shutil,sys
 from pathlib import Path
 root=Path(sys.argv[1]);player=Path(sys.argv[2]);archive=player/'runtime_sources';archive.mkdir(exist_ok=True)
 paths=[root/'RCareUnity/Assets/RCareCommon/Scripts/Main/PlayerMain.cs',
+       root/'RCareUnity/Assets/RCareCommon/Scripts/Attributes/ControllerAttr.cs',
        root/'RCareUnity/Assets/Paid Dependencies/Obi/Scripts/Common/Solver/ObiSolver.cs',
        root/'RCareUnity/Assets/Paid Dependencies/Obi/Scripts/Common/Backends/Burst/Solver/BurstSolverImpl.cs',
        root/'RCareUnity/Assets/SockDressing/Resources/FootSkinHullGeometry.json']
