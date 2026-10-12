@@ -1,0 +1,5 @@
+extends: grasp_contact_diagnostic.yaml
+contact_settling:
+  minimum_steps: 200
+  maximum_steps: 200
+  consecutive_stable_steps: 201

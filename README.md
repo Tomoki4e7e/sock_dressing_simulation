@@ -248,6 +248,15 @@ policy recording starts after settling, with prompts from the settled frame.
 The sock keeps vertex-to-vertex self contact and surface-to-collider external
 contact as separate routes. Extra self-only point simplices never add duplicate
 contacts with feet/jaws; all surface triangles retain their external contacts.
+Within this CPU contact profile, convex MeshColliders use a cached outward
+convex hull and one nearest contact per cloth simplex/collider, rather than
+independent two-sided source-mesh faces. Inside/outside classification uses
+the contact material point, including triangles that cross a solid boundary.
+The inserted cuff patch excludes only its own jaw collision category; free
+cloth, the opposite jaw and foot contacts remain active. Release/disarm restores
+the original filters. Contact diagnostics are emitted after collision callbacks
+in `grasp-substeps.contacts.jsonl`, with the completed step number and world
+positions reconstructed from barycentric coordinates.
 Mass, radius, friction, damping and strain limits stay unchanged. Real-mesh
 paired probes cover the energy injection caused by surface self contacts;
 the native suite also tests an obstacle hitting a triangle interior and routing
@@ -259,7 +268,7 @@ Run `SockDressing.Editor.GraspMotionChecks.Run` in Unity before building a
 dedicated Player. The paired tests include rotation, gravity sag and release,
 as well as stationary/moving/stop/reversal and anchor-collision cases. Run
 `scripts/replay_foot_contact.py --config config/grasp_following_autonomous30.yaml
---autonomous --device cuda --steps 30 --physics-video --surface-mode local
+--autonomous --device cuda --steps 30 --physics-video --foot-views --surface-mode local
 --transport local --fixed-grasp-offsets --post-preparation-material
 --player-executable <dedicated-player>/Player.x86_64 --output-root <new-output>
 --candidate-name <new-run-id>`. Use `--prepared-state <saved-state.json>` to

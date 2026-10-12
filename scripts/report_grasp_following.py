@@ -139,6 +139,10 @@ def verify(directory, regression_path, real_mesh_path=None):
         r['dressing_qa']['foot_collision_safety'].get('external_contact_geometry')=='surface_simplices' and
         r['dressing_qa']['foot_collision_safety'].get('native_collision_points',0)>0 and
         r['dressing_qa']['foot_collision_safety'].get('native_collision_triangles',0)>0 for r in live)
+    checks['convex_solids_and_scoped_grasp_contacts']=len(live)==30 and all(
+        r['dressing_qa']['foot_collision_safety'].get('native_convex_solid_collider_count',0)>0 and
+        r['dressing_qa']['foot_collision_safety'].get('grasp_patch_contact_exclusion')=='inserted_cuff_against_own_jaws' and
+        r['dressing_qa']['foot_collision_safety'].get('diagnostic_ablation_mode')=='none' for r in live)
     checks['no_bulk_cloth_translation']=len(live)==30 and all(
         r['dressing_qa']['foot_collision_safety'].get('bulk_grasp_transport') is False for r in live)
     videos = {}
@@ -188,6 +192,8 @@ def verify(directory, regression_path, real_mesh_path=None):
         + f"\n\n元アンカーからの最大誤差: {1000*max(anchor_errors, default=0):.3f} mm。"
         + f"\n\n開口中心からつま先までの距離: {1000*reaching['initial_distance_m']:.2f} mm → {1000*reaching['final_distance_m']:.2f} mm。"
         + '\n\n自己接触は粒子同士、足・グリッパーとの外部接触は三角形面で解く。'
+        + '凸メッシュは閉じた凸形状として扱い、最近傍の接触点と外向きの法線で解く。'
+        + '把持した挿入部分だけを自身の指との接触から除外し、解除時に復元する。'
         + '操作中のアンカーのグリッパー相対姿勢を保持し、準備用の矩形・平面拘束を解除した。'
         + '重力・既存減衰による静止待ちは settling/ に別記録し、30step推論区間に含めない。'
         + '\n\n50 fpsの物理時間側面映像: [side_physics_50fps.mp4](side_physics_50fps.mp4)。'

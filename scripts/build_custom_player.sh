@@ -75,9 +75,12 @@ paths=[root/'RCareUnity/Assets/RCareCommon/Scripts/Main/PlayerMain.cs',
        root/'RCareUnity/Assets/Paid Dependencies/Obi/Scripts/Common/Backends/Burst/Constraints/Pin/BurstPinConstraintsBatch.cs',
        root/'RCareUnity/Assets/Paid Dependencies/Obi/Scripts/Common/Backends/Burst/DataStructures/ParticleGrid.cs',
        root/'RCareUnity/Assets/Paid Dependencies/Obi/Scripts/Common/Backends/Burst/Collisions/BurstColliderWorld.cs',
+       root/'RCareUnity/Assets/Paid Dependencies/Obi/Scripts/Common/Backends/Burst/Collisions/BurstTriangleMesh.cs',
+       root/'RCareUnity/Assets/Paid Dependencies/Obi/Scripts/Common/Collisions/ColliderTrackers/Trackers3D/ObiMeshShapeTracker.cs',
+       root/'RCareUnity/Assets/Paid Dependencies/Obi/Scripts/Common/Collisions/ColliderTrackers/Trackers3D/ObiConvexCollisionMesh.cs',
        root/'RCareUnity/Assets/SockDressing/Resources/FootSkinHullGeometry.json']
 paths += [root/'RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi'/name for name in
-          ['SockClothAttr.cs','SockGraspMotion.cs','SockOpeningRimBending.cs','SockFootCoupledMaterialDirect.cs','SockMaterialLinearFactor.cs','SockPreparedState.cs','FootContactGeometry.cs','FootConvexSolid.cs','FootSurfaceHistory.cs','FootSkinHullCollider.cs','SockFootSkinHull.cs']]
+          ['SockClothAttr.cs','SockGraspMotion.cs','SockGraspContacts.cs','SockOpeningRimBending.cs','SockFootCoupledMaterialDirect.cs','SockMaterialLinearFactor.cs','SockPreparedState.cs','FootContactGeometry.cs','FootConvexSolid.cs','FootSurfaceHistory.cs','FootSkinHullCollider.cs','SockFootSkinHull.cs']]
 manifest={}
 for source in paths:
     relative=str(source.relative_to(root))

@@ -4,3 +4,4 @@ extends: grasp_following_autonomous30.yaml
 contact_settling:
   minimum_steps: 20
   maximum_steps: 20
+  consecutive_stable_steps: 21
