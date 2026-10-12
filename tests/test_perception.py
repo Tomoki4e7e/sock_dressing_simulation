@@ -89,6 +89,38 @@ def test_mask_contract_helpers():
     assert masked_depth(depth, sock).sum() == depth[0, 0]
 
 
+def test_close_renderer_object_is_valid_without_weakening_sam_area_checks(tmp_path):
+    config = _config(tmp_path)
+    config['inference']['semantic_mask'].update(sock_max_fraction=.2, keep_prompt_components=False)
+    config['inference']['use_renderer_masks'] = True
+    frame = np.zeros((10, 10, 3), np.uint8)
+    sock = np.zeros((10, 10), bool); sock[:3, :] = True
+    leg = np.zeros((10, 10), bool); leg[7:, :3] = True
+    perception = SAMDepthPerception(config, sock_predictor=_Predictor(sock.astype(float)),
+        leg_predictor=_Predictor(leg.astype(float)), depth_model=_Depth())
+    result = perception.initialize(frame, sock_points=[[1, 1]], leg_points=[[1, 8]],
+                                  renderer_masks={'sock': sock, 'leg': leg})
+    assert result.quality['ok']
+    assert result.quality['semantic_identity_source'] == 'renderer_object_id'
+    assert result.quality['configured_semantic_area_ranges']['sock'][1] == .2
+    config['inference']['use_renderer_masks'] = False
+    perception = SAMDepthPerception(config, sock_predictor=_Predictor(sock.astype(float)),
+        leg_predictor=_Predictor(leg.astype(float)), depth_model=_Depth())
+    with pytest.raises(RuntimeError, match='quality failed'):
+        perception.initialize(frame, sock_points=[[1, 1]], leg_points=[[1, 8]],
+                              renderer_masks={'sock': sock, 'leg': leg})
+
+
+def test_authoritative_renderer_still_rejects_degenerate_masks(tmp_path):
+    config = _config(tmp_path); config['inference']['use_renderer_masks'] = True
+    mask = np.ones((10, 10), bool)
+    perception = SAMDepthPerception(config, sock_predictor=_Predictor(mask.astype(float)),
+        leg_predictor=_Predictor(mask.astype(float)), depth_model=_Depth())
+    with pytest.raises(RuntimeError, match='quality failed'):
+        perception.initialize(np.zeros((10, 10, 3), np.uint8), sock_points=[[1, 1]],
+            leg_points=[[1, 8]], renderer_masks={'sock': mask, 'leg': mask})
+
+
 def test_semantic_mask_contract_checks_prompts_and_renderer():
     sock = np.zeros((10, 10), bool)
     leg = np.zeros((10, 10), bool)

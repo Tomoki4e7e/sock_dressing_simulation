@@ -388,6 +388,21 @@ class SAMDepthPerception:
             leg = prompt_components(leg, self._prompt_points["leg"])
         if sock.shape != frame.shape[:2] or leg.shape != frame.shape[:2]:
             raise ValueError("SAM2 masks do not match the RGB frame")
+        semantic = dict(self.settings.get("semantic_mask", {}))
+        renderer_authoritative = bool(self.settings.get("use_renderer_masks", False))
+        configured_area_ranges = {
+            name: [float(semantic.get(name + "_min_fraction", self.settings.get("mask_min_fraction", .0001))),
+                   float(semantic.get(name + "_max_fraction", self.settings.get("mask_max_fraction", .95)))]
+            for name in ("sock", "leg")
+        }
+        if renderer_authoritative:
+            # The object ID supplies semantic identity. Camera-relative area
+            # priors for identifying a SAM segment cannot reject that same
+            # object merely because reaching brings it closer to the camera.
+            # Keep the ordinary empty/full, continuity and overlap checks.
+            for name in ("sock", "leg"):
+                semantic[name + "_min_fraction"] = self.settings.get("mask_min_fraction", .0001)
+                semantic[name + "_max_fraction"] = self.settings.get("mask_max_fraction", .95)
         quality = assess_masks(
             sock,
             leg,
@@ -397,8 +412,10 @@ class SAMDepthPerception:
             max_area_change=float(self.settings.get("mask_max_area_change", 4.0)),
             prompt_points=self._prompt_points,
             renderer_masks=renderer_masks,
-            semantic=self.settings.get("semantic_mask", {}),
+            semantic=semantic,
         )
+        quality["semantic_identity_source"] = "renderer_object_id" if renderer_authoritative else "sam2_with_scene_area_priors"
+        quality["configured_semantic_area_ranges"] = configured_area_ranges
         if not quality["ok"]:
             raise RuntimeError("perception mask quality failed: " + json.dumps(quality))
         self._previous_areas = tuple(quality["areas"])

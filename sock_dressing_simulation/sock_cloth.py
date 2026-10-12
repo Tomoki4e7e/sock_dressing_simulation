@@ -1137,6 +1137,9 @@ class SockClothAttr:
     def request_dressing_qa(self) -> None:
         self._send_data("GetDressingQA")
 
+    def request_physics_clock(self) -> None:
+        self._send_data("GetClothPhysicsClock")
+
     def dressing_qa(self) -> DressingQA:
         return DressingQA.from_mapping(self.data.get("dressing_qa", {}))
 

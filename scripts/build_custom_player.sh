@@ -7,6 +7,9 @@ UNITY="${UNITY_EDITOR:-${ROOT}/.deps/unity/2022.3.34f1/Editor/Unity}"
 MODE="${1:-development}"
 MODE_DIR="${MODE^}"
 OUTPUT="${SOCK_BUILD_OUTPUT:-${2:-${ROOT}/Build/SockDressingPlayer/${MODE_DIR}}}"
+# Unity changes its working directory to the project. Resolve user-supplied
+# relative output paths here so the build and its manifest share one location.
+OUTPUT="$(realpath -m "${OUTPUT}")"
 LOG_DIR="${ROOT}/artifacts/unity"
 IMPORT_LOG="${LOG_DIR}/import-${MODE}.log"
 BUILD_LOG="${LOG_DIR}/build-${MODE}.log"
@@ -69,7 +72,7 @@ paths=[root/'RCareUnity/Assets/RCareCommon/Scripts/Main/PlayerMain.cs',
        root/'RCareUnity/Assets/Paid Dependencies/Obi/Scripts/Common/Backends/Burst/Solver/BurstSolverImpl.cs',
        root/'RCareUnity/Assets/SockDressing/Resources/FootSkinHullGeometry.json']
 paths += [root/'RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi'/name for name in
-          ['SockClothAttr.cs','SockOpeningRimBending.cs','SockFootCoupledMaterialDirect.cs','SockMaterialLinearFactor.cs','SockPreparedState.cs','FootContactGeometry.cs','FootConvexSolid.cs','FootSurfaceHistory.cs','FootSkinHullCollider.cs','SockFootSkinHull.cs']]
+          ['SockClothAttr.cs','SockGraspMotion.cs','SockOpeningRimBending.cs','SockFootCoupledMaterialDirect.cs','SockMaterialLinearFactor.cs','SockPreparedState.cs','FootContactGeometry.cs','FootConvexSolid.cs','FootSurfaceHistory.cs','FootSkinHullCollider.cs','SockFootSkinHull.cs']]
 manifest={}
 for source in paths:
     if not source.exists():continue

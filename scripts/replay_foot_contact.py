@@ -133,6 +133,8 @@ def main():
                         help='Diagnostic projections after recording, without simulated time; never part of candidate scoring')
     parser.add_argument('--foot-views', action='store_true',
                         help='Record synchronized vertical top/bottom views without additional physics steps')
+    parser.add_argument('--physics-video', action='store_true',
+                        help='Record side RGB after every existing 0.02 s fixed step without advancing physics')
     args = parser.parse_args()
     if args.detach:
         name=args.candidate_name or f's{args.substeps}_i{args.iterations}'
@@ -166,6 +168,8 @@ def main():
     if args.player_executable:config['rcareworld']['executable']=str(args.player_executable.resolve())
     native_player=resolve_package_path(config['rcareworld']['executable']).resolve()
     native_kernel=native_player.parent/'Player_Data/Managed'
+    clock_source = native_player.parent/'runtime_sources/SockGraspMotion.cs'
+    config['physics_video_non_destructive_clock'] = clock_source.exists() and 'GetClothPhysicsClock' in clock_source.read_text()
     preparation_parameters=copy.deepcopy(config['obi']['expected'])
     parameters=copy.deepcopy(preparation_parameters)
     if args.material_overrides:
@@ -308,13 +312,16 @@ def main():
     (directory/'live_frame_diagnostics.jsonl').write_text('')
     executable=resolve_package_path(config['rcareworld']['executable']).resolve()
     wrapper=directory/'player.sh'
-    wrapper.write_text('#!/bin/bash\nexport SOCK_CONTACT_PROGRESS_PATH='+shlex.quote(str((directory/'contact-progress.log').resolve()))+'\nexec '+shlex.quote(str(executable))+
+    wrapper.write_text('#!/bin/bash\nexport SOCK_GRASP_MOTION_LOG='+shlex.quote(str((directory/'grasp-substeps.jsonl').resolve()))+'\nexport SOCK_CONTACT_PROGRESS_PATH='+shlex.quote(str((directory/'contact-progress.log').resolve()))+'\nexec '+shlex.quote(str(executable))+
         ' -logFile '+shlex.quote(str((directory/'player.log').resolve()))+' "$@"\n')
     wrapper.chmod(0o755)
     config['rcareworld']['executable']=str(wrapper.resolve())
     (directory/'config.yaml').write_text(yaml.safe_dump(config,sort_keys=False))
     last = {}; side_video = [None]; track_frame = [0]; errors = []; initial_clock = [None]
     foot_views = [None]
+    physics_video = [None]
+    commanded_frame = [0]
+    inferred_frames = [0]
 
     class ReplayEnvironment(SockDressingEnv):
         refresh_observation_after_contact_start = args.autonomous
@@ -330,6 +337,9 @@ def main():
                 self._read_only_native_observation = False
         def close(self):
             try:
+                if physics_video[0] is not None:
+                    physics_video[0].close()
+                    physics_video[0] = None
                 attempt=getattr(self,'_preparation_attempt_state',None)
                 if attempt:(directory/'preparation_attempt_state.json').write_text(attempt+'\n')
                 if args.terminal_projection_probe and track_frame[0] == args.steps and not getattr(self,'_terminal_probe_done',False):
@@ -398,6 +408,9 @@ def main():
                     self._rollout_material_report['prepared_state_sha256']=hashlib.sha256(snapshot.encode()).hexdigest()
                 (directory/'applied_material.json').write_text(json.dumps(self._rollout_material_report,indent=2)+'\n')
             (directory/'config.yaml').write_text(yaml.safe_dump(self.config,sort_keys=False))
+            if args.physics_video:
+                from sock_dressing_simulation.physics_video import PhysicsStepRecorder
+                physics_video[0] = PhysicsStepRecorder(self, directory, lambda: commanded_frame[0])
         def observe(self):
             value = super().observe()
             if foot_views[0] is not None:
@@ -407,6 +420,8 @@ def main():
             # The baseline commands already passed the position/rate limiter.
             # Re-limiting against changed contact feedback would change this experiment.
             replaying = self._cloth_contact_rollout_started
+            if replaying:
+                commanded_frame[0] += 1
             result = super().command(command, None if replaying and not args.autonomous else previous)
             if replaying:
                 errors.append(float(np.max(np.abs(result-command))))
@@ -458,11 +473,17 @@ def main():
         def measure(self, rgb, masks):
             return SAMDepthPerception.track(self, rgb, renderer_masks=masks)
 
+    class AutonomousPolicy(SAMDAMSARNNPolicy):
+        def step(self, **kwargs):
+            result = super().step(**kwargs)
+            inferred_frames[0] += 1
+            return result
+
     try:
         result=run_demo(config,prepared=prepared_replay_assets(config,directory),
             output_root=directory,sock_points=None,leg_points=None,max_steps=args.steps,seed=0,
             environment_factory=ReplayEnvironment,
-            policy_factory=SAMDAMSARNNPolicy if args.autonomous else ReplayPolicy,
+            policy_factory=AutonomousPolicy if args.autonomous else ReplayPolicy,
             perception_factory=AutonomousPerception if args.autonomous else RendererMeasurements)
     finally:
         if side_video[0] is not None: side_video[0].release()
@@ -474,7 +495,7 @@ def main():
         dressing_qa=last.get('dressing_qa',{}),cloth=last.get('cloth',{})),indent=2,
         default=lambda value: value.tolist() if isinstance(value,np.ndarray) else value.item())+'\n')
     metadata.update(mode='samdamsarnn_closed_loop' if args.autonomous else 'fixed_motion_replay',replay_engine_sha256=engine_hash,
-        frames_inferred=metadata['frames'] if args.autonomous else 0,
+        frames_inferred=inferred_frames[0] if args.autonomous else 0,
         frames_replayed=0 if args.autonomous else metadata['frames'],
         replay_source=None if args.autonomous else str(actions),
         replay_source_sha256=None if args.autonomous else hashlib.sha256(actions.read_bytes()).hexdigest(),
@@ -494,9 +515,17 @@ def main():
     (directory/'config.yaml').write_text(yaml.safe_dump(config,sort_keys=False))
     metadata_path.write_text(json.dumps(metadata,indent=2,sort_keys=True)+'\n')
     (directory/'result.json').write_text(json.dumps({'result':result,'metadata':str(metadata_path)},indent=2)+'\n')
-    if args.foot_views:
+    if args.foot_views and result['ok']:
         from foot_containment_demo import finalize
         finalize(directory, metadata_path, args.steps)
+    elif args.foot_views:
+        (directory/'recording_incomplete.json').write_text(json.dumps(dict(
+            requested_commands=args.steps, completed_commands=metadata['frames'],
+            inferred_commands=inferred_frames[0], stop_reason=metadata['stop_reason'],
+            foot_view_frames=foot_views[0].frames if foot_views[0] is not None else 0,
+            raw_partial_videos_preserved=True),indent=2)+'\n')
     print('METADATA '+str(metadata_path),flush=True)
+    if not result['ok']:
+        raise SystemExit(1)
 
 if __name__=='__main__': main()
