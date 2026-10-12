@@ -717,6 +717,39 @@ def test_demo_prepares_signed_drape_before_policy_and_fails_closed(
         )
 
 
+def test_first_inference_uses_restored_contact_state_and_live_feedback(tmp_path):
+    config = load_config()
+    config['assets']['output_dir'] = str(tmp_path)
+    seen = []
+
+    class Environment(_Environment):
+        refresh_observation_after_contact_start = True
+
+        def begin_cloth_contact_rollout(self):
+            self.angle[:] = .01
+
+        def observe_restored_contact_state(self):
+            return self.observe()
+
+    class Policy(_Policy):
+        def step(self, **kwargs):
+            seen.append(kwargs['angle'].copy())
+            return {'action':kwargs['angle']+.01}
+
+    result = run_demo(config, prepared={'runtime_urdf':str(tmp_path/'robot.urdf')},
+        output_root=tmp_path/'episodes', sock_points=[[1,1]], leg_points=[[3,2]],
+        max_steps=2, environment_factory=Environment, perception_factory=_Perception,
+        policy_factory=Policy)
+    assert result['frames']==2
+    np.testing.assert_allclose(seen[0], .01)
+    applied = np.loadtxt(Path(result['episode'],'applied_action.csv'), delimiter=',', ndmin=2)
+    np.testing.assert_allclose(seen[1], applied[0])
+    assert not np.array_equal(seen[1], seen[0])
+    metadata = json.loads(Path(result['episode'],'metadata.json').read_text())
+    assert metadata['reference_action_projection']['path'] is None
+    assert metadata['reference_action_projection']['blend']==0
+
+
 def test_demo_records_bounded_closed_loop_actions(tmp_path):
     config = load_config()
     config["assets"]["output_dir"] = str(tmp_path)

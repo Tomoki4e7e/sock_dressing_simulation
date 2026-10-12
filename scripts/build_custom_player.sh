@@ -6,7 +6,7 @@ PROJECT="${ROOT}/RCareUnity"
 UNITY="${UNITY_EDITOR:-${ROOT}/.deps/unity/2022.3.34f1/Editor/Unity}"
 MODE="${1:-development}"
 MODE_DIR="${MODE^}"
-OUTPUT="${SOCK_BUILD_OUTPUT:-${ROOT}/Build/SockDressingPlayer/${MODE_DIR}}"
+OUTPUT="${SOCK_BUILD_OUTPUT:-${2:-${ROOT}/Build/SockDressingPlayer/${MODE_DIR}}}"
 LOG_DIR="${ROOT}/artifacts/unity"
 IMPORT_LOG="${LOG_DIR}/import-${MODE}.log"
 BUILD_LOG="${LOG_DIR}/build-${MODE}.log"
@@ -17,7 +17,7 @@ if [[ ! -x "${UNITY}" ]]; then
   exit 2
 fi
 if [[ "${MODE}" != "development" && "${MODE}" != "release" ]]; then
-  echo "Usage: $0 [development|release]" >&2
+  echo "Usage: $0 [development|release] [output-directory]" >&2
   exit 2
 fi
 
@@ -69,7 +69,7 @@ paths=[root/'RCareUnity/Assets/RCareCommon/Scripts/Main/PlayerMain.cs',
        root/'RCareUnity/Assets/Paid Dependencies/Obi/Scripts/Common/Backends/Burst/Solver/BurstSolverImpl.cs',
        root/'RCareUnity/Assets/SockDressing/Resources/FootSkinHullGeometry.json']
 paths += [root/'RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi'/name for name in
-          ['SockClothAttr.cs','SockPreparedState.cs','FootContactGeometry.cs','FootConvexSolid.cs','FootSurfaceHistory.cs','FootSkinHullCollider.cs','SockFootSkinHull.cs']]
+          ['SockClothAttr.cs','SockOpeningRimBending.cs','SockFootCoupledMaterialDirect.cs','SockMaterialLinearFactor.cs','SockPreparedState.cs','FootContactGeometry.cs','FootConvexSolid.cs','FootSurfaceHistory.cs','FootSkinHullCollider.cs','SockFootSkinHull.cs']]
 manifest={}
 for source in paths:
     if not source.exists():continue

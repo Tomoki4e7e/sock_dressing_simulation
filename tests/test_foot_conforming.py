@@ -239,7 +239,8 @@ def test_distance_iterations_do_not_hide_single_iteration_grasp(conforming,tmp_p
     assert not check()['checks']['coupled_solver_iterations_applied']
 
 
-def test_rollout_readback_matches_last_camera_without_changing_physics_time():
+@pytest.mark.parametrize('read_only',(False,True))
+def test_rollout_readback_matches_last_camera_without_changing_physics_time(read_only):
     class Backend:
         def __init__(self):
             self.frame=0;self.pending=False;self.steps=[]
@@ -257,6 +258,7 @@ def test_rollout_readback_matches_last_camera_without_changing_physics_time():
         environment.human=SimpleNamespace(data={})
         environment.camera=environment.recording_camera=environment.side_recording_camera=object()
         environment._cloth_contact_rollout_started=rollout
+        environment._read_only_native_observation=read_only
         environment._request_native_cloth_observation=lambda: setattr(backend,'pending',True)
         environment.diagnostics=lambda: {}
         environment.robot_signals=lambda data: {}
@@ -265,13 +267,14 @@ def test_rollout_readback_matches_last_camera_without_changing_physics_time():
             return {'sample_frame':backend.frame}
         environment._capture_camera=environment._capture_recording_camera=environment._capture_side_recording_camera=capture
         observation=environment._observe_native_custom_player()
-        assert backend.frame==4
-        assert observation['side_recording_camera']['sample_frame']==4
-        assert observation['cloth']['sample_frame']==(4 if rollout else 1)
-        assert backend.steps.count(False)==4*int(rollout)
+        expected_frame=0 if read_only else 4
+        assert backend.frame==expected_frame
+        assert observation['side_recording_camera']['sample_frame']==expected_frame
+        assert observation['cloth']['sample_frame']==(expected_frame if rollout else 0 if read_only else 1)
+        assert backend.steps.count(False)==4*int(rollout)+4*int(read_only)
         if rollout:
-            assert observation['camera']['sample_frame']==4
-            assert observation['recording_camera']['sample_frame']==4
+            assert observation['camera']['sample_frame']==expected_frame
+            assert observation['recording_camera']['sample_frame']==expected_frame
 
 
 def test_native_registration_does_not_hide_unsynchronized_substep_velocity(conforming):

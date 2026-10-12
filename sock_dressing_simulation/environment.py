@@ -1721,20 +1721,21 @@ class SockDressingEnv:
 
     def _observe_native_custom_player(self) -> Dict[str, Any]:
         synchronized = bool(getattr(self, "_cloth_contact_rollout_started", False))
+        read_only = bool(getattr(self, '_read_only_native_observation', False))
         if not synchronized:
             self._request_native_cloth_observation()
-        self._env.step()
+        self._env.step(simulate=False) if read_only else self._env.step()
         if not synchronized:
             cloth = dict(self.sock_cloth.data)
             robot_data = dict(getattr(self.robot, "data", {}) or {})
-        camera = self._capture_camera() if self.camera is not None else None
+        camera = self._capture_camera(simulate=not read_only) if self.camera is not None else None
         recording = (
-            self._capture_recording_camera()
+            self._capture_recording_camera(simulate=not read_only)
             if self.recording_camera is not None
             else None
         )
         side_recording = (
-            self._capture_side_recording_camera()
+            self._capture_side_recording_camera(simulate=not read_only)
             if self.side_recording_camera is not None
             else None
         )
