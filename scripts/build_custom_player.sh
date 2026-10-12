@@ -2,7 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJECT="${ROOT}/RCareUnity"
+PROJECT="${SOCK_UNITY_PROJECT:-${ROOT}/RCareUnity}"
+PROJECT="$(realpath -m "${PROJECT}")"
 UNITY="${UNITY_EDITOR:-${ROOT}/.deps/unity/2022.3.34f1/Editor/Unity}"
 MODE="${1:-development}"
 MODE_DIR="${MODE^}"
@@ -63,22 +64,28 @@ if [[ ! -x "${PLAYER}" ]] ||
   exit 4
 fi
 
-python3 - "${ROOT}" "${OUTPUT}" <<'PY'
+python3 - "${ROOT}" "${OUTPUT}" "${PROJECT}" <<'PY'
 import hashlib,json,shutil,sys
 from pathlib import Path
-root=Path(sys.argv[1]);player=Path(sys.argv[2]);archive=player/'runtime_sources';archive.mkdir(exist_ok=True)
+root=Path(sys.argv[1]);player=Path(sys.argv[2]);project=Path(sys.argv[3]);archive=player/'runtime_sources';archive.mkdir(exist_ok=True)
 paths=[root/'RCareUnity/Assets/RCareCommon/Scripts/Main/PlayerMain.cs',
        root/'RCareUnity/Assets/RCareCommon/Scripts/Attributes/ControllerAttr.cs',
        root/'RCareUnity/Assets/Paid Dependencies/Obi/Scripts/Common/Solver/ObiSolver.cs',
        root/'RCareUnity/Assets/Paid Dependencies/Obi/Scripts/Common/Backends/Burst/Solver/BurstSolverImpl.cs',
+       root/'RCareUnity/Assets/Paid Dependencies/Obi/Scripts/Common/Backends/Burst/Constraints/Pin/BurstPinConstraintsBatch.cs',
+       root/'RCareUnity/Assets/Paid Dependencies/Obi/Scripts/Common/Backends/Burst/DataStructures/ParticleGrid.cs',
+       root/'RCareUnity/Assets/Paid Dependencies/Obi/Scripts/Common/Backends/Burst/Collisions/BurstColliderWorld.cs',
        root/'RCareUnity/Assets/SockDressing/Resources/FootSkinHullGeometry.json']
 paths += [root/'RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi'/name for name in
           ['SockClothAttr.cs','SockGraspMotion.cs','SockOpeningRimBending.cs','SockFootCoupledMaterialDirect.cs','SockMaterialLinearFactor.cs','SockPreparedState.cs','FootContactGeometry.cs','FootConvexSolid.cs','FootSurfaceHistory.cs','FootSkinHullCollider.cs','SockFootSkinHull.cs']]
 manifest={}
 for source in paths:
+    relative=str(source.relative_to(root))
+    if relative.startswith('RCareUnity/'):
+        source=project/Path(relative).relative_to('RCareUnity')
     if not source.exists():continue
     shutil.copyfile(source,archive/source.name)
-    manifest[str(source.relative_to(root))]=hashlib.sha256(source.read_bytes()).hexdigest()
+    manifest[relative]=hashlib.sha256(source.read_bytes()).hexdigest()
 for name in ['RCareWorld.dll','Obi.dll']:
     manifest['compiled_'+name]=hashlib.sha256((player/'Player_Data/Managed'/name).read_bytes()).hexdigest()
 (archive/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')

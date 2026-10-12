@@ -12,7 +12,7 @@ def fixture(tmp_path, monkeypatch):
     written = []
     video = SimpleNamespace(release=lambda: None)
     monkeypatch.setattr(demo, '_open_video', lambda *args: video)
-    monkeypatch.setattr(demo, '_write_video_frame', lambda v, rgb, frame: written.append(frame))
+    monkeypatch.setattr(demo, '_write_video_frame', lambda v, rgb, frame, **kwargs: written.append(frame))
     clock = {'fixed_steps': 0, 'last_step_time_s': .02, 'simulated_time_s': 0.}
     cloth = SimpleNamespace(data={}, request_physics_clock=lambda: None)
     camera = SimpleNamespace(data={'rgb': np.zeros((2, 2, 3), dtype=np.uint8)}, GetRGB=lambda *args: None)

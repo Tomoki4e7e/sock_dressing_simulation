@@ -74,7 +74,11 @@ class PhysicsStepRecorder:
         if self.video is None:
             self.video = _open_video(self.directory / 'side_physics_50fps.mp4', rgb.shape, 50.)
             self.first_clock = before
-        _write_video_frame(self.video, rgb, self.frames)
+        command=self.command_index()
+        elapsed=(before['fixed_steps']-self.first_clock['fixed_steps']+1)*dt
+        phase='Hold' if command==0 else f'Policy {command}'
+        _write_video_frame(self.video, rgb, self.frames,
+                           label=f'Physics {self.frames+1}  {phase}  t={elapsed:.2f}s')
         with (self.directory / 'physics-video-sync.jsonl').open('a') as stream:
             stream.write(json.dumps(dict(frame=self.frames,
                 command=self.command_index(), clock_before=before, clock_after=after)) + '\n')

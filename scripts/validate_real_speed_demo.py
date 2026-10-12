@@ -124,7 +124,10 @@ def validate(directory, commands=40):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('directory', type=Path)
+    parser.add_argument('--commands', type=int, default=40)
     args = parser.parse_args()
-    report = validate(args.directory)
+    if args.commands <= 0:
+        parser.error('--commands must be positive')
+    report = validate(args.directory, commands=args.commands)
     print(json.dumps(report, indent=2))
     sys.exit(0 if report['ok'] else 1)

@@ -1,0 +1,16 @@
+extends: real_speed_autonomous40.yaml
+
+inference:
+  max_steps: 30
+
+contact_settling:
+  enabled: true
+  minimum_steps: 50
+  maximum_steps: 200
+  consecutive_stable_steps: 5
+  maximum_speed_p95_m_s: 0.08
+  maximum_particle_speed_m_s: 0.4
+  maximum_mean_upward_speed_m_s: 0.01
+
+# Keep the existing scene, checkpoint, material, and observation profile.
+# Dedicated output/build paths are supplied by the validation command.

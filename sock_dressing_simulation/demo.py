@@ -634,6 +634,19 @@ def run_demo(
                 metadata["checkpoint_sha256"] = policy.checkpoint_sha256
                 renderer_masks = _renderer_masks(observation["camera"])
                 last_renderer_masks = renderer_masks
+                if config.get('contact_settling', {}).get('enabled') and renderer_masks is not None:
+                    # Prompt the settled scene that inference actually sees.
+                    # Gravity can move the body away from its preparation pixel.
+                    sock_points = [_mask_centroid_point(renderer_masks['sock'])]
+                    leg_points = [_mask_centroid_point(renderer_masks['leg'])]
+                    sock_labels = leg_labels = [1]
+                    metadata['prompt_points'] = {
+                        'sock': sock_points, 'leg': leg_points,
+                        'sock_labels': sock_labels, 'leg_labels': leg_labels,
+                    }
+                    metadata['prompts_after_contact_settling'] = True
+                    writer.update_metadata({'prompt_points': metadata['prompt_points'],
+                                            'prompts_after_contact_settling': True})
                 opening_qa_frames = {0, steps // 2, steps - 1}
                 initialize_kwargs = {
                     "sock_points": sock_points,
@@ -2803,6 +2816,7 @@ def _write_video_frame(
     frame: int,
     *,
     crop_xywh: Optional[Sequence[int]] = None,
+    label: Optional[str] = None,
 ) -> None:
     import cv2
 
@@ -2827,7 +2841,7 @@ def _write_video_frame(
     bgr = image[..., ::-1].copy()
     cv2.putText(
         bgr,
-        f"AIREC inference frame {frame}",
+        label if label is not None else f"AIREC inference frame {frame}",
         (24, 42),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.8,

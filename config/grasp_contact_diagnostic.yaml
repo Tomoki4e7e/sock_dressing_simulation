@@ -1,0 +1,6 @@
+extends: grasp_following_autonomous30.yaml
+
+# Diagnostic only: stop after obtaining stationary external-contact records.
+contact_settling:
+  minimum_steps: 20
+  maximum_steps: 20

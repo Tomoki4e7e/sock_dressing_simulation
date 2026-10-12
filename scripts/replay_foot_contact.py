@@ -393,6 +393,44 @@ def main():
                 super().close()
         def begin_cloth_contact_rollout(self):
             super().begin_cloth_contact_rollout()
+            settling=self.config.get('contact_settling',{})
+            if settling.get('enabled',False):
+                if not speed_matched:
+                    raise ValueError('Contact settling requires the real-speed profile')
+                from sock_dressing_simulation.real_speed import SpeedMatchedRollout
+                from sock_dressing_simulation.physics_video import PhysicsStepRecorder
+                settling_directory=directory/'settling'
+                settling_directory.mkdir(exist_ok=True)
+                holding=SpeedMatchedRollout(self,settling_directory,lambda:0,Path(prepared['runtime_urdf']))
+                recording=PhysicsStepRecorder(self,settling_directory,lambda:0)
+                stable=0
+                report=dict(passed=False,policy_commands=0,settings=settling,samples=[])
+                try:
+                    for step in range(1,int(settling['maximum_steps'])+1):
+                        holding.step()
+                        self.sock_cloth.request_particle_velocities()
+                        self._env.step(simulate=False)
+                        velocities=self.sock_cloth.particle_velocities()
+                        speeds=np.linalg.norm(velocities,axis=1)
+                        sample=dict(step=step,speed_p95_m_s=float(np.quantile(speeds,.95)),
+                            maximum_speed_m_s=float(speeds.max()),mean_vertical_speed_m_s=float(velocities[:,1].mean()))
+                        report['samples'].append(sample)
+                        quiet=(sample['speed_p95_m_s']<=settling['maximum_speed_p95_m_s'] and
+                            sample['maximum_speed_m_s']<=settling['maximum_particle_speed_m_s'] and
+                            sample['mean_vertical_speed_m_s']<=settling['maximum_mean_upward_speed_m_s'])
+                        stable=stable+1 if quiet else 0
+                        if step%10==0:
+                            print('contact settling '+json.dumps(sample),flush=True)
+                        if step>=settling['minimum_steps'] and stable>=settling['consecutive_stable_steps']:
+                            report['passed']=True
+                            break
+                finally:
+                    recording.close()
+                    holding.close()
+                    report['physical_steps']=len(report['samples'])
+                    (settling_directory/'validation.json').write_text(json.dumps(report,indent=2)+'\n')
+                if not report['passed']:
+                    raise RuntimeError('Grasped cloth did not physically settle; see settling/validation.json')
             self.sock_cloth.request_dressing_qa()
             self.sock_cloth.request_particles()
             if args.foot_views:

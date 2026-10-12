@@ -233,6 +233,44 @@ commands, measured joint speeds, 400 physical steps, the 8 s duration, and all
 three decoded MP4 recordings. `joint-motion.jsonl` retains every fixed-step
 target, velocity, acceleration, actual joint state and physics clock.
 
+`config/grasp_following_autonomous30.yaml` uses the same low-speed profile for
+30 live closed-loop commands (300 fixed steps, 6 s of physics). Native virtual
+pins and supplemental material/contact constraints sample the same original
+anchor trajectory per substep, including the transformed grasp offsets during
+rotation. Virtual anchor handles do not collide; physical jaws and feet retain
+their collision geometry. The local rollout does not translate the entire sock.
+Gripper-local anchor poses remain fixed during manipulation. The rectangular
+cuff/plane preparation templates release at contact arming; passive cloth/hem
+constraints and all material/contact bounds remain active. A stationary grasp
+settles under gravity before inference, with its own video and diagnostics;
+failure to meet the configured speed thresholds stops the run. The 300-step
+policy recording starts after settling, with prompts from the settled frame.
+The sock keeps vertex-to-vertex self contact and surface-to-collider external
+contact as separate routes. Extra self-only point simplices never add duplicate
+contacts with feet/jaws; all surface triangles retain their external contacts.
+Mass, radius, friction, damping and strain limits stay unchanged. Real-mesh
+paired probes cover the energy injection caused by surface self contacts;
+the native suite also tests an obstacle hitting a triangle interior and routing
+removal restoring the ordinary actor representation.
+The Obi CPU backend has an optional external pin-target hook; unregistered
+pins, non-external solvers, and rigidbody pins retain the standard Obi behavior.
+
+Run `SockDressing.Editor.GraspMotionChecks.Run` in Unity before building a
+dedicated Player. The paired tests include rotation, gravity sag and release,
+as well as stationary/moving/stop/reversal and anchor-collision cases. Run
+`scripts/replay_foot_contact.py --config config/grasp_following_autonomous30.yaml
+--autonomous --device cuda --steps 30 --physics-video --surface-mode local
+--transport local --fixed-grasp-offsets --post-preparation-material
+--player-executable <dedicated-player>/Player.x86_64 --output-root <new-output>
+--candidate-name <new-run-id>`. Use `--prepared-state <saved-state.json>` to
+restore a validated existing preparation without replaying policy commands.
+Validate with `scripts/report_grasp_following.py --directory <run-directory>
+--regressions <grasp-motion-checks.json>` and
+`scripts/validate_real_speed_demo.py <run-directory> --commands 30`.
+The report requires complete live inference, 1 mm original-anchor accuracy,
+cloth/contact QA, toe approach, gravity tests and decoded recordings. Substep
+logs include mass, center height, kinetic energy and unpinned vertical speeds.
+
 The `train` command retrains the ShareSet `SAMDAMSARNN` without modifying
 ShareSet. It reads the episode-level split from `dataset_sock.yaml`, validates
 headerless 18-column `angle.csv` and `torque.csv`, and consumes:
