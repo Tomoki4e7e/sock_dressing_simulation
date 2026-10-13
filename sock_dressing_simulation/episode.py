@@ -36,6 +36,7 @@ class EpisodeWriter:
             for signal in SIGNALS
         }
         self._writers = {key: csv.writer(value) for key, value in self._files.items()}
+        self._contact_file = (self.path / "robot_contact.jsonl").open("w", encoding="utf-8")
         self._metadata = dict(metadata or {})
         self._metadata.update(
             {
@@ -63,6 +64,7 @@ class EpisodeWriter:
         angle: Sequence[float],
         torque: Sequence[float],
         external_torque: Sequence[float],
+        robot_telemetry: Optional[Mapping] = None,
     ) -> None:
         if self._closed:
             raise RuntimeError("episode is closed")
@@ -101,6 +103,17 @@ class EpisodeWriter:
                 raise ValueError(f"{name} must contain 18 finite values")
             self._writers[name].writerow(row.tolist())
             self._files[name].flush()
+        telemetry = robot_telemetry or {}
+        contact_row = {"frame": self.frames}
+        for key in (
+            "external_torque_source", "external_torque_residual", "external_torque_residual_source",
+            "rigid_contact_force_available", "rigid_contact", "rigid_contact_step", "rigid_contact_step_seconds",
+            "inverse_dynamics_step",
+        ):
+            value = telemetry.get(key)
+            contact_row[key] = value.tolist() if isinstance(value, np.ndarray) else value
+        self._contact_file.write(json.dumps(contact_row) + "\n")
+        self._contact_file.flush()
         self.frames += 1
 
     def close(self) -> None:
@@ -108,6 +121,7 @@ class EpisodeWriter:
             return
         for stream in self._files.values():
             stream.close()
+        self._contact_file.close()
         self._metadata["frames"] = self.frames
         (self.path / "metadata.json").write_text(
             json.dumps(self._metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"

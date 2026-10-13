@@ -181,6 +181,7 @@ camera_depth/*.png
 depth_mask/sock_depth/*.png
 depth_mask/leg_depth/*.png
 metadata.json
+robot_contact.jsonl
 ```
 
 Depth PNGs are RCareWorld's uint8 linear depth between the configured near/far
@@ -370,6 +371,47 @@ bimanual 18-D contract; therefore it reports this capability gap and never
 labels a one-gripper run as sock-dressing success.
 
 ## Environment API and limitations
+
+### Dry-AIREC rigid contact feedback (custom Player)
+
+The rebuilt native custom Player records PhysX rigid-contact impulses on each
+robot articulation. It divides each pair impulse by the actual simulated step
+duration and projects its force onto ancestor joints. Revolute loads use N m;
+prismatic gripper loads use N. `external_torque.csv` now uses this measured
+rigid-contact projection when available. `torque.csv` retains drive effort and
+`angle.csv` retains the physical joint positions. Drive/inverse-dynamics vectors
+are reordered into the same movable-joint order and sampled after physics.
+
+`robot_contact.jsonl` records one row per episode frame: contact partner IDs,
+world contact forces and moments, physics step/duration, source and availability,
+and the original `external_torque_residual` for comparison. Residuals are not
+added to contact loads because that would double count collision response.
+The existing `contact_force` field continues to describe Obi cloth contacts;
+rigid contacts are separately exposed as `rigid_contact`.
+
+Use `config/rigid_contact_feedback.yaml` for drive-controlled gripper/human
+collisions with required contact telemetry. Historical configurations that
+explicitly ignore human collisions or teleport rollout joints retain those
+settings; diagnostics expose their policy. Older Players retain the labelled
+residual fallback, while the required-feedback profile rejects missing telemetry.
+
+Build and validate with:
+
+```bash
+bash scripts/build_custom_player.sh development
+python3 scripts/validate_rigid_contact_feedback.py \
+  --output artifacts/rigid_contact_feedback/validation.json
+```
+
+Unity 2022.3 supplies the total impulse for a contact pair
+([Unity reference](https://docs.unity.cn/2022.3/Documentation/ScriptReference/Collision-impulse.html)).
+For multiple contact points, moments are approximated by placing that resultant
+at the manifold centroid. This is a simulator load estimate, not a calibrated
+hardware torque sensor. PhysX applies the physical response already; the sensor
+does not apply another force. Obi cloth/grasp tension transfer to ArticulationBody
+remains a separate, unimplemented path.
+
+### Pinned distributed Player
 
 `SockDressingEnv` imports `pyrcareworld` only when connecting. It loads the
 portable URDF and cloth OBJ, accesses configured HumanBodyIK and camera

@@ -169,6 +169,7 @@ def _unity_smoke(config, output_root: Path, frames: int):
                     angle=observation["angle"],
                     torque=observation["torque"],
                     external_torque=observation["external_torque"],
+                    robot_telemetry=observation,
                 )
                 if frame + 1 < frames:
                     command = observation["angle"].copy()
@@ -266,6 +267,7 @@ def _unity_collect(config, output_root: Path, frames: int, seed: int):
                     angle=observation["angle"],
                     torque=observation["torque"],
                     external_torque=observation["external_torque"],
+                    robot_telemetry=observation,
                 )
                 if frame + 1 < frames:
                     command = observation["angle"].copy()

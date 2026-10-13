@@ -1634,7 +1634,19 @@ class SockDressingEnv:
                 "visual_diagnostics": list(
                     getattr(self.cloth, "data", {}).get("visual_diagnostics", [])
                 ),
-                "external_torque_source": "joint_force residual proxy",
+                "external_torque_source": (
+                    "rigid contact impulse projection (manifold centroid approximation)"
+                    if getattr(self.robot, "data", {}).get("rigid_contact_projection_available", False)
+                    else "joint_force residual proxy"
+                ),
+                "rigid_contact_force_available": bool(
+                    getattr(self.robot, "data", {}).get("rigid_contact_projection_available", False)
+                ),
+                "robot_human_collision_policy": {
+                    "ignore_all": bool(scene.get("ignore_robot_human_rigid_collisions", True)),
+                    "ignore_non_gripper": bool(scene.get("ignore_non_gripper_robot_human_rigid_collisions", False)),
+                    "rollout_direct_joint_control": bool(scene.get("robot_rollout_direct_joint_control", scene.get("robot_direct_joint_control", False))),
+                },
                 "obi_contract": validate_configuration(
                     configuration, self.config.get("obi", {}).get("expected", {})
                 ),
@@ -3179,7 +3191,7 @@ class SockDressingEnv:
     def robot_signals(
         self, robot_data: Optional[Mapping[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Extract the configured 18 joints and an explicitly labelled force proxy."""
+        """Extract 18 joints, measured rigid-contact loads and legacy residuals."""
         from .joints import JointMap
 
         if self.robot is None:
@@ -3205,11 +3217,20 @@ class SockDressingEnv:
         drive = extract("drive_forces")
         gravity = extract("gravity_forces")
         coriolis = extract("coriolis_centrifugal_forces")
+        contact = extract("rigid_contact_joint_forces")
+        contact_available = bool(data.get("rigid_contact_projection_available", False))
+        if self.config.get("scene", {}).get("require_rigid_contact_telemetry", False) and not contact_available:
+            raise RuntimeError("Rigid-contact telemetry is required; rebuild the custom Unity Player")
+        if contact_available and (contact is None or not np.all(np.isfinite(contact))):
+            raise RuntimeError("Player returned invalid rigid-contact joint forces")
         if angle is None or joint_force is None:
             raise RuntimeError(
                 "RCareWorld did not return joint_positions/joint_force for all configured joints"
             )
-        drive_available = drive is not None and bool(np.any(np.abs(drive) > 1e-9))
+        drive_available = drive is not None and (
+            bool(data.get("inverse_dynamics_available", False))
+            or bool(np.any(np.abs(drive) > 1e-9))
+        )
         joint_force_available = bool(np.any(np.abs(joint_force) > 1e-9))
         if drive_available:
             torque = drive
@@ -3226,11 +3247,23 @@ class SockDressingEnv:
         else:
             external = joint_force.copy()
             source = "joint_force proxy (inverse-dynamics components unavailable)"
+        residual = external.copy()
+        residual_source = source
+        if contact_available:
+            external = contact
+            source = "rigid contact impulse projection (manifold centroid approximation)"
         return {
             "angle": angle,
             "torque": torque,
             "external_torque": external,
             "external_torque_source": source,
+            "external_torque_residual": residual,
+            "external_torque_residual_source": residual_source,
+            "rigid_contact_force_available": contact_available,
+            "rigid_contact": list(data.get("rigid_contacts", ())),
+            "rigid_contact_step": data.get("rigid_contact_step"),
+            "rigid_contact_step_seconds": data.get("rigid_contact_step_seconds"),
+            "inverse_dynamics_step": data.get("inverse_dynamics_step"),
             "torque_source": torque_source,
             "torque_available": torque_source != "unavailable",
         }

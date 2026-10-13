@@ -831,6 +831,7 @@ def run_demo(
                         angle=observation["angle"],
                         torque=observation["torque"],
                         external_torque=observation["external_torque"],
+                        robot_telemetry=observation,
                     )
                     video_camera = observation.get("recording_camera")
                     if video_camera is None:
