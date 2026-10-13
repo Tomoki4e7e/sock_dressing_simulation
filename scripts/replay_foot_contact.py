@@ -463,9 +463,10 @@ def main():
                 from sock_dressing_simulation.real_speed import SpeedMatchedRollout
                 speed_rollout[0] = SpeedMatchedRollout(self, directory, lambda: commanded_frame[0],
                     Path(prepared['runtime_urdf']))
+            if speed_matched or self.config['inference'].get('read_only_observation', False):
                 self._read_only_native_observation = True
         def observe(self):
-            if speed_matched and self._cloth_contact_rollout_started:
+            if (speed_matched or self.config['inference'].get('read_only_observation', False)) and self._cloth_contact_rollout_started:
                 self._read_only_native_observation = True
             value = super().observe()
             if foot_views[0] is not None:
