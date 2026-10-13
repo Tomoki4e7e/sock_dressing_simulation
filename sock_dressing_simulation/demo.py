@@ -634,7 +634,7 @@ def run_demo(
                 metadata["checkpoint_sha256"] = policy.checkpoint_sha256
                 renderer_masks = _renderer_masks(observation["camera"])
                 last_renderer_masks = renderer_masks
-                if config.get('contact_settling', {}).get('enabled') and renderer_masks is not None:
+                if (config.get('contact_settling', {}).get('enabled') or settings.get('camera_alignment_applied')) and renderer_masks is not None:
                     # Prompt the settled scene that inference actually sees.
                     # Gravity can move the body away from its preparation pixel.
                     sock_points = [_mask_centroid_point(renderer_masks['sock'])]

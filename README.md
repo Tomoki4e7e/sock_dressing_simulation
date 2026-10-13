@@ -277,7 +277,20 @@ restore a validated existing preparation without replaying policy commands.
 Validate with `scripts/report_grasp_following.py --directory <run-directory>
 --regressions <grasp-motion-checks.json>` and
 `scripts/validate_real_speed_demo.py <run-directory> --commands 30`.
-The report requires complete live inference, 1 mm original-anchor accuracy,
+For the current ankle-total25deg, ten-physics-step profile, add
+`--camera-alignment-output config/autonomous30_current_ankle_total25deg_physics10_camera_centered.yaml`
+to the autonomous replay command using
+`config/autonomous30_current_ankle_total25deg_physics10.yaml`. Calibration samples
+the freshly prepared scene without advancing physics, adjusts only mounted
+camera yaw/roll, and requires a toe-center error of at most 25 pixels and a
+leg-centerline tilt of at most 3 degrees before inference starts. The resulting
+config can also be used directly for later runs. `camera_alignment/alignment.json`
+retains every trial image, angle measurement, and before/after physics clock.
+Run `scripts/report_camera_centered_demo.py <run-directory> --baseline <original-episode>`
+from the package directory after completion to validate the 30 live commands,
+300 fixed steps, camera alignment and unchanged human/chair/foot pose, and to
+save synchronized multiview video and before/after previews beside the run.
+The grasp-following report requires complete live inference, 1 mm original-anchor accuracy,
 cloth/contact QA, toe approach, gravity tests and decoded recordings. Substep
 logs include mass, center height, kinetic energy and unpinned vertical speeds.
 

@@ -135,7 +135,11 @@ def main():
                         help='Record synchronized vertical top/bottom views without additional physics steps')
     parser.add_argument('--physics-video', action='store_true',
                         help='Record side RGB after every existing 0.02 s fixed step without advancing physics')
+    parser.add_argument('--camera-alignment-output', type=Path,
+                        help='Calibrate mounted camera yaw/roll before inference and save an extending config')
     args = parser.parse_args()
+    if args.camera_alignment_output and not args.autonomous:
+        parser.error('--camera-alignment-output requires --autonomous')
     if args.detach:
         name=args.candidate_name or f's{args.substeps}_i{args.iterations}'
         if not re.fullmatch(r'[A-Za-z0-9_-]+',name): raise ValueError('Unsafe candidate name')
@@ -393,6 +397,9 @@ def main():
                 super().close()
         def begin_cloth_contact_rollout(self):
             super().begin_cloth_contact_rollout()
+            if args.camera_alignment_output:
+                from align_inference_camera import align_camera
+                align_camera(self, directory, args.camera_alignment_output, args.config)
             settling=self.config.get('contact_settling',{})
             if settling.get('enabled',False):
                 if not speed_matched:
