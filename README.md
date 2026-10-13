@@ -290,6 +290,24 @@ Run `scripts/report_camera_centered_demo.py <run-directory> --baseline <original
 from the package directory after completion to validate the 30 live commands,
 300 fixed steps, camera alignment and unchanged human/chair/foot pose, and to
 save synchronized multiview video and before/after previews beside the run.
+
+For comparison with the real right-camera first frame, use
+`scripts/match_real_camera_composition.py --name <new-candidate> --translation <x> <y> <z>
+--position <x> <y> <z> --rotation <pitch> <yaw> <roll> --iterations 0`.
+This performs fresh preparation, mounts the right head camera, translates the
+human root, chair, anchor and fixed toe together, and records one autonomous
+command with ten physics steps. Camera trials use read-only captures; resolution,
+FOV, arm/ankle poses and cloth preparation remain inherited. With nonzero
+iterations the camera fit uses the annotated real grasp-pad centers. Optional
+`--shape-after-command` additionally fits foot/sock masks after the live command;
+this is an exploratory run and its camera must be validated in a fresh run with
+`--iterations 0` before selection. No previous policy commands are replayed.
+Run `scripts/report_real_camera_composition.py <candidate-directory>` to compare
+centroids, widths, pad positions/tilt and physical-clock continuity. Add
+`--publish` to save the selected configuration and image comparison. Unmatched
+composition criteria are retained explicitly in `validation.json`; successful
+recording validation does not imply every composition criterion passes.
+
 The grasp-following report requires complete live inference, 1 mm original-anchor accuracy,
 cloth/contact QA, toe approach, gravity tests and decoded recordings. Substep
 logs include mass, center height, kinetic energy and unpinned vertical speeds.

@@ -1,0 +1,37 @@
+extends: autonomous30_current_ankle_total25deg_physics10_camera_centered.yaml
+scene:
+  camera_parent_link: head/see3cam_right/camera_color_frame
+  camera_local_position:
+  - -0.005793579218191216
+  - -0.15193506659988906
+  - 0.15284644823885918
+  camera_local_rotation:
+  - 55.21778486962078
+  - -0.4260683604629021
+  - 5.283341401941229
+  human_position: &id001
+  - 0.09300041788838564
+  - 1.3450000191
+  - -0.7200000285982427
+  initial_pose_contract:
+    locked_pose_baseline:
+      human_root_position: *id001
+      chair_position: &id002
+      - -0.051272310426532644
+      - 0.30771510881528413
+      - -0.3586987777751183
+      human_anchor_position:
+      - -0.051272310426532644
+      - 0.5577151088152841
+      - -0.3586987777751183
+      right_toe_position:
+      - -0.11099749040603638
+      - 0.3898392821174035
+      - 0.6364459872245789
+    expected_human_position: *id001
+    expected_chair_position: *id002
+    away_from_robot_m: null
+    down_m: null
+    up_m: null
+    right_from_robot_m: null
+    translate_to_foot_to_sock: false
