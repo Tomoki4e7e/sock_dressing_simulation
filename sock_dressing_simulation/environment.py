@@ -1796,8 +1796,11 @@ class SockDressingEnv:
                 )
         diagnostics = self.diagnostics()
         diagnostics["human_chair_lock_qa"] = lock_report
-        diagnostics["robot_human_rigid_collision_qa"] = dict(
-            cloth.get("robot_human_rigid_collision_qa", {})
+        from .quality import physical_gripper_collision_qa
+        diagnostics["robot_human_rigid_collision_qa"] = physical_gripper_collision_qa(
+            cloth.get("robot_human_rigid_collision_qa", {}),
+            [str(anchor.get("parent_link", "")) for anchor in
+             self.config["scene"].get("grasp_anchors", {}).get("anchors", [])],
         )
         observation = {
             "robot": robot_data,

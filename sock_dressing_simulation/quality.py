@@ -17,6 +17,51 @@ def rigid_collision_stop_required(penetration_m: float, limit_m: float) -> bool:
                 penetration_m > limit_m + RIGID_COLLISION_STOP_NUMERICAL_TOLERANCE_M)
 
 
+def physical_gripper_collision_qa(report: Mapping[str, Any], anchor_links: Sequence[str]) -> Dict[str, Any]:
+    """Separate Empty pin-handle trigger overlaps from solid gripper contacts.
+
+    Native EnsureTargetCollider creates trigger spheres for our Empty anchors.
+    Some archived Players also count these triggers in rigid collision QA.
+    Retain the native report and only correct a complete, finite pair list.
+    """
+    result = dict(report)
+    pairs = report.get("penetrating_pairs")
+    if not isinstance(pairs, list) or not pairs:
+        return result
+    paths = [str(pair.get("robot_collider_path", "")).split("/") for pair in pairs]
+    virtual = []
+    for pair, path in zip(pairs, paths):
+        virtual.append(pair.get("robot_collider") == "Empty" and any(
+            link.split("/")[-1:] == ["grasping_frame"]
+            and link.split("/")[0] in {"left_gripper", "right_gripper"}
+            and link.split("/")[0] in path
+            and path[-2:] == ["grasping_frame", "Empty"]
+            for link in anchor_links))
+    if not any(virtual):
+        return result
+    depths = [float(pair.get("penetration_m", float("nan"))) for pair in pairs]
+    if any(not np.isfinite(value) or value < 0 for value in depths):
+        return result
+    selectors = {
+        "maximum_penetration_m": lambda pair: True,
+        "maximum_enabled_penetration_m": lambda pair: not pair.get("ignored", False),
+        "maximum_ignored_penetration_m": lambda pair: pair.get("ignored", False),
+    }
+    for key, selected in selectors.items():
+        recorded = float(report.get(key, float("nan")))
+        enumerated = max((depth for pair, depth in zip(pairs, depths) if selected(pair)), default=0.0)
+        if not np.isfinite(recorded) or abs(recorded - enumerated) > RIGID_COLLISION_STOP_NUMERICAL_TOLERANCE_M:
+            return result
+    result["native_report"] = dict(report)
+    result["excluded_virtual_anchor_overlaps"] = [pair for pair, excluded in zip(pairs, virtual) if excluded]
+    result["penetrating_pairs"] = [pair for pair, excluded in zip(pairs, virtual) if not excluded]
+    result["pair_counts_include_virtual_anchor_triggers"] = True
+    for key, selected in selectors.items():
+        result[key] = max((depth for pair, depth, excluded in zip(pairs, depths, virtual)
+                           if not excluded and selected(pair)), default=0.0)
+    return result
+
+
 def assess_observation_quality(
     cameras: Sequence[Mapping[str, np.ndarray]],
     *,
