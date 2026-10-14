@@ -1,0 +1,8 @@
+extends: autonomous30_current_away5cm_down5cm_demo.yaml
+real_speed:
+  enabled: false
+inference:
+  physics_steps_per_action: 1
+  read_only_observation: true
+scene:
+  robot_rollout_direct_joint_control: true

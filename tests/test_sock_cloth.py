@@ -1453,7 +1453,8 @@ def test_grasp_pins_small_inner_cuff_patches_and_leaves_rim_dynamic():
     assert "? openingRimSpanMaximumStretch" in source
     assert '"aligned_grasp_initialization"' in source
     assert "StructuralRestLength(" in source
-    assert "if (pinned.Count == 0)" in source
+    # Released-cloth material bounds are exercised using a loaded Obi actor
+    # in FootCoupledPinChecks; an empty pin set must not disable that solve.
     limiter = source[
         source.index("private FootMaterialStencil MaterialStencil("):
         source.index("private void EnforceGraspParticlePositions")

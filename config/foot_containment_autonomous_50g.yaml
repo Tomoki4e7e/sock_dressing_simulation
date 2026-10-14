@@ -1,0 +1,6 @@
+extends: opening_widen_w95.yaml
+
+# Total cloth mass. The runner divides this by the actual prepared particle
+# count, configures every native cloth particle, then validates the readback.
+obi:
+  total_mass_kg: 0.05

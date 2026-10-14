@@ -21,11 +21,42 @@ from sock_dressing_simulation.cli import _prepare
 from sock_dressing_simulation.config import load_config, resolve_package_path
 from sock_dressing_simulation.demo import run_demo, _open_video, _write_video_frame
 from sock_dressing_simulation.environment import SockDressingEnv
-from sock_dressing_simulation.perception import PerceptionResult, assess_masks
+from sock_dressing_simulation.perception import PerceptionResult, assess_masks, SAMDepthPerception
+from sock_dressing_simulation.policy import SAMDAMSARNNPolicy
 from sock_dressing_simulation.scenario import scenario_from_config
 
 BASELINE = ROOT / 'artifacts/phase4/opening-short-edge-widen/final100-w95/data_sock_sim_smoke/train/phase4_20261005T011108Z'
 DEFAULT_OUTPUT = ROOT / 'artifacts/phase4/foot-nonpenetration-fixed-motion'
+
+
+def apply_total_cloth_mass(config, prepared_state):
+    """Translate total cloth mass to the existing uniform native particle API."""
+    total = config['obi'].get('total_mass_kg')
+    if total is None:
+        return
+    if prepared_state is None:
+        raise ValueError('Total cloth mass requires a prepared state with particle count')
+    total = float(total)
+    count = len(json.loads(Path(prepared_state).read_text())['positions'])
+    if not np.isfinite(total) or total<=0 or count<=0:
+        raise ValueError('Total cloth mass and particle count must be positive')
+    config['obi']['expected']['particle_mass_kg'] = total/count
+    config['obi']['total_mass_particle_count'] = count
+
+
+def validate_total_cloth_mass(config, particle_count, actual):
+    total = config['obi'].get('total_mass_kg')
+    if total is None:
+        return None
+    measured = float(actual['particle_mass_kg'])*particle_count
+    ok = particle_count==config['obi']['total_mass_particle_count'] and np.isclose(
+        measured,float(total),rtol=1e-6,atol=1e-9)
+    if not ok:
+        raise RuntimeError(f'Native total cloth mass mismatch: {measured} kg / {particle_count} particles')
+    return dict(requested_total_mass_kg=float(total),particle_count=particle_count,
+                actual_particle_mass_kg=float(actual['particle_mass_kg']),
+                actual_total_mass_kg=measured,ok=True,
+                distribution='uniform finite mass on every cloth particle, including grasped particles')
 
 
 
@@ -74,9 +105,13 @@ def renderer_measurements(observation, masks):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--config',type=Path,default=ROOT/'config/opening_widen_w95.yaml')
     parser.add_argument('--substeps', type=int, choices=(8,16), default=8)
     parser.add_argument('--iterations', type=int, choices=(20,40), default=20)
     parser.add_argument('--steps', type=int, default=100)
+    parser.add_argument('--autonomous', action='store_true',
+                        help='Generate every command with fresh closed-loop SAMDAMSARNN inference; never load recorded commands')
+    parser.add_argument('--device', choices=('cpu','cuda'), default=None)
     parser.add_argument('--remaining-grid', action='store_true')
     parser.add_argument('--output-root', type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument('--candidate-name')
@@ -96,7 +131,15 @@ def main():
                         help='Keep a logged trial running independently of chat/tool interruptions')
     parser.add_argument('--terminal-projection-probe',type=int,default=0,
                         help='Diagnostic projections after recording, without simulated time; never part of candidate scoring')
+    parser.add_argument('--foot-views', action='store_true',
+                        help='Record synchronized vertical top/bottom views without additional physics steps')
+    parser.add_argument('--physics-video', action='store_true',
+                        help='Record side RGB after every existing 0.02 s fixed step without advancing physics')
+    parser.add_argument('--camera-alignment-output', type=Path,
+                        help='Calibrate mounted camera yaw/roll before inference and save an extending config')
     args = parser.parse_args()
+    if args.camera_alignment_output and not args.autonomous:
+        parser.error('--camera-alignment-output requires --autonomous')
     if args.detach:
         name=args.candidate_name or f's{args.substeps}_i{args.iterations}'
         if not re.fullmatch(r'[A-Za-z0-9_-]+',name): raise ValueError('Unsafe candidate name')
@@ -122,10 +165,19 @@ def main():
             print(f's{substeps}_i{iterations} exit={result.returncode}',flush=True)
             if result.returncode: raise RuntimeError(f'candidate failed: see {log}')
         return
-    config = load_config(ROOT / 'config/opening_widen_w95.yaml')
+    config = load_config(args.config)
+    speed_matched = bool(config.get('real_speed', {}).get('enabled', False))
+    args.device = args.device or ('cuda' if speed_matched else 'cpu')
+    if speed_matched and (not args.autonomous or not args.physics_video):
+        raise ValueError('Real-speed profile requires autonomous inference and physics video')
+    if config['obi'].get('total_mass_kg') is not None and not args.autonomous:
+        raise ValueError('Total-mass override is scoped to the new autonomous run')
+    apply_total_cloth_mass(config,args.prepared_state)
     if args.player_executable:config['rcareworld']['executable']=str(args.player_executable.resolve())
     native_player=resolve_package_path(config['rcareworld']['executable']).resolve()
     native_kernel=native_player.parent/'Player_Data/Managed'
+    clock_source = native_player.parent/'runtime_sources/SockGraspMotion.cs'
+    config['physics_video_non_destructive_clock'] = clock_source.exists() and 'GetClothPhysicsClock' in clock_source.read_text()
     preparation_parameters=copy.deepcopy(config['obi']['expected'])
     parameters=copy.deepcopy(preparation_parameters)
     if args.material_overrides:
@@ -144,16 +196,23 @@ def main():
     if args.prepared_state:
         if not args.post_preparation_material: raise ValueError('Prepared state requires post-preparation material application')
         config['foot_conforming_rollout']['prepared_state_path']=str(args.prepared_state.resolve())
-    actions = BASELINE / 'applied_action.csv'
-    values = np.loadtxt(actions, delimiter=',', ndmin=2)
-    if values.shape != (100,18): raise ValueError('baseline must contain exactly 100 commands')
+    actions = None
+    values = None
+    if not args.autonomous:
+        actions = BASELINE / 'applied_action.csv'
+        values = np.loadtxt(actions, delimiter=',', ndmin=2)
+        if values.shape != (100,18): raise ValueError('baseline must contain exactly 100 commands')
     config['rcareworld']['graphics'] = True
     config['rcareworld']['port'] = args.port or 5100 + (2 if args.substeps == 16 else 0) + (1 if args.iterations == 40 else 0)
     if not args.post_preparation_material:
         config['obi']['substeps'] = args.substeps
         config['obi']['solver_iterations'] = args.iterations
-    config['inference'].update(reference_actions=str(actions),reference_action_blend=1.0,
-        reference_action_hold_steps=1,reference_action_interpolation='hold',device='cpu')
+    config['inference'].update(reference_actions=None if args.autonomous else str(actions),
+        reference_action_blend=0.0 if args.autonomous else 1.0,
+        reference_action_hold_steps=1,reference_action_interpolation='hold',device=args.device)
+    if args.autonomous:
+        config['inference']['reference_cartesian_pull_m']=0.0
+        config['inference']['policy_catch_up']={'enabled':False}
     name=args.candidate_name or f's{args.substeps}_i{args.iterations}'
     if not re.fullmatch(r'[A-Za-z0-9_-]+',name): raise ValueError('Unsafe candidate name')
     directory = args.output_root / name
@@ -167,7 +226,7 @@ def main():
     native_source_manifest_path = native_source_archive / 'manifest.json'
     native_source_manifest = json.loads(native_source_manifest_path.read_text()) if native_source_manifest_path.exists() else {}
     digest=hashlib.sha256(yaml.safe_dump(config,sort_keys=True).encode())
-    for source in [Path(__file__).resolve(),ROOT/'sock_dressing_simulation/demo.py',
+    for source in [Path(__file__).resolve(),ROOT/'sock_dressing_simulation/real_speed.py',ROOT/'sock_dressing_simulation/demo.py',
             ROOT/'sock_dressing_simulation/quality.py',
             ROOT/'sock_dressing_simulation/environment.py',ROOT/'sock_dressing_simulation/sock_cloth.py',
             ROOT/'RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi/SockClothAttr.cs',
@@ -184,8 +243,12 @@ def main():
     if args.prepared_state:digest.update(args.prepared_state.read_bytes())
     if native_source_manifest_path.exists():digest.update(native_source_manifest_path.read_bytes())
     engine_hash=digest.hexdigest()
+    if args.foot_views:
+        from foot_containment_demo import FootViewRecorder
+        engine_hash=hashlib.sha256((engine_hash+'foot_views').encode()+
+            (ROOT/'scripts/foot_containment_demo.py').read_bytes()).hexdigest()
     cache=directory/'result.json'
-    if cache.exists():
+    if cache.exists() and not args.autonomous:
         try:
             cached=json.loads(Path(json.loads(cache.read_text())['metadata']).read_text())
             if cached.get('frames')==args.steps and cached.get('stop_reason')=='max_steps' and cached.get('replay_engine_sha256')==engine_hash:
@@ -207,6 +270,8 @@ def main():
         if expected_library is not None and hashlib.sha256((native_kernel/library).read_bytes()).hexdigest() != expected_library:
             raise RuntimeError('Archived runtime source does not match compiled player: ' + library)
     for source in [Path(__file__).resolve(),
+            ROOT/'sock_dressing_simulation/real_speed.py',
+            ROOT/'RCareUnity/Assets/RCareCommon/Scripts/Attributes/ControllerAttr.cs',
             ROOT/'sock_dressing_simulation/demo.py',
             ROOT/'sock_dressing_simulation/quality.py',
             ROOT/'sock_dressing_simulation/environment.py',
@@ -224,6 +289,11 @@ def main():
             raise RuntimeError('Archived native source changed: ' + relative)
         shutil.copyfile(archived, sources/source.name)
         source_manifest[relative] = digest
+    if args.foot_views:
+        for filename in ('foot_containment_demo.py','report_natural_opening.py'):
+            source = ROOT/'scripts'/filename
+            shutil.copyfile(source,sources/filename)
+            source_manifest[str(source.relative_to(ROOT))] = hashlib.sha256(source.read_bytes()).hexdigest()
     for relative, expected_digest in immutable_manifest.items():
         if relative.startswith('compiled_') or relative in source_manifest:
             continue
@@ -238,19 +308,52 @@ def main():
     source_manifest['compiled_Obi.dll'] = hashlib.sha256((kernel.parent/'Obi.dll').read_bytes()).hexdigest()
     (directory/'replay_sources.json').write_text(json.dumps(source_manifest,indent=2)+'\n')
     # Separate native logs make concurrent fixed-command experiments reviewable.
+    if args.autonomous:
+        if (directory/'live_frame_diagnostics.jsonl').exists():
+            raise RuntimeError('Fresh autonomous run requires a new output directory')
+        inference_sources={}
+        for source in [ROOT/'sock_dressing_simulation/policy.py',
+                       ROOT/'sock_dressing_simulation/perception.py',
+                       resolve_package_path(config['inference']['checkpoint']),
+                       resolve_package_path(config['inference']['stats'])]:
+            shutil.copyfile(source,sources/source.name)
+            inference_sources[str(source)] = hashlib.sha256(source.read_bytes()).hexdigest()
+        (directory/'inference-sources.json').write_text(json.dumps(inference_sources,indent=2)+'\n')
     (directory/'live_frame_diagnostics.jsonl').write_text('')
     executable=resolve_package_path(config['rcareworld']['executable']).resolve()
     wrapper=directory/'player.sh'
-    wrapper.write_text('#!/bin/bash\nexport SOCK_CONTACT_PROGRESS_PATH='+shlex.quote(str((directory/'contact-progress.log').resolve()))+'\nexec '+shlex.quote(str(executable))+
+    wrapper.write_text('#!/bin/bash\nexport SOCK_GRASP_MOTION_LOG='+shlex.quote(str((directory/'grasp-substeps.jsonl').resolve()))+'\nexport SOCK_CONTACT_PROGRESS_PATH='+shlex.quote(str((directory/'contact-progress.log').resolve()))+'\nexec '+shlex.quote(str(executable))+
         ' -logFile '+shlex.quote(str((directory/'player.log').resolve()))+' "$@"\n')
     wrapper.chmod(0o755)
     config['rcareworld']['executable']=str(wrapper.resolve())
     (directory/'config.yaml').write_text(yaml.safe_dump(config,sort_keys=False))
     last = {}; side_video = [None]; track_frame = [0]; errors = []; initial_clock = [None]
+    foot_views = [None]
+    physics_video = [None]
+    speed_rollout = [None]
+    commanded_frame = [0]
+    inferred_frames = [0]
 
     class ReplayEnvironment(SockDressingEnv):
+        refresh_observation_after_contact_start = args.autonomous
+        def observe_restored_contact_state(self):
+            self._read_only_native_observation = True
+            try:
+                observation = self.observe()
+                clock = observation['dressing_qa']['foot_collision_safety']['cloth_physics_clock']
+                if clock != initial_clock[0]:
+                    raise RuntimeError('Initial inference observation advanced restored physics')
+                return observation
+            finally:
+                self._read_only_native_observation = False
         def close(self):
             try:
+                if speed_rollout[0] is not None:
+                    speed_rollout[0].close()
+                    speed_rollout[0] = None
+                if physics_video[0] is not None:
+                    physics_video[0].close()
+                    physics_video[0] = None
                 attempt=getattr(self,'_preparation_attempt_state',None)
                 if attempt:(directory/'preparation_attempt_state.json').write_text(attempt+'\n')
                 if args.terminal_projection_probe and track_frame[0] == args.steps and not getattr(self,'_terminal_probe_done',False):
@@ -294,13 +397,64 @@ def main():
                 super().close()
         def begin_cloth_contact_rollout(self):
             super().begin_cloth_contact_rollout()
+            if args.camera_alignment_output:
+                from align_inference_camera import align_camera
+                align_camera(self, directory, args.camera_alignment_output, args.config)
+            settling=self.config.get('contact_settling',{})
+            if settling.get('enabled',False):
+                if not speed_matched:
+                    raise ValueError('Contact settling requires the real-speed profile')
+                from sock_dressing_simulation.real_speed import SpeedMatchedRollout
+                from sock_dressing_simulation.physics_video import PhysicsStepRecorder
+                settling_directory=directory/'settling'
+                settling_directory.mkdir(exist_ok=True)
+                holding=SpeedMatchedRollout(self,settling_directory,lambda:0,Path(prepared['runtime_urdf']))
+                recording=PhysicsStepRecorder(self,settling_directory,lambda:0)
+                stable=0
+                report=dict(passed=False,policy_commands=0,settings=settling,samples=[])
+                try:
+                    for step in range(1,int(settling['maximum_steps'])+1):
+                        holding.step()
+                        self.sock_cloth.request_particle_velocities()
+                        self._env.step(simulate=False)
+                        velocities=self.sock_cloth.particle_velocities()
+                        speeds=np.linalg.norm(velocities,axis=1)
+                        sample=dict(step=step,speed_p95_m_s=float(np.quantile(speeds,.95)),
+                            maximum_speed_m_s=float(speeds.max()),mean_vertical_speed_m_s=float(velocities[:,1].mean()))
+                        report['samples'].append(sample)
+                        quiet=(sample['speed_p95_m_s']<=settling['maximum_speed_p95_m_s'] and
+                            sample['maximum_speed_m_s']<=settling['maximum_particle_speed_m_s'] and
+                            sample['mean_vertical_speed_m_s']<=settling['maximum_mean_upward_speed_m_s'])
+                        stable=stable+1 if quiet else 0
+                        if step%10==0:
+                            print('contact settling '+json.dumps(sample),flush=True)
+                        if step>=settling['minimum_steps'] and stable>=settling['consecutive_stable_steps']:
+                            report['passed']=True
+                            break
+                finally:
+                    recording.close()
+                    holding.close()
+                    report['physical_steps']=len(report['samples'])
+                    (settling_directory/'validation.json').write_text(json.dumps(report,indent=2)+'\n')
+                if not report['passed']:
+                    raise RuntimeError('Grasped cloth did not physically settle; see settling/validation.json')
             self.sock_cloth.request_dressing_qa()
             self.sock_cloth.request_particles()
+            if args.foot_views:
+                self.sock_cloth.request_scene_geometry()
             self._env.step(simulate=False)
             initial_clock[0] = self.sock_cloth.data.get('dressing_qa',{}).get('foot_collision_safety',{}).get('cloth_physics_clock',{})
             if not initial_clock[0].get('externally_stepped'):
                 raise RuntimeError('Fixed-motion replay requires explicitly stepped Obi physics')
+            if args.foot_views:
+                foot_views[0] = FootViewRecorder(self, directory)
+                foot_views[0].initialize(dict(self.sock_cloth.data))
             if self._rollout_material_report is not None:
+                mass_check = validate_total_cloth_mass(self.config,
+                    len(self.sock_cloth.particles()),self._rollout_material_report['actual'])
+                if mass_check is not None:
+                    self._rollout_material_report['total_mass_validation']=mass_check
+                    (directory/'cloth-mass-validation.json').write_text(json.dumps(mass_check,indent=2)+'\n')
                 self._rollout_material_report['initial_collision_corrected_particles_world']=self.sock_cloth.particles().tolist()
                 self._rollout_material_report['initial_contact_qa']=self.sock_cloth.data.get('dressing_qa',{})
                 snapshot=self._rollout_material_report.get('prepared_state_json')
@@ -309,16 +463,41 @@ def main():
                     self._rollout_material_report['prepared_state_sha256']=hashlib.sha256(snapshot.encode()).hexdigest()
                 (directory/'applied_material.json').write_text(json.dumps(self._rollout_material_report,indent=2)+'\n')
             (directory/'config.yaml').write_text(yaml.safe_dump(self.config,sort_keys=False))
+            if args.physics_video:
+                from sock_dressing_simulation.physics_video import PhysicsStepRecorder
+                physics_video[0] = PhysicsStepRecorder(self, directory, lambda: commanded_frame[0])
+            if speed_matched:
+                from sock_dressing_simulation.real_speed import SpeedMatchedRollout
+                speed_rollout[0] = SpeedMatchedRollout(self, directory, lambda: commanded_frame[0],
+                    Path(prepared['runtime_urdf']))
+            if speed_matched or self.config['inference'].get('read_only_observation', False):
+                self._read_only_native_observation = True
         def observe(self):
-            value = super().observe(); last.clear(); last.update(value); return value
+            if (speed_matched or self.config['inference'].get('read_only_observation', False)) and self._cloth_contact_rollout_started:
+                self._read_only_native_observation = True
+            value = super().observe()
+            if foot_views[0] is not None:
+                value['foot_views'] = foot_views[0].capture(value['cloth'])
+            last.clear(); last.update(value); return value
         def command(self, command, previous=None):
             # The baseline commands already passed the position/rate limiter.
             # Re-limiting against changed contact feedback would change this experiment.
             replaying = self._cloth_contact_rollout_started
-            result = super().command(command, None if replaying else previous)
+            if replaying:
+                commanded_frame[0] += 1
+            if speed_matched and replaying:
+                return speed_rollout[0].command(command)
+            result = super().command(command, None if replaying and not args.autonomous else previous)
             if replaying:
                 errors.append(float(np.max(np.abs(result-command))))
             return result
+
+        def advance_physics(self, steps):
+            if speed_matched and self._cloth_contact_rollout_started:
+                for _ in range(steps):
+                    speed_rollout[0].step()
+            else:
+                super().advance_physics(steps)
 
     class ReplayPolicy:
         def __init__(self,config,**kwargs):
@@ -335,6 +514,8 @@ def main():
                 if side_video[0] is None:
                     side_video[0]=_open_video(directory/'side_demo.mp4',side['rgb'].shape,5.0)
                 _write_video_frame(side_video[0],side['rgb'],track_frame[0]);track_frame[0]+=1
+            if foot_views[0] is not None:
+                foot_views[0].record(last['foot_views'], last['cloth'], track_frame[0]-1)
             result=self.measure(rgb,renderer_masks)
             qa=last.get('dressing_qa',{})
             stretch=SockDressingEnv.cloth_radius_qa(last.get('cloth',{}))
@@ -356,31 +537,53 @@ def main():
         def measure(self,rgb,masks):
             return renderer_measurements(last, masks)
 
+    class AutonomousPerception(RendererMeasurements, SAMDepthPerception):
+        def __init__(self, config):
+            SAMDepthPerception.__init__(self, config)
+        def initialize(self, rgb, **kwargs):
+            return SAMDepthPerception.initialize(self, rgb, **kwargs)
+        def measure(self, rgb, masks):
+            return SAMDepthPerception.track(self, rgb, renderer_masks=masks)
+
+    class AutonomousPolicy(SAMDAMSARNNPolicy):
+        def step(self, **kwargs):
+            result = super().step(**kwargs)
+            inferred_frames[0] += 1
+            return result
+
+    prepared = prepared_replay_assets(config,directory)
     try:
-        result=run_demo(config,prepared=prepared_replay_assets(config,directory),
+        result=run_demo(config,prepared=prepared,
             output_root=directory,sock_points=None,leg_points=None,max_steps=args.steps,seed=0,
-            environment_factory=ReplayEnvironment,policy_factory=ReplayPolicy,
-            perception_factory=RendererMeasurements)
+            environment_factory=ReplayEnvironment,
+            policy_factory=AutonomousPolicy if args.autonomous else ReplayPolicy,
+            perception_factory=AutonomousPerception if args.autonomous else RendererMeasurements)
     finally:
         if side_video[0] is not None: side_video[0].release()
+        if foot_views[0] is not None: foot_views[0].close()
     metadata_paths=list(directory.glob('data_sock_sim_smoke/train/phase4_*/metadata.json'))
     metadata_path=max(metadata_paths,key=lambda p:p.stat().st_mtime)
     metadata=json.loads(metadata_path.read_text())
     (directory/'last_observed_cloth_state.json').write_text(json.dumps(dict(
         dressing_qa=last.get('dressing_qa',{}),cloth=last.get('cloth',{})),indent=2,
         default=lambda value: value.tolist() if isinstance(value,np.ndarray) else value.item())+'\n')
-    metadata.update(mode='fixed_motion_replay',replay_engine_sha256=engine_hash,
-        frames_inferred=0,frames_replayed=metadata['frames'],
-        replay_source=str(actions),
-        replay_source_sha256=hashlib.sha256(actions.read_bytes()).hexdigest(),
-        replay_command_maximum_error=max(errors,default=0),
+    metadata.update(mode='samdamsarnn_closed_loop' if args.autonomous else 'fixed_motion_replay',replay_engine_sha256=engine_hash,
+        frames_inferred=inferred_frames[0] if args.autonomous else 0,
+        frames_replayed=0 if args.autonomous else metadata['frames'],
+        replay_source=None if args.autonomous else str(actions),
+        replay_source_sha256=None if args.autonomous else hashlib.sha256(actions.read_bytes()).hexdigest(),
+        replay_command_maximum_error=None if args.autonomous else max(errors,default=0),
         rollout_initial_cloth_physics_clock=initial_clock[0],
-        perception='renderer RGB/depth/masks (fixed command replay)',
-        command_contract='recorded applied 18-D commands -> position bounds/mimic -> RCareWorld',
+        perception='SAM2/Depth-Anything-V2 (existing renderer-mask configuration)' if args.autonomous else 'renderer RGB/depth/masks (fixed command replay)',
+        command_contract='live model output -> existing joint bounds/rate/mimic -> RCareWorld' if args.autonomous else 'recorded applied 18-D commands -> position bounds/mimic -> RCareWorld',
         original_policy_checkpoint=config['inference']['checkpoint'],
-        perception_source='renderer_measurements',policy_source='recorded_applied_commands',
+        perception_source='SAMDepthPerception' if args.autonomous else 'renderer_measurements',
+        policy_source='SAMDAMSARNNPolicy' if args.autonomous else 'recorded_applied_commands',
         side_video=str(directory/'side_demo.mp4'))
     metadata['native_player_executable']=str(executable)
+    if speed_matched:
+        metadata['real_speed'] = config['real_speed']
+        metadata['command_contract'] = 'live model output -> joint bounds/mimic -> URDF velocity override and acceleration limits at 0.02 s -> PhysX drive'
     # Keep the baseline preparation values explicitly in the rollout profile,
     # while the saved active expected/requested values match the candidate.
     config['obi']['expected']=copy.deepcopy(parameters)
@@ -388,6 +591,17 @@ def main():
     (directory/'config.yaml').write_text(yaml.safe_dump(config,sort_keys=False))
     metadata_path.write_text(json.dumps(metadata,indent=2,sort_keys=True)+'\n')
     (directory/'result.json').write_text(json.dumps({'result':result,'metadata':str(metadata_path)},indent=2)+'\n')
+    if args.foot_views and result['ok']:
+        from foot_containment_demo import finalize
+        finalize(directory, metadata_path, args.steps)
+    elif args.foot_views:
+        (directory/'recording_incomplete.json').write_text(json.dumps(dict(
+            requested_commands=args.steps, completed_commands=metadata['frames'],
+            inferred_commands=inferred_frames[0], stop_reason=metadata['stop_reason'],
+            foot_view_frames=foot_views[0].frames if foot_views[0] is not None else 0,
+            raw_partial_videos_preserved=True),indent=2)+'\n')
     print('METADATA '+str(metadata_path),flush=True)
+    if not result['ok']:
+        raise SystemExit(1)
 
 if __name__=='__main__': main()

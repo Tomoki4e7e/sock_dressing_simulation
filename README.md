@@ -181,6 +181,7 @@ camera_depth/*.png
 depth_mask/sock_depth/*.png
 depth_mask/leg_depth/*.png
 metadata.json
+robot_contact.jsonl
 ```
 
 Depth PNGs are RCareWorld's uint8 linear depth between the configured near/far
@@ -203,6 +204,129 @@ Phase 0 smoke does not create `features/`, so the audit may mark the episode
 unusable for residual training even when all raw modalities are aligned.
 
 ## Phase 4 — AIREC inference demo
+
+`config/real_speed_autonomous40.yaml` approximates the real robot's configured
+0.2 s command interval and speed overrides (arms 0.25, grippers 0.5). It uses
+URDF velocity limits multiplied by those overrides, URDF acceleration limits,
+and an acceleration-limited target update on each 0.02 s fixed step. Native
+articulation velocity caps and moderate drive stiffness/damping are applied
+and read back to limit coupled-joint transient overshoot. This profile replaces
+the per-command `max_delta` limiter during rollout; initialization is unchanged.
+At a prismatic hard stop, outward physical velocity is reconciled to zero
+without changing joint position. Unconstrained velocity is never clipped by
+this reconciliation; raw stop velocities and corrections are retained in the
+fixed-step motion log. `SockDressing.Editor.RealSpeedStopChecks.Run` validates
+both stops, inward motion, and free motion in Unity.
+It does not reproduce a measured robot timing trace or the proprietary online
+controller's interpolation. Observation and recording are read-only, so every
+inference action advances exactly ten fixed steps.
+
+Build a dedicated Player with `scripts/build_custom_player.sh development
+Build/SockDressingPlayer/RealSpeed40`, then run `scripts/replay_foot_contact.py`
+with `--config config/real_speed_autonomous40.yaml --autonomous --device cuda --steps 40
+--physics-video --surface-mode local --transport local --fixed-grasp-offsets
+--post-preparation-material --player-executable
+Build/SockDressingPlayer/RealSpeed40/Player.x86_64 --output-root
+artifacts/phase4/real-speed-autonomous40 --candidate-name <new-run-id>`.
+The existing scene, checkpoint, renderer-mask configuration and task QA remain
+in effect. `scripts/validate_real_speed_demo.py <run-directory>` validates live
+commands, measured joint speeds, 400 physical steps, the 8 s duration, and all
+three decoded MP4 recordings. `joint-motion.jsonl` retains every fixed-step
+target, velocity, acceleration, actual joint state and physics clock.
+
+`config/grasp_following_autonomous30.yaml` uses the same low-speed profile for
+30 live closed-loop commands (300 fixed steps, 6 s of physics). Native virtual
+pins and supplemental material/contact constraints sample the same original
+anchor trajectory per substep, including the transformed grasp offsets during
+rotation. Virtual anchor handles do not collide; physical jaws and feet retain
+their collision geometry. The local rollout does not translate the entire sock.
+Gripper-local anchor poses remain fixed during manipulation. The rectangular
+cuff/plane preparation templates release at contact arming; passive cloth/hem
+constraints and all material/contact bounds remain active. A stationary grasp
+settles under gravity before inference, with its own video and diagnostics;
+failure to meet the configured speed thresholds stops the run. The 300-step
+policy recording starts after settling, with prompts from the settled frame.
+The sock keeps vertex-to-vertex self contact and surface-to-collider external
+contact as separate routes. Extra self-only point simplices never add duplicate
+contacts with feet/jaws; all surface triangles retain their external contacts.
+Within this CPU contact profile, convex MeshColliders use a cached outward
+convex hull and one nearest contact per cloth simplex/collider, rather than
+independent two-sided source-mesh faces. Inside/outside classification uses
+the contact material point, including triangles that cross a solid boundary.
+The inserted cuff patch excludes only its own jaw collision category; free
+cloth, the opposite jaw and foot contacts remain active. Release/disarm restores
+the original filters. Contact diagnostics are emitted after collision callbacks
+in `grasp-substeps.contacts.jsonl`, with the completed step number and world
+positions reconstructed from barycentric coordinates.
+Mass, radius, friction, damping and strain limits stay unchanged. Real-mesh
+paired probes cover the energy injection caused by surface self contacts;
+the native suite also tests an obstacle hitting a triangle interior and routing
+removal restoring the ordinary actor representation.
+The Obi CPU backend has an optional external pin-target hook; unregistered
+pins, non-external solvers, and rigidbody pins retain the standard Obi behavior.
+
+Run `SockDressing.Editor.GraspMotionChecks.Run` in Unity before building a
+dedicated Player. The paired tests include rotation, gravity sag and release,
+as well as stationary/moving/stop/reversal and anchor-collision cases. Run
+`scripts/replay_foot_contact.py --config config/grasp_following_autonomous30.yaml
+--autonomous --device cuda --steps 30 --physics-video --foot-views --surface-mode local
+--transport local --fixed-grasp-offsets --post-preparation-material
+--player-executable <dedicated-player>/Player.x86_64 --output-root <new-output>
+--candidate-name <new-run-id>`. Use `--prepared-state <saved-state.json>` to
+restore a validated existing preparation without replaying policy commands.
+Validate with `scripts/report_grasp_following.py --directory <run-directory>
+--regressions <grasp-motion-checks.json>` and
+`scripts/validate_real_speed_demo.py <run-directory> --commands 30`.
+For the current ankle-total25deg, ten-physics-step profile, add
+`--camera-alignment-output config/autonomous30_current_ankle_total25deg_physics10_camera_centered.yaml`
+to the autonomous replay command using
+`config/autonomous30_current_ankle_total25deg_physics10.yaml`. Calibration samples
+the freshly prepared scene without advancing physics, adjusts only mounted
+camera yaw/roll, and requires a toe-center error of at most 25 pixels and a
+leg-centerline tilt of at most 3 degrees before inference starts. The resulting
+config can also be used directly for later runs. `camera_alignment/alignment.json`
+retains every trial image, angle measurement, and before/after physics clock.
+Run `scripts/report_camera_centered_demo.py <run-directory> --baseline <original-episode>`
+from the package directory after completion to validate the 30 live commands,
+300 fixed steps, camera alignment and unchanged human/chair/foot pose, and to
+save synchronized multiview video and before/after previews beside the run.
+
+For comparison with the real right-camera first frame, use
+`scripts/match_real_camera_composition.py --name <new-candidate> --translation <x> <y> <z>
+--position <x> <y> <z> --rotation <pitch> <yaw> <roll> --iterations 0`.
+This performs fresh preparation, mounts the right head camera, translates the
+human root, chair, anchor and fixed toe together, and records one autonomous
+command with ten physics steps. Camera trials use read-only captures; resolution,
+FOV, arm/ankle poses and cloth preparation remain inherited. With nonzero
+iterations the camera fit uses the annotated real grasp-pad centers. Optional
+`--shape-after-command` additionally fits foot/sock masks after the live command;
+this is an exploratory run and its camera must be validated in a fresh run with
+`--iterations 0` before selection. No previous policy commands are replayed.
+Run `scripts/report_real_camera_composition.py <candidate-directory>` to compare
+centroids, widths, pad positions/tilt and physical-clock continuity. Add
+`--publish` to save the selected configuration and image comparison. Unmatched
+composition criteria are retained explicitly in `validation.json`; successful
+recording validation does not imply every composition criterion passes.
+
+For ankle-to-toe size adjustment with the right camera fixed, run
+`python3 -u scripts/search_real_foot_size.py`. It compares at most twelve fresh
+preparations, varying only human/chair world Y (±15cm) and Z (±20cm) from the
+saved real-composition profile. Each preview stops before policy creation.
+Measurements cut the leg mask at the anatomical ankle, use the projected
+ankle/toe axis, and retain border truncation and real ankle annotations.
+The real target excludes the lower leg; a cropped ankle cannot pass matching.
+After search, read `selected_delta_yz_m` from
+`artifacts/phase4/real-right-camera-foot-size-20261014/search.json` and run
+`python3 -u scripts/adjust_real_foot_size.py --name <new-validation-name>
+--dy <selected-Y> --dz <selected-Z>` without `--preview-only`. This performs fresh
+preparation and exactly one live command with ten physical steps. Validate with
+`python3 scripts/report_real_foot_size.py <validation-directory> --publish`.
+The dedicated configuration and comparison retain any width/length residuals;
+this workflow does not run a thirty-command demo or move the inference camera.
+
+The grasp-following report requires complete live inference, 1 mm original-anchor accuracy,
+cloth/contact QA, toe approach, gravity tests and decoded recordings. Substep
+logs include mass, center height, kinetic energy and unpinned vertical speeds.
 
 The `train` command retrains the ShareSet `SAMDAMSARNN` without modifying
 ShareSet. It reads the episode-level split from `dataset_sock.yaml`, validates
@@ -294,6 +418,47 @@ bimanual 18-D contract; therefore it reports this capability gap and never
 labels a one-gripper run as sock-dressing success.
 
 ## Environment API and limitations
+
+### Dry-AIREC rigid contact feedback (custom Player)
+
+The rebuilt native custom Player records PhysX rigid-contact impulses on each
+robot articulation. It divides each pair impulse by the actual simulated step
+duration and projects its force onto ancestor joints. Revolute loads use N m;
+prismatic gripper loads use N. `external_torque.csv` now uses this measured
+rigid-contact projection when available. `torque.csv` retains drive effort and
+`angle.csv` retains the physical joint positions. Drive/inverse-dynamics vectors
+are reordered into the same movable-joint order and sampled after physics.
+
+`robot_contact.jsonl` records one row per episode frame: contact partner IDs,
+world contact forces and moments, physics step/duration, source and availability,
+and the original `external_torque_residual` for comparison. Residuals are not
+added to contact loads because that would double count collision response.
+The existing `contact_force` field continues to describe Obi cloth contacts;
+rigid contacts are separately exposed as `rigid_contact`.
+
+Use `config/rigid_contact_feedback.yaml` for drive-controlled gripper/human
+collisions with required contact telemetry. Historical configurations that
+explicitly ignore human collisions or teleport rollout joints retain those
+settings; diagnostics expose their policy. Older Players retain the labelled
+residual fallback, while the required-feedback profile rejects missing telemetry.
+
+Build and validate with:
+
+```bash
+bash scripts/build_custom_player.sh development
+python3 scripts/validate_rigid_contact_feedback.py \
+  --output artifacts/rigid_contact_feedback/validation.json
+```
+
+Unity 2022.3 supplies the total impulse for a contact pair
+([Unity reference](https://docs.unity.cn/2022.3/Documentation/ScriptReference/Collision-impulse.html)).
+For multiple contact points, moments are approximated by placing that resultant
+at the manifold centroid. This is a simulator load estimate, not a calibrated
+hardware torque sensor. PhysX applies the physical response already; the sensor
+does not apply another force. Obi cloth/grasp tension transfer to ArticulationBody
+remains a separate, unimplemented path.
+
+### Pinned distributed Player
 
 `SockDressingEnv` imports `pyrcareworld` only when connecting. It loads the
 portable URDF and cloth OBJ, accesses configured HumanBodyIK and camera

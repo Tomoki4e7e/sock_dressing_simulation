@@ -1,0 +1,11 @@
+extends: autonomous30_current_ankle_toes_up15deg.yaml
+scenario:
+  foot:
+    plantarflexion_degrees: -20.0
+scene:
+  initial_pose_contract:
+    locked_pose_baseline:
+      right_toe_position:
+      - -0.14399749040603638
+      - 0.5167974440156218
+      - 0.5771440866774356

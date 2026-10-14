@@ -1,0 +1,30 @@
+extends: opening_widen_w95.yaml
+
+scene:
+  robot_rollout_direct_joint_control: false
+
+inference:
+  max_steps: 40
+  rate_hz: 5.0
+  physics_steps_per_action: 10
+  reference_actions: null
+  reference_action_blend: 0.0
+  reference_cartesian_pull_m: 0.0
+  policy_catch_up:
+    enabled: false
+  record_inference_camera_video: true
+
+real_speed:
+  enabled: true
+  command_interval_s: 0.2
+  fixed_step_s: 0.02
+  arm_speed_override: 0.25
+  gripper_speed_override: 0.5
+  # PhysX contact/drive corrections can overshoot maxJointVelocity slightly.
+  # Keep the URDF*override contract, with headroom for those corrections.
+  drive_velocity_margin: 0.8
+  # Moderate the imported high-gain drive's coupled-joint transient response.
+  drive_stiffness: 7500.0
+  drive_damping: 1500.0
+  reconcile_prismatic_stop_velocity: true
+  basis: configuration_approximation_not_measured_robot_timing

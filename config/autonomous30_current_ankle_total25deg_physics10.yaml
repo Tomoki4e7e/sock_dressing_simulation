@@ -1,0 +1,4 @@
+extends: autonomous30_current_ankle_further_up10deg.yaml
+inference:
+  physics_steps_per_action: 10
+  max_steps: 30

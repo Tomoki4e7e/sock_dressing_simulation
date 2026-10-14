@@ -1,0 +1,27 @@
+extends: grasp_following_autonomous30.yaml
+scene:
+  human_position: &id001
+  - 0.06000041788838565
+  - 1.4300000191
+  - -0.7700000285982428
+  initial_pose_contract:
+    locked_pose_baseline:
+      chair_position:
+      - -0.08427231042653265
+      - 0.39271510881528415
+      - -0.4086987777751183
+      human_anchor_position:
+      - -0.08427231042653265
+      - 0.642715108815284
+      - -0.4086987777751183
+      human_root_position: *id001
+      right_toe_position:
+      - -0.14399746092653265
+      - 0.4041844431152841
+      - 0.5771441058248817
+    expected_human_position: *id001
+    away_from_robot_m: null
+    down_m: null
+    up_m: null
+    right_from_robot_m: null
+    translate_to_foot_to_sock: false

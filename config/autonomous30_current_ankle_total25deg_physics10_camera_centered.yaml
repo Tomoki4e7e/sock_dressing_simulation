@@ -1,0 +1,6 @@
+extends: autonomous30_current_ankle_total25deg_physics10.yaml
+scene:
+  camera_local_rotation:
+  - 60.0
+  - 49.21405606085659
+  - 52.919836245150044

@@ -244,6 +244,13 @@ def run_dressing_trial(
                         "angle": observation["angle"].copy(),
                         "torque": observation["torque"].copy(),
                         "external_torque": observation["external_torque"].copy(),
+                        "robot_telemetry": {
+                            key: deepcopy(observation.get(key)) for key in (
+                                "external_torque_source", "external_torque_residual", "external_torque_residual_source",
+                                "rigid_contact_force_available", "rigid_contact", "rigid_contact_step", "rigid_contact_step_seconds",
+                                "inverse_dynamics_step",
+                            )
+                        },
                     }
                 )
             if not alignment["ok"] or attached < 2:

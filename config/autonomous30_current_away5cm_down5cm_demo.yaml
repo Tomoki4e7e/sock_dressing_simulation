@@ -1,0 +1,3 @@
+extends: autonomous30_current_away5cm_down5cm.yaml
+contact_settling:
+  enabled: false

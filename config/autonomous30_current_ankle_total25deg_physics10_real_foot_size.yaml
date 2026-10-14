@@ -1,0 +1,28 @@
+extends: autonomous30_current_ankle_total25deg_physics10_real_composition.yaml
+scene:
+  human_position: &id001
+  - 0.09300041788838564
+  - 1.2850000191
+  - -0.6800000285982427
+  initial_pose_contract:
+    locked_pose_baseline:
+      human_root_position: *id001
+      chair_position: &id002
+      - -0.051272310426532644
+      - 0.24771510881528408
+      - -0.3186987777751183
+      human_anchor_position:
+      - -0.051272310426532644
+      - 0.497715108815284
+      - -0.3186987777751183
+      right_toe_position:
+      - -0.11099749040603638
+      - 0.32983928211740343
+      - 0.6764459872245789
+    expected_human_position: *id001
+    expected_chair_position: *id002
+    away_from_robot_m: null
+    down_m: null
+    up_m: null
+    right_from_robot_m: null
+    translate_to_foot_to_sock: false

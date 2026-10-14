@@ -1,0 +1,8 @@
+extends: real_speed_autonomous40.yaml
+
+# Drive-controlled manipulation with measured gripper/human contact feedback.
+scene:
+  ignore_robot_human_rigid_collisions: false
+  ignore_non_gripper_robot_human_rigid_collisions: true
+  robot_rollout_direct_joint_control: false
+  require_rigid_contact_telemetry: true

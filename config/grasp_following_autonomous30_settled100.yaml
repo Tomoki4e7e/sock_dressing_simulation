@@ -1,0 +1,4 @@
+extends: grasp_following_autonomous30.yaml
+
+contact_settling:
+  minimum_steps: 100

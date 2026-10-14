@@ -1,0 +1,11 @@
+extends: autonomous30_current_away5cm_down5cm_normal.yaml
+scenario:
+  foot:
+    plantarflexion_degrees: 5.0
+scene:
+  initial_pose_contract:
+    locked_pose_baseline:
+      right_toe_position:
+      - -0.143997460603714
+      - 0.44614250332888233
+      - 0.5864458676987852
