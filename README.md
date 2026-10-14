@@ -308,6 +308,22 @@ centroids, widths, pad positions/tilt and physical-clock continuity. Add
 composition criteria are retained explicitly in `validation.json`; successful
 recording validation does not imply every composition criterion passes.
 
+For ankle-to-toe size adjustment with the right camera fixed, run
+`python3 -u scripts/search_real_foot_size.py`. It compares at most twelve fresh
+preparations, varying only human/chair world Y (±15cm) and Z (±20cm) from the
+saved real-composition profile. Each preview stops before policy creation.
+Measurements cut the leg mask at the anatomical ankle, use the projected
+ankle/toe axis, and retain border truncation and real ankle annotations.
+The real target excludes the lower leg; a cropped ankle cannot pass matching.
+After search, read `selected_delta_yz_m` from
+`artifacts/phase4/real-right-camera-foot-size-20261014/search.json` and run
+`python3 -u scripts/adjust_real_foot_size.py --name <new-validation-name>
+--dy <selected-Y> --dz <selected-Z>` without `--preview-only`. This performs fresh
+preparation and exactly one live command with ten physical steps. Validate with
+`python3 scripts/report_real_foot_size.py <validation-directory> --publish`.
+The dedicated configuration and comparison retain any width/length residuals;
+this workflow does not run a thirty-command demo or move the inference camera.
+
 The grasp-following report requires complete live inference, 1 mm original-anchor accuracy,
 cloth/contact QA, toe approach, gravity tests and decoded recordings. Substep
 logs include mass, center height, kinetic energy and unpinned vertical speeds.
