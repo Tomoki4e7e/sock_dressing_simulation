@@ -58,6 +58,22 @@ and assign `ObiSockBackend` before physical validation.
 
 ## Commands
 
+For ankle-only variants of the saved held-A sock with a gravity-driven free tail, use
+`python3 scripts/preview_pose_patterns.py` and
+[`config/pose_patterns.yaml`](config/pose_patterns.yaml).
+See [pose pattern reconstruction](docs/pose_patterns.md) for the angle conventions,
+the supported-foot gravity model, and saved comparison images.
+
+For smooth, partially dressed initial states A–E from the sock pose workbook,
+see [the preinsertion guide](docs/preinsert_normal.md). Generate and inspect all
+five states with `python3 scripts/preview_preinsert.py` after building its Player.
+
+For a sock that contracts around the foot and holds through contact friction,
+use `python3 scripts/fit_preinsert.py --stage A` and
+[`config/preinsert_fitted.yaml`](config/preinsert_fitted.yaml).
+See [circumference fitting](docs/circumference_fit.md) for the native build,
+gravity validation, saved states, and A–E selection.
+
 ```bash
 python3 -m sock_dressing_simulation.cli doctor
 python3 -m sock_dressing_simulation.cli prepare-assets

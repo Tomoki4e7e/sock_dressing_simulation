@@ -1,0 +1,31 @@
+# Restore the previous 2 cm lowering by inheriting up15cm.
+# Translate all locked positions 2 cm toward Dry-AIREC in the horizontal plane.
+# Uses the same toe-to-robot axis as the existing away_from_robot_m convention.
+extends: autonomous30_current_ankle_total25deg_physics10_real_foot_size_forward8cm_back20cm_up15cm.yaml
+scene:
+  human_position: &id001
+  - 0.09097094785607615
+  - 1.4350000190999999
+  - -0.7801032637509626
+  initial_pose_contract:
+    locked_pose_baseline:
+      human_root_position: *id001
+      chair_position: &id002
+      - -0.05330178045884214
+      - 0.39771510881528405
+      - -0.4188020129278382
+      human_anchor_position:
+      - -0.05330178045884214
+      - 0.647715108815284
+      - -0.4188020129278382
+      right_toe_position:
+      - -0.11302696043834587
+      - 0.47983928211740345
+      - 0.5763427520718589
+    expected_human_position: *id001
+    expected_chair_position: *id002
+    away_from_robot_m: null
+    down_m: null
+    up_m: null
+    right_from_robot_m: null
+    translate_to_foot_to_sock: false

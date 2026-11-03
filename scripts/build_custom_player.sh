@@ -11,7 +11,7 @@ OUTPUT="${SOCK_BUILD_OUTPUT:-${2:-${ROOT}/Build/SockDressingPlayer/${MODE_DIR}}}
 # Unity changes its working directory to the project. Resolve user-supplied
 # relative output paths here so the build and its manifest share one location.
 OUTPUT="$(realpath -m "${OUTPUT}")"
-LOG_DIR="${ROOT}/artifacts/unity"
+LOG_DIR="${SOCK_BUILD_LOG_DIR:-${ROOT}/artifacts/unity}"
 IMPORT_LOG="${LOG_DIR}/import-${MODE}.log"
 BUILD_LOG="${LOG_DIR}/build-${MODE}.log"
 
@@ -32,6 +32,7 @@ if [[ ! -f "${PROJECT}/Library/ArtifactDB" ]] ||
   echo "Completing Unity asset import and script compilation..."
   "${UNITY}" \
     -batchmode \
+    -nographics \
     -quit \
     -projectPath "${PROJECT}" \
     -logFile "${IMPORT_LOG}"
@@ -45,6 +46,7 @@ fi
 
 ARGS=(
   -batchmode
+  -nographics
   -quit
   -projectPath "${PROJECT}"
   -executeMethod SockDressing.Editor.SockDressingBuild.BuildFromCommandLine
@@ -79,9 +81,10 @@ paths=[root/'RCareUnity/Assets/RCareCommon/Scripts/Main/PlayerMain.cs',
        root/'RCareUnity/Assets/Paid Dependencies/Obi/Scripts/Common/Backends/Burst/Collisions/BurstTriangleMesh.cs',
        root/'RCareUnity/Assets/Paid Dependencies/Obi/Scripts/Common/Collisions/ColliderTrackers/Trackers3D/ObiMeshShapeTracker.cs',
        root/'RCareUnity/Assets/Paid Dependencies/Obi/Scripts/Common/Collisions/ColliderTrackers/Trackers3D/ObiConvexCollisionMesh.cs',
-       root/'RCareUnity/Assets/SockDressing/Resources/FootSkinHullGeometry.json']
+       root/'RCareUnity/Assets/SockDressing/Resources/FootSkinHullGeometry.json',
+       root/'RCareUnity/Assets/SockDressing/Resources/PatternInspection.shader']
 paths += [root/'RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi'/name for name in
-          ['SockClothAttr.cs','SockGraspMotion.cs','SockGraspContacts.cs','SockOpeningRimBending.cs','SockFootCoupledMaterialDirect.cs','SockMaterialLinearFactor.cs','SockPreparedState.cs','FootContactGeometry.cs','FootConvexSolid.cs','FootSurfaceHistory.cs','FootSkinHullCollider.cs','SockFootSkinHull.cs']]
+          ['SockClothAttr.cs','SockGraspMotion.cs','SockGraspContacts.cs','SockOpeningRimBending.cs','SockFootCoupledMaterialDirect.cs','SockMaterialLinearFactor.cs','SockPreparedState.cs','SockPreinsert.cs','SockPosePatterns.cs','SockPatternGravity.cs','SockCircumferenceFit.cs','FootContactGeometry.cs','FootConvexSolid.cs','FootSurfaceHistory.cs','FootSkinHullCollider.cs','SockFootSkinHull.cs']]
 manifest={}
 for source in paths:
     relative=str(source.relative_to(root))

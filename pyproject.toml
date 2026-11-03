@@ -12,6 +12,7 @@ dependencies = ["numpy>=1.21,<3", "Pillow>=8,<12", "PyYAML>=5.4,<7"]
 
 [project.optional-dependencies]
 test = ["pytest>=7,<9"]
+fit = ["scipy>=1.7,<2"]
 inference = [
   "torch",
   "torchvision",
