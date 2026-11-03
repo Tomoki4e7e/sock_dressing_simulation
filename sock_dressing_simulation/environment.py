@@ -3372,10 +3372,23 @@ class SockDressingEnv:
 
     def begin_cloth_contact_rollout(self) -> None:
         """Enable continuous contact after the prepared drape pose is established."""
-        if getattr(self, "_pose_pattern_report", None):
-            raise RuntimeError("The visual pattern is held; configure local grasp deformation before a contact rollout")
+        pattern = getattr(self, "_pose_pattern_report", None)
+        if pattern:
+            toe = pattern.get("toe_contact", {})
+            native = getattr(self.sock_cloth, "data", {}).get("sock_toe_contact", {})
+            if not toe.get("passed"):
+                raise RuntimeError("The visual pattern is held; configure local grasp deformation before a contact rollout")
+            band = native.get("band_particle_indices", [])
+            if (not native.get("active") or not band or native.get("band_fixed_particles") != 0
+                    or native.get("band_native_finite_particles") != len(band)
+                    or native.get("outside_band_contacts") != 0):
+                raise RuntimeError("Toe contact rollout requires an active, dynamic, validated grasp band")
+            # Retain the prepared toe support, contact masks and tail model.
+            # The generic dressing setup would replace these local filters.
+            self._cloth_contact_rollout_started = True
+            return
         if self.sock_cloth is not None:
-            if self.sock_cloth.data.get("sock_circumference_fit", {}).get("active"):
+            if getattr(self.sock_cloth, "data", {}).get("sock_circumference_fit", {}).get("active"):
                 self._cloth_contact_rollout_started = True
                 return
             profile = self.config.get("foot_conforming_rollout", {})

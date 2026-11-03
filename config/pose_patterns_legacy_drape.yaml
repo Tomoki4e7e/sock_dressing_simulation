@@ -1,0 +1,11 @@
+extends: pose_patterns.yaml
+
+# Reproduce the earlier visual-only, 75 mm supported-region drape model.
+rcareworld:
+  executable: Build/SockDressingPlayer/HeldGravityV8/Player.x86_64
+pose_pattern:
+  toe_contact: null
+  gravity_drape:
+    enabled: true
+    pinned_length_m: 0.075
+    settle_steps: 150

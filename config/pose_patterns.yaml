@@ -1,17 +1,20 @@
 extends: preinsert_fitted.yaml
 
-# Keep the held-A fit at the foot; let its free tail settle under world gravity.
+# Support only the anatomical toe; allow native finger contact at the cuff.
 rcareworld:
-  executable: Build/SockDressingPlayer/HeldGravityV8/Player.x86_64
+  executable: Build/SockDressingPlayer/ToeContactV6/Player.x86_64
 preinsert: null
 circumference_fit: null
 pose_pattern:
   workbook: artifacts/sock-pose-pattern/sock_pose_patterns.xlsx
   number: 1
   held_reference: artifacts/sock-pose-pattern/preinsert-fitted/A
-  gravity_drape:
+  gravity_drape: null
+  toe_contact:
     enabled: true
-    pinned_length_m: 0.075
+    band_width_m: 0.030
+    support_length_m: 0.015
+    support_clearance_m: 0.008
     settle_steps: 150
   signs:
     shift: 1

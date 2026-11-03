@@ -58,11 +58,13 @@ and assign `ObiSockBackend` before physical validation.
 
 ## Commands
 
-For ankle-only variants of the saved held-A sock with a gravity-driven free tail, use
+For ankle poses with local toe support, native finger contact in the 30 mm cuff band,
+and a gravity-driven free tail, use
 `python3 scripts/preview_pose_patterns.py` and
 [`config/pose_patterns.yaml`](config/pose_patterns.yaml).
 See [pose pattern reconstruction](docs/pose_patterns.md) for the angle conventions,
-the supported-foot gravity model, and saved comparison images.
+the contact model, validation results, and saved images. The earlier visual-only
+drape is available through `config/pose_patterns_legacy_drape.yaml`.
 
 For smooth, partially dressed initial states A–E from the sock pose workbook,
 see [the preinsertion guide](docs/preinsert_normal.md). Generate and inspect all
