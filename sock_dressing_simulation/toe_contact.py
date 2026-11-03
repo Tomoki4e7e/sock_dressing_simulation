@@ -82,6 +82,14 @@ def apply_toe_contact(environment, reference, source, report, settings):
     initial=copy.deepcopy(attr.data.get('sock_toe_contact',{}))
     if not initial.get('active'):
         raise RuntimeError('BeginSockToeContact returned no active report; inspect Player errors or rebuild it')
+    skin_enabled=settings.get('rigid_skin_contact',True)
+    if skin_enabled:
+        scene=environment.config['scene']
+        policy=2 if scene.get('ignore_robot_human_rigid_collisions',True) else (1 if scene.get('ignore_non_gripper_robot_human_rigid_collisions',False) else 0)
+        attr._send_data('InstallSockRigidSkinContact',int(environment.config['assets']['robot_id']),policy)
+        environment._env.step(simulate=False)
+        if not attr.data.get('sock_rigid_skin_contact',{}).get('active'):
+            raise RuntimeError('Actual skin rigid contact requires a Player built with SockRigidSkinContact.cs')
     samples=[]
     recent=deque(maxlen=6)
     steps=int(settings.get('settle_steps',300))
@@ -115,6 +123,12 @@ def apply_toe_contact(environment, reference, source, report, settings):
                 if body['geometry_ok'] and surface['surface_ok']:break
     checks=assess_toe_settling(samples,len(points))
     checks.update(no_skin_intersection=body['geometry_ok'],no_self_intersection=surface['surface_ok'])
+    if skin_enabled:
+        attr._send_data('GetSockRigidSkinContact');environment._env.step(simulate=False)
+        skin=copy.deepcopy(attr.data.get('sock_rigid_skin_contact',{}))
+        checks['rigid_skin_matches']=assess_rigid_skin(skin,source['skin_surface'])
+        report['rigid_skin_contact']=skin
+        source['rigid_collision_surface']=dict(vertices=skin.get('vertices_world',[]),triangles=skin.get('triangles',[]),source='actual_baked_skin_triangle_mesh')
     perimeter,_=_perimeter(points,source['rest_positions'])
     support['seed_particle_indices']=support['particle_indices']
     support['particle_indices']=samples[-1]['toe_particle_indices']
@@ -138,3 +152,19 @@ def apply_toe_contact(environment, reference, source, report, settings):
     if not result['passed']:
         raise RuntimeError(f'Native toe contact settling failed: {result["checks"]}')
     return report
+
+
+def assess_rigid_skin(report, reference):
+    """Check native collider readback against the skin used by geometric search."""
+    vertices=np.asarray(report.get('vertices_world',[]),dtype=float)
+    expected=np.asarray(reference['vertices'],dtype=float)
+    return bool(report.get('active') and report.get('enabled')
+        and not report.get('convex',True) and not report.get('trigger',True)
+        and not report.get('obi_collider_added',True)
+        and report.get('old_proxy_colliders_disabled',0)>0
+        and report.get('old_proxy_colliders_still_enabled',1)==0
+        and report.get('maximum_skin_vertex_error_m',1)<5e-6
+        and report.get('triangles_match_baked_skin')
+        and (report.get('collision_policy',2)==2 or (report.get('right_gripper_pairs_enabled',0)>0 and report.get('right_gripper_pairs_ignored',1)==0))
+        and vertices.shape==expected.shape and np.allclose(vertices,expected,atol=5e-6,rtol=0)
+        and np.array_equal(report.get('triangles',[]),reference['triangles']))

@@ -31,13 +31,15 @@ def validate_pattern_config(config):
     drape = settings.get('gravity_drape')
     toe = settings.get('toe_contact')
     if toe:
-        if not isinstance(toe,dict) or set(toe)-{'enabled','band_width_m','support_length_m','support_clearance_m','settle_steps'} or not settings.get('held_reference'):
+        if not isinstance(toe,dict) or set(toe)-{'enabled','band_width_m','support_length_m','support_clearance_m','settle_steps','rigid_skin_contact'} or not settings.get('held_reference'):
             raise ValueError('toe_contact requires a held reference and known settings')
         if drape and drape.get('enabled',True) and toe.get('enabled',True):
             raise ValueError('toe_contact and gravity_drape cannot both be enabled')
         values=[toe.get('band_width_m',.030),toe.get('support_length_m',.015),toe.get('support_clearance_m',.008)]
         if not np.isfinite(values).all() or not 0<values[0]<=.05 or not 0<values[1]<=.03 or not 0<values[2]<=.015:
             raise ValueError('Invalid toe_contact support or band dimensions')
+        if type(toe.get('rigid_skin_contact',True)) is not bool:
+            raise ValueError('rigid_skin_contact must be a boolean')
         if type(toe.get('settle_steps',300)) is not int or not 100<=toe.get('settle_steps',300)<=2000:
             raise ValueError('toe_contact requires 100–2000 settling steps')
     if drape:

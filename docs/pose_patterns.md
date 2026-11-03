@@ -5,6 +5,9 @@
 保存済みheld-A形状、足の寸法、靴下の自然長は変更していない。
 従来の75mm固定モードと保存済み画像はそのまま残している。
 
+足とグリッパーの剛体衝突には、現在の姿勢をBakeした実皮膚の非凸三角形メッシュを使う。
+布の内部接触モデルとの役割の違いと検証方法は [rigid_skin_contact.md](rigid_skin_contact.md) を参照。
+
 ## 領域と解き方
 
 | 領域 | 処理 |
@@ -65,7 +68,7 @@
 
 ```bash
 SOCK_BUILD_LOG_DIR=/tmp/sock-toe-contact-build \
-  ./scripts/build_custom_player.sh development Build/SockDressingPlayer/ToeContactV6
+  ./scripts/build_custom_player.sh development Build/SockDressingPlayer/RigidSkinV1
 python3 scripts/preview_pose_patterns.py --numbers 1 14 39
 # 画像なしで全50行を再生成
 python3 scripts/preview_pose_patterns.py --headless

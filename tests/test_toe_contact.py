@@ -104,3 +104,18 @@ def test_native_and_section_chain_cannot_both_run():
 def test_invalid_toe_settings_rejected(values):
     with pytest.raises(ValueError,match='toe_contact'):
         validate_pattern_config(dict(pose_pattern=dict(workbook='x',held_reference='saved/A',toe_contact=values)))
+
+
+def test_rigid_skin_readback_rejects_wrong_geometry_and_old_colliders():
+    from sock_dressing_simulation.toe_contact import assess_rigid_skin
+    reference=dict(vertices=[[0.,0.,0.],[1.,0.,0.],[0.,1.,0.]],triangles=[0,1,2])
+    report=dict(active=True,enabled=True,convex=False,trigger=False,obi_collider_added=False,
+        old_proxy_colliders_disabled=6,old_proxy_colliders_still_enabled=0,
+        maximum_skin_vertex_error_m=0,triangles_match_baked_skin=True,
+        collision_policy=1,right_gripper_pairs_enabled=6,right_gripper_pairs_ignored=0,
+        vertices_world=copy.deepcopy(reference['vertices']),triangles=reference['triangles'])
+    assert assess_rigid_skin(report,reference)
+    for field,value in [('old_proxy_colliders_still_enabled',1),('convex',True),('obi_collider_added',True),('right_gripper_pairs_ignored',1),
+                        ('vertices_world',[[0.,0.,.001],[1.,0.,0.],[0.,1.,0.]])]:
+        bad=copy.deepcopy(report);bad[field]=value
+        assert not assess_rigid_skin(bad,reference)

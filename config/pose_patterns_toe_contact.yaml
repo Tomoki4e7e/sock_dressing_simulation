@@ -1,11 +1,12 @@
 extends: pose_patterns.yaml
 
 rcareworld:
-  executable: Build/SockDressingPlayer/ToeContactV6/Player.x86_64
+  executable: Build/SockDressingPlayer/RigidSkinV1/Player.x86_64
 pose_pattern:
   gravity_drape: null
   toe_contact:
     enabled: true
+    rigid_skin_contact: true
     band_width_m: 0.030
     support_length_m: 0.015
     support_clearance_m: 0.008

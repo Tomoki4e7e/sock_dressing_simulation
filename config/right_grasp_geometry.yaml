@@ -1,0 +1,16 @@
+summary: artifacts/toe-contact-final/summary.json
+urdf: assets/generated/dry_airec3_gripper_v2_rcareworld.urdf
+tip_inset_m: 0.010
+maximum_gap_m: 0.050
+# 2.5 mm external contact envelope per finger in the prepared simulator.
+# This is a geometry-screening pose, not an assumed real sock thickness.
+nominal_pinch_gap_m: 0.005
+opening_gaps_m: [0.005, 0.010, 0.020, 0.030, 0.040, 0.050]
+body_clearance_m: 0.001
+approach_distance_m: 0.050
+band_width_m: 0.030
+material_depths_m: [0.0, 0.005, 0.010, 0.015, 0.020, 0.025, 0.030]
+circumferential_samples: 32
+yaw_degrees: [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330]
+tilt_degrees: [-60, -30, 0, 30, 60]
+closing_signs: [1, -1]

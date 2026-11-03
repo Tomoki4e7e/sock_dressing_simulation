@@ -2,7 +2,7 @@ extends: preinsert_fitted.yaml
 
 # Support only the anatomical toe; allow native finger contact at the cuff.
 rcareworld:
-  executable: Build/SockDressingPlayer/ToeContactV6/Player.x86_64
+  executable: Build/SockDressingPlayer/RigidSkinV1/Player.x86_64
 preinsert: null
 circumference_fit: null
 pose_pattern:
@@ -12,6 +12,7 @@ pose_pattern:
   gravity_drape: null
   toe_contact:
     enabled: true
+    rigid_skin_contact: true
     band_width_m: 0.030
     support_length_m: 0.015
     support_clearance_m: 0.008

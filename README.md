@@ -66,6 +66,10 @@ See [pose pattern reconstruction](docs/pose_patterns.md) for the angle conventio
 the contact model, validation results, and saved images. The earlier visual-only
 drape is available through `config/pose_patterns_legacy_drape.yaml`.
 
+For right-hand grasp-center calibration and collision searches across the 32
+ankle angles, see [grasp geometry](docs/right_grasp_geometry.md). The results
+distinguish actual skin geometry from the current convex foot contact proxy.
+
 For smooth, partially dressed initial states A–E from the sock pose workbook,
 see [the preinsertion guide](docs/preinsert_normal.md). Generate and inspect all
 five states with `python3 scripts/preview_preinsert.py` after building its Player.
@@ -509,3 +513,7 @@ python3 -m pytest -q
 Tests cover mapping/bounds/mimic behavior, mesh URI vendoring, tube topology,
 scenario application, null-renderer rejection, episode output, and a synthetic
 feature→visualization→audit regression. They do not launch Unity.
+
+足の剛体接触形状を実皮膚に合わせる変更と検証: [docs/rigid_skin_contact.md](docs/rigid_skin_contact.md)。
+
+低速閉鎖・保持・材料点の移動の計測方法と出力: [docs/grasp_closure_measurement.md](docs/grasp_closure_measurement.md)。
