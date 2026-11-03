@@ -17,9 +17,11 @@ class SockDressingEnv:
     def __init__(self, config: Mapping, backend: Optional[Any] = None):
         from .preinsert import validate_preinsert_config
         from .circumference_fit import validate_fit_config
+        from .pose_patterns import validate_pattern_config
 
         validate_preinsert_config(config)
         validate_fit_config(config)
+        validate_pattern_config(config)
         self.config = config
         self._rollout_material_report = None
         self._cloth_contact_rollout_started = False
@@ -1419,6 +1421,20 @@ class SockDressingEnv:
             preinsert = self.config.get("preinsert", {})
             preinsert_report = self.initialize_preinsert(**preinsert) if preinsert else None
             fit_report = None
+            pattern_report = None
+            if self.config.get("pose_pattern"):
+                if self.config.get("circumference_fit"):
+                    raise ValueError("Visual pose_pattern and physical circumference_fit are separate modes")
+                from .pose_patterns import initialize_pattern, read_patterns
+                from .config import resolve_package_path
+
+                settings = dict(self.config["pose_pattern"])
+                number = settings.pop("number", 1)
+                workbook = resolve_package_path(settings.pop("workbook"))
+                selected = [p for p in read_patterns(workbook) if p.number == number]
+                if len(selected) != 1:
+                    raise ValueError(f"Unknown workbook pattern {number}")
+                pattern_report = initialize_pattern(self, selected[0], **settings)
             if self.config.get("circumference_fit"):
                 from .circumference_fit import run_fit
 
@@ -1455,6 +1471,7 @@ class SockDressingEnv:
                 "initial_pose_contract": pose_contract,
                 "preinsert": preinsert_report,
                 "circumference_fit": fit_report,
+                "pose_pattern": pattern_report,
             }
 
         self.cloth.SetTransform(
@@ -3355,6 +3372,8 @@ class SockDressingEnv:
 
     def begin_cloth_contact_rollout(self) -> None:
         """Enable continuous contact after the prepared drape pose is established."""
+        if getattr(self, "_pose_pattern_report", None):
+            raise RuntimeError("The visual pattern is held; configure local grasp deformation before a contact rollout")
         if self.sock_cloth is not None:
             if self.sock_cloth.data.get("sock_circumference_fit", {}).get("active"):
                 self._cloth_contact_rollout_started = True

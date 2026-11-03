@@ -1,0 +1,19 @@
+extends: preinsert_fitted.yaml
+
+# Keep the held-A fit at the foot; let its free tail settle under world gravity.
+rcareworld:
+  executable: Build/SockDressingPlayer/HeldGravityV8/Player.x86_64
+preinsert: null
+circumference_fit: null
+pose_pattern:
+  workbook: artifacts/sock-pose-pattern/sock_pose_patterns.xlsx
+  number: 1
+  held_reference: artifacts/sock-pose-pattern/preinsert-fitted/A
+  gravity_drape:
+    enabled: true
+    pinned_length_m: 0.075
+    settle_steps: 150
+  signs:
+    shift: 1
+    diagonal: 1
+    roll: 1

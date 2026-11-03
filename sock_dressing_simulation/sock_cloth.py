@@ -618,6 +618,14 @@ class SockClothAttr:
     def request_preinsert_source(self) -> None:
         self._send_data("GetSockPreinsertSource")
 
+    def set_pattern_foot_pose(self, pitch: float, roll: float) -> None:
+        if not np.isfinite([pitch, roll]).all() or abs(pitch) > 80 or abs(roll) > 60:
+            raise ValueError("Pattern foot angles are out of range")
+        self._send_data("SetSockPatternFootPose", float(pitch), float(roll))
+
+    def set_pattern_held(self, enabled: bool) -> None:
+        self._send_data("SetSockPatternHeld", bool(enabled))
+
     def request_fit_skin(self) -> None:
         self._send_data("GetSockFitSkin")
 

@@ -57,7 +57,7 @@ def _slab_points(vertices, triangles, center, tangent, half_width):
     return np.concatenate(selected)
 
 
-def generate_preinsert(source, stage, *, above_heel_m=0.05, clearance_m=0.015):
+def generate_preinsert(source, stage, *, above_heel_m=0.05, clearance_m=0.015, path_offset_m=0.):
     """Return actor-indexed positions and measured placement metadata.
 
     Source comes from GetSockPreinsertSource, not inferred image landmarks.
@@ -67,7 +67,7 @@ def generate_preinsert(source, stage, *, above_heel_m=0.05, clearance_m=0.015):
     """
     if stage not in STAGES:
         raise ValueError('stage must be A, B, C, D or E')
-    if not np.isfinite([above_heel_m, clearance_m]).all() or above_heel_m <= 0 or clearance_m <= 0:
+    if not np.isfinite([above_heel_m, clearance_m, path_offset_m]).all() or above_heel_m <= 0 or clearance_m <= 0:
         raise ValueError('Height and clearance must be finite and positive')
     rest = _vectors(source['rest_positions'], 'rest_positions')
     surfaces = [(_vectors(s['vertices'], 'surface vertices'), np.asarray(s['triangles'], dtype=int).reshape(-1, 3))
@@ -106,6 +106,9 @@ def generate_preinsert(source, stage, *, above_heel_m=0.05, clearance_m=0.015):
     heel_path = float(curve_s[-1])
     depth = {'A': .25*heel_path, 'B': .5*heel_path, 'C': .75*heel_path,
              'D': heel_path, 'E': heel_path+above_heel_m}[stage]
+    depth += path_offset_m
+    if depth <= 0:
+        raise ValueError('The shifted cuff must remain past the toe tip')
     zmin, zmax = rest[:, 2].min(), rest[:, 2].max()
     length = float(zmax-zmin)
     radius = np.linalg.norm(rest[:, :2], axis=1)
