@@ -15,9 +15,15 @@ class SockDressingEnv:
     """Thin lazy adapter over the API at the pinned RCareWorld commit."""
 
     def __init__(self, config: Mapping, backend: Optional[Any] = None):
+        from .preinsert import validate_preinsert_config
+        from .circumference_fit import validate_fit_config
+
+        validate_preinsert_config(config)
+        validate_fit_config(config)
         self.config = config
         self._rollout_material_report = None
         self._cloth_contact_rollout_started = False
+        self._preinsert_observation_pending = False
         profile = config.get("foot_conforming_rollout", {})
         if profile.get("post_preparation_material"):
             config["obi"]["expected"] = copy.deepcopy(profile["preparation_parameters"])
@@ -1410,6 +1416,15 @@ class SockDressingEnv:
                 self.sock_cloth.arm_slip_detection(True)
                 self.sock_cloth.request_configuration()
                 self._env.step()
+            preinsert = self.config.get("preinsert", {})
+            preinsert_report = self.initialize_preinsert(**preinsert) if preinsert else None
+            fit_report = None
+            if self.config.get("circumference_fit"):
+                from .circumference_fit import run_fit
+
+                fit_report = run_fit(self, **self.config["circumference_fit"])
+                if not fit_report["passed"]:
+                    raise RuntimeError(f"Circumference fit did not retain the foot: {fit_report['assessment']}")
             self._rollout_started = True
             return {
                 "initial_command_steps": int(not np.allclose(current, applied)),
@@ -1438,6 +1453,8 @@ class SockDressingEnv:
                     self._foot_to_sock_translation_report
                 ),
                 "initial_pose_contract": pose_contract,
+                "preinsert": preinsert_report,
+                "circumference_fit": fit_report,
             }
 
         self.cloth.SetTransform(
@@ -1733,7 +1750,8 @@ class SockDressingEnv:
 
     def _observe_native_custom_player(self) -> Dict[str, Any]:
         synchronized = bool(getattr(self, "_cloth_contact_rollout_started", False))
-        read_only = bool(getattr(self, '_read_only_native_observation', False))
+        read_only = bool(getattr(self, '_read_only_native_observation', False)
+                         or getattr(self, '_preinsert_observation_pending', False))
         if not synchronized:
             self._request_native_cloth_observation()
         self._env.step(simulate=False) if read_only else self._env.step()
@@ -1827,6 +1845,7 @@ class SockDressingEnv:
             "diagnostics": diagnostics,
         }
         observation.update(self.robot_signals(robot_data))
+        self._preinsert_observation_pending = False
         return observation
 
     def _request_initial_pose_contract(self) -> Dict[str, Any]:
@@ -3296,9 +3315,50 @@ class SockDressingEnv:
         self._env.step()
         return bounded
 
+    def initialize_preinsert(self, stage: str, above_heel_m: float = 0.05,
+                            clearance_m: float = 0.015) -> Dict[str, Any]:
+        """Place a smooth sock around the loaded human before contact arming."""
+        from .preinsert import generate_preinsert, audit_preinsert, audit_preinsert_surface
+
+        if (self.sock_cloth is None or not self.config["rcareworld"].get("native_rcareworld", False)
+                or self._cloth_contact_rollout_started):
+            raise RuntimeError("Preinsertion requires native custom Player before contact rollout")
+        self.sock_cloth.data.pop("sock_preinsert_source", None)
+        self.sock_cloth.request_preinsert_source()
+        self.sock_cloth.request_particles()
+        self._env.step(simulate=False)
+        source = self.sock_cloth.data.get("sock_preinsert_source")
+        if not source:
+            raise RuntimeError("Player lacks GetSockPreinsertSource; rebuild the custom Player")
+        positions, report = generate_preinsert(source, stage, above_heel_m=above_heel_m,
+                                               clearance_m=clearance_m)
+        report["geometry_audit"] = audit_preinsert(positions, source,
+            self.sock_cloth.data["particle_edges"], self.sock_cloth.data["particle_rest_edge_lengths"])
+        report["surface_audit"] = audit_preinsert_surface(positions, source,
+            self.sock_cloth.data["particle_edges"], self.sock_cloth.data["particle_surface_triangles"])
+        if not report["geometry_audit"]["geometry_ok"] or not report["surface_audit"]["surface_ok"]:
+            raise RuntimeError(f"Preinsert geometry intersects the body or itself: {report}")
+        self.sock_cloth.release("left")
+        self.sock_cloth.release("right")
+        self.sock_cloth.data.pop("sock_preinsert_report", None)
+        self.sock_cloth.initialize_preinsert(positions, report["opening_inward_normal_world"])
+        self.sock_cloth.request_particles()
+        self._env.step(simulate=False)
+        native_report = self.sock_cloth.data.get("sock_preinsert_report", {})
+        observed = self.sock_cloth.particles()
+        if not native_report.get("ok") or observed.shape != positions.shape or not np.allclose(observed, positions, atol=5e-6, rtol=0):
+            raise RuntimeError("Native preinsert initialization readback differs")
+        report["native"] = native_report
+        report["maximum_readback_error_m"] = float(np.max(np.abs(observed-positions)))
+        self._preinsert_observation_pending = True
+        return report
+
     def begin_cloth_contact_rollout(self) -> None:
         """Enable continuous contact after the prepared drape pose is established."""
         if self.sock_cloth is not None:
+            if self.sock_cloth.data.get("sock_circumference_fit", {}).get("active"):
+                self._cloth_contact_rollout_started = True
+                return
             profile = self.config.get("foot_conforming_rollout", {})
             if profile.get("collider_shape", "boxes") != "boxes":
                 self.sock_cloth.configure_foot_collider_shape(profile["collider_shape"])

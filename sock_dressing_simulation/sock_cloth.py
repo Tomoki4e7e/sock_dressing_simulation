@@ -615,6 +615,67 @@ class SockClothAttr:
     def request_prepared_state(self) -> None:
         self._send_data("GetPreparedSockState")
 
+    def request_preinsert_source(self) -> None:
+        self._send_data("GetSockPreinsertSource")
+
+    def request_fit_skin(self) -> None:
+        self._send_data("GetSockFitSkin")
+
+    def install_fit_hull(self, vertices: Any, triangles: Any, calf_vertices: Any = None,
+                         calf_triangles: Any = None) -> None:
+        import json
+
+        points = _finite_vectors(vertices, 3, "fit hull")
+        faces = np.asarray(triangles, dtype=int).reshape(-1, 3)
+        if len(points) < 4 or len(faces) < 4 or faces.min() < 0 or faces.max() >= len(points):
+            raise ValueError("Invalid fit hull triangles")
+        payload = {
+            "vertices": [dict(zip(("x", "y", "z"), map(float, p))) for p in points],
+            "triangles": faces.ravel().tolist(),
+        }
+        if calf_vertices is not None:
+            calf = _finite_vectors(calf_vertices, 3, "calf fit hull")
+            calf_faces = np.asarray(calf_triangles, dtype=int).reshape(-1, 3)
+            if len(calf) < 4 or len(calf_faces) < 4 or calf_faces.min() < 0 or calf_faces.max() >= len(calf):
+                raise ValueError("Invalid calf fit hull triangles")
+            payload.update(calfVertices=[dict(zip(("x", "y", "z"), map(float, p))) for p in calf],
+                           calfTriangles=calf_faces.ravel().tolist())
+        self._send_data("InstallSockFitHull", json.dumps(payload, allow_nan=False))
+
+    def begin_circumference_fit(self) -> None:
+        self._send_data("BeginSockCircumferenceFit")
+
+    def set_circumference_scale(self, scale: float) -> None:
+        value = float(scale)
+        if not np.isfinite(value) or not .4 <= value <= 1:
+            raise ValueError("Circumference scale must be between 0.4 and 1")
+        self._send_data("SetSockCircumferenceScale", value)
+
+    def set_fit_gravity(self, enabled: bool) -> None:
+        self._send_data("SetSockFitGravity", bool(enabled))
+
+    def set_fit_friction(self, friction: float) -> None:
+        value = float(friction)
+        if not np.isfinite(value) or not 0 <= value <= 2:
+            raise ValueError("Fitting friction must be between 0 and 2")
+        self._send_data("SetSockFitFriction", value)
+
+    def request_circumference_fit(self) -> None:
+        self._send_data("GetSockCircumferenceFit")
+
+    def initialize_preinsert(self, positions: Any, opening_normal: Any) -> None:
+        import json
+
+        points = _finite_vectors(positions, 3, "preinsert positions")
+        normal = np.asarray(opening_normal, dtype=float)
+        if normal.shape != (3,) or not np.isfinite(normal).all() or not np.isclose(np.linalg.norm(normal), 1):
+            raise ValueError("preinsert opening normal must be a finite unit vector")
+        vector = lambda p: dict(zip(("x", "y", "z"), map(float, p)))
+        self._send_data("InitializeSockPreinsert", json.dumps({
+            "positions": [vector(p) for p in points],
+            "openingInwardNormal": vector(normal),
+        }, allow_nan=False))
+
     def restore_prepared_state(self, snapshot: str) -> None:
         self._send_data("RestorePreparedSockState", snapshot)
 

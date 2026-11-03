@@ -1,0 +1,27 @@
+extends: custom_player.yaml
+
+# Smooth partial dressing, independent of the robot's initial grasp pose.
+# This preview has no grasp attachments. Regrasp before attempting robot pulls.
+rcareworld:
+  executable: Build/SockDressingPlayer/Preinsert/Player.x86_64
+scene:
+  grasp_anchors:
+    auto_grasp: false
+  grasp_alignment:
+    enabled: false
+  initial_pose_contract:
+    enforce: false
+    calibrate_foot_to_sock: false
+  recording_camera_frame_opening: false
+scenario:
+  settle_steps: 0
+  sock:
+    length_m: 0.30
+    radius_m: 0.04
+    rest_bend_start_m: 0.0
+    rest_bend_length_m: 0.0
+    rest_bend_degrees: 0.0
+preinsert:
+  stage: A
+  above_heel_m: 0.05
+  clearance_m: 0.015
