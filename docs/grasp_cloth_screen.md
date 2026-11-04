@@ -1,3 +1,5 @@
+> 現在はこの段階の436配置を入力に、[幾何学的閉鎖](../artifacts/geometric-closure/README.md)で再評価しています。最終候補はそちらを参照してください。
+
 # 布との交差と有限の把持面による再選別
 
 `grasp_cloth_geometry.ClothScreen` と `scripts/refilter_grasp_candidates.py` を追加した。

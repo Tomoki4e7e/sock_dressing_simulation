@@ -1,0 +1,32 @@
+review_date: '2026-11-04'
+configuration: config/geometric_closure.yaml
+evidence_directory: artifacts/geometric-closure-photos-clean
+reviewed_cases:
+  - {number: 22, candidate_index: 6}
+  - {number: 12, candidate_index: 9}
+  - {number: 3, candidate_index: 8}
+  - {number: 30, candidate_index: 26}
+  - {number: 5, candidate_index: 11}
+decision:
+  geometric_task_definition_fixed: true
+  closing_gap_m: 0.001
+  minimum_projected_area_m2: 0.000004
+  minimum_connected_area_m2: 0.000004
+  meaning: finite_target_material_patch_present_between_actual_opposing_faces_at_fixed_virtual_gap
+  fixed_gap_reason: positive_repeatable_evaluation_slice_for_zero_thickness_mesh
+  area_reason: minimum_continuous_patch_rule_in_the_fixed_8_by_8_mm_window
+  physically_calibrated_grasp_threshold: false
+  empirically_optimized_area_threshold: false
+  cloth_intersection_allowed_during_virtual_closure: true
+  physical_cloth_response_verified: false
+  visually_nonpenetrating_closed_cloth_verified: false
+  candidate_pool_unchanged: true
+preferred_next_replay_cases:
+  - {number: 3, candidate_index: 8}
+  - {number: 12, candidate_index: 9}
+preference_scope: area_only_at_six_single_axis_tcp_offsets_of_plus_or_minus_0.25_mm_and_nominal_skin_clearance
+limitations:
+  - frozen_cloth_crosses_finger_meshes_during_closure
+  - projected_area_is_not_a_measurement_of_slack_or_physical_capture
+  - area_threshold_is_valid_only_with_the_fixed_gap_and_window_convention
+  - tcp_perturbation_audit_does_not_validate_perturbed_arm_paths_or_skin_clearance

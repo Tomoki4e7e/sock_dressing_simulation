@@ -517,3 +517,7 @@ feature→visualization→audit regression. They do not launch Unity.
 足の剛体接触形状を実皮膚に合わせる変更と検証: [docs/rigid_skin_contact.md](docs/rigid_skin_contact.md)。
 
 低速閉鎖・保持・材料点の移動の計測方法と出力: [docs/grasp_closure_measurement.md](docs/grasp_closure_measurement.md)。
+
+現在の閉鎖評価は摩擦保持を使わない幾何学的な方式です。[設定・結果・再現手順](artifacts/geometric-closure/README.md) を参照してください。
+
+新合格候補5配置の接近・閉鎖の実画像と、1mm・4mm²を幾何タスクの基準として固定した判断は[画像レビュー](artifacts/geometric-closure-photos-clean/README.md)にあります。布の変形を伴う把持成功の検証とは区別しています。
