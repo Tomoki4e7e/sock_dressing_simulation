@@ -9,6 +9,7 @@ import numpy as np
 from scipy.spatial import ConvexHull, QhullError
 import trimesh
 from audit_compound_rays import ray_interval
+from sock_dressing_simulation.convex_distance import point_convex_distance
 
 
 def main():
@@ -71,7 +72,7 @@ def main():
             for hit_field,flag,label in [('local_hit_world','local_hit','unit_cook'),('world_hit_point','world_hit','world')]:
                 hit_points=np.array([r[hit_field] for r in row['rays'] if r[flag]])
                 if len(hit_points):
-                    distances=trimesh.proximity.closest_point(surface,hit_points-center)[1]
+                    distances=point_convex_distance(hit_points-center,world-center,surface=True)
                     maxima[label+'_hit_surface_distance_m']=float(distances.max())
                     counts[label+'_hit_surface_distance_over_01mm']=int(np.sum(distances>1e-4))
         if 'vertex_closest_local' in row:

@@ -7,6 +7,7 @@ Keep those diagnostics separate from perpendicular boundary displacement.
 """
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -14,6 +15,8 @@ from scipy.spatial import ConvexHull
 import trimesh
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT))
+from sock_dressing_simulation.convex_distance import point_convex_distance
 
 
 def ray_interval(planes, origin, direction):
@@ -79,8 +82,7 @@ def main():
         singular = np.linalg.svd(points-center, compute_uv=False)
         # A plane residual is only a lower bound outside the hull. Query the
         # actual closed triangle surface as a separate Euclidean diagnostic.
-        surface=trimesh.Trimesh(points-center,hull.simplices,process=False)
-        exact=trimesh.proximity.closest_point(surface,np.asarray(hits))[1] if hits else np.array([])
+        exact=point_convex_distance(np.asarray(hits),points-center,surface=True) if hits else np.array([])
         rows.append(dict(index=i, link=row['link'], counts=counts,
                          thickness_ratio=float(singular[-1]/singular[0]),
                          maximum_boundary_plane_error_m=maximum_boundary_plane_error,

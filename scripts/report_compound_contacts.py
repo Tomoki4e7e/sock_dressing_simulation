@@ -8,6 +8,7 @@ from scipy.spatial import ConvexHull
 from scipy.spatial.transform import Rotation
 import trimesh
 from audit_compound_rays import ray_interval
+from sock_dressing_simulation.convex_distance import point_convex_distance
 
 
 def affine_ray_interval(planes,origin,direction,linear,translation):
@@ -22,10 +23,9 @@ def transformed_planes(planes,linear):
 
 def sphere_penetration(points,planes,centers,radii):
     """Signed overlap depth of a sphere and a closed convex solid."""
-    hull=ConvexHull(points);surface=trimesh.Trimesh(points,hull.simplices,process=False)
     offsets=np.max(centers@planes[:,:3].T+planes[:,3],axis=1)
     signed=offsets.copy();outside=offsets>0
-    if np.any(outside):signed[outside]=trimesh.proximity.closest_point(surface,centers[outside])[1]
+    if np.any(outside):signed[outside]=point_convex_distance(centers[outside],points)
     return np.asarray(radii)-signed
 
 

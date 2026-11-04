@@ -15,13 +15,12 @@ from sock_dressing_simulation.cli import _prepare
 from sock_dressing_simulation.config import load_config
 from sock_dressing_simulation.environment import SockDressingEnv
 from sock_dressing_simulation.scenario import scenario_from_config
+from sock_dressing_simulation.convex_distance import point_convex_distance
 
 
 def solid_vertex_distance(vertices,other):
     """Distance to a closed convex solid, zero for interior vertices."""
-    hull=ConvexHull(other);planes=hull.equations;outside=(vertices@planes[:,:3].T+planes[:,3]).max(1)>1e-12;result=np.zeros(len(vertices))
-    if np.any(outside):result[outside]=trimesh.proximity.closest_point(trimesh.Trimesh(other,hull.simplices,process=False),vertices[outside])[1]
-    return result
+    return point_convex_distance(vertices,other)
 
 
 def reconstruct(row,shape,normal_decimals=7):

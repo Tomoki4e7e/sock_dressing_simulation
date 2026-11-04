@@ -18,10 +18,10 @@ def digest(path):return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--numbers',type=int,nargs='+',default=[10,38,50]);ap.add_argument('--subdivisions',type=int,default=2);args=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--numbers',type=int,nargs='+',default=[10,38,50]);ap.add_argument('--subdivisions',type=int,default=2);ap.add_argument('--manifest',type=Path,default=ROOT/'artifacts/compound-reaching/decomposition.json');ap.add_argument('--output',type=Path,default=ROOT/'artifacts/compound-reaching/followup/route-recheck');args=ap.parse_args()
     if args.subdivisions<1:ap.error('Subdivisions must be positive')
-    out=ROOT/'artifacts/compound-reaching/followup/route-recheck';out.mkdir(parents=True,exist_ok=True)
-    robot_path=ROOT/'artifacts/apron-reaching/robot-scene.json';manifest=ROOT/'artifacts/compound-reaching/decomposition.json';reports=[]
+    out=args.output;out.mkdir(parents=True,exist_ok=True)
+    robot_path=ROOT/'artifacts/apron-reaching/robot-scene.json';manifest=args.manifest;reports=[]
     for path in sorted((ROOT/'artifacts/apron-reaching/routes').glob('*-trajectory.json')):
         saved=json.loads(path.read_text())
         if not saved['offline_passed'] or saved['number'] not in args.numbers:continue

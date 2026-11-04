@@ -15,9 +15,10 @@ namespace RCareWorld.Attributes
  }
  public partial class SockClothAttr
  {
-  [Serializable] private class CompoundPartQuery {public string link;public Vector3[] vertices;public int[] triangles;}
-  [Serializable] private class CompoundQuery {public CompoundPartQuery[] parts;public float cookUnitScale=100f;}
+  [Serializable] private class CompoundPartQuery {public string link;public Vector3[] vertices;public int[] triangles;public bool conditioned;public Vector3 position,scale,interior;public Quaternion rotation;}
+  [Serializable] private class CompoundQuery {public CompoundPartQuery[] parts;public float cookUnitScale=100f;public int registrationVersion;}
   private readonly List<GameObject> compoundObjects=new List<GameObject>();
+  private readonly List<Vector3> compoundInteriors=new List<Vector3>();
   [Serializable] private class CompoundSupportSeed {public Vector3 anchor,direction;}
   [Serializable] private class CompoundProbePart
   {
@@ -339,17 +340,26 @@ namespace RCareWorld.Attributes
    foreach(var p in query.parts)
    {
     var source=old[p.link];var obj=new GameObject("sock_compound_"+compoundObjects.Count);obj.layer=source.gameObject.layer;
-    obj.transform.SetParent(bodies[p.link].transform,false);compoundObjects.Add(obj);
+    obj.transform.SetParent(bodies[p.link].transform,false);compoundObjects.Add(obj);compoundInteriors.Add(p.interior);
     // Cook in unit-size coordinates: PhysX cleaning tolerances can erase
     // small thin convex parts when their vertices are given directly in metres.
     // The inverse uniform transform preserves every physical world vertex.
-    var bounds=new Bounds(p.vertices[0],Vector3.zero);foreach(var vertex in p.vertices)bounds.Encapsulate(vertex);
-    float extent=Mathf.Max(bounds.size.x,Mathf.Max(bounds.size.y,bounds.size.z));if(extent<1e-8f)throw new ArgumentException("Degenerate part");
-    extent/=query.cookUnitScale;obj.transform.localPosition=bounds.center;obj.transform.localScale=Vector3.one*extent;
-    var mesh=new Mesh();mesh.name=obj.name;mesh.vertices=p.vertices.Select(v=>(v-bounds.center)/extent).ToArray();mesh.triangles=p.triangles;mesh.RecalculateBounds();
+    Vector3[] meshVertices;
+    if(p.conditioned)
+    {
+     if(query.registrationVersion!=2 || p.scale.x<=0 || p.scale.y<=0 || p.scale.z<=0 || Math.Abs(p.rotation.x*p.rotation.x+p.rotation.y*p.rotation.y+p.rotation.z*p.rotation.z+p.rotation.w*p.rotation.w-1)>1e-4f)throw new ArgumentException("Invalid conditioned part transform");
+     obj.transform.localPosition=p.position;obj.transform.localRotation=p.rotation;obj.transform.localScale=p.scale;meshVertices=p.vertices;
+    }
+    else
+    {
+     var bounds=new Bounds(p.vertices[0],Vector3.zero);foreach(var vertex in p.vertices)bounds.Encapsulate(vertex);
+     float extent=Mathf.Max(bounds.size.x,Mathf.Max(bounds.size.y,bounds.size.z));if(extent<1e-8f)throw new ArgumentException("Degenerate part");
+     extent/=query.cookUnitScale;obj.transform.localPosition=bounds.center;obj.transform.localScale=Vector3.one*extent;meshVertices=p.vertices.Select(v=>(v-bounds.center)/extent).ToArray();
+    }
+    var mesh=new Mesh();mesh.name=obj.name;mesh.vertices=meshVertices;mesh.triangles=p.triangles;mesh.RecalculateBounds();
     var cooking=MeshColliderCookingOptions.CookForFasterSimulation|MeshColliderCookingOptions.UseFastMidphase;
     Physics.BakeMesh(mesh.GetInstanceID(),true,cooking);register.Invoke(null,new object[]{mesh});
-    var c=obj.AddComponent<MeshCollider>();c.convex=true;c.cookingOptions=cooking;c.sharedMesh=mesh;c.sharedMaterial=source.sharedMaterial;c.contactOffset=source.contactOffset;
+    var c=obj.AddComponent<MeshCollider>();c.convex=true;c.cookingOptions=cooking;c.sharedMesh=mesh;c.sharedMaterial=source.sharedMaterial;c.contactOffset=p.conditioned?Mathf.Min(source.contactOffset,.0001f):source.contactOffset;
     var originalObi=source.GetComponent<ObiCollider>();var obi=obj.AddComponent<ObiCollider>();obi.sourceCollider=c;
     if(originalObi!=null){obi.CollisionMaterial=originalObi.CollisionMaterial;obi.Thickness=originalObi.Thickness;obi.Filter=originalObi.Filter;}
     foreach(var other in all)if(other!=source)Physics.IgnoreCollision(c,other,Physics.GetIgnoreCollision(source,other));
@@ -359,6 +369,10 @@ namespace RCareWorld.Attributes
     Physics.IgnoreCollision(created[i].Key,created[j].Key,created[i].Value==created[j].Value || Physics.GetIgnoreCollision(created[i].Value,created[j].Value));
    foreach(var source in old.Values){var obi=source.GetComponent<ObiCollider>();if(obi!=null)obi.enabled=false;source.enabled=false;}
    Physics.SyncTransforms();
+   if(query.registrationVersion==2)
+   {
+    collectData.AddDataNextStep("sock_compound_geometry",new Dictionary<string,object>{{"part_count",created.Count},{"registration_version",2},{"disabled_originals",old.Keys.ToList()},{"physics_executed",false}});return;
+   }
    var rows=new List<object>();var type=typeof(ObiCollider).Assembly.GetType("Obi.ObiConvexCollisionMesh",true);
    var get=type.GetMethod("Get",BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic);
    var release=type.GetMethod("Release",BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic);
