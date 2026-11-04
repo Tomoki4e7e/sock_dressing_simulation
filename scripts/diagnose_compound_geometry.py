@@ -26,8 +26,20 @@ def vector(value):
 
 
 def conditioned_part(part, index, variant):
+    base,_,modifier=variant.partition('_')
+    if modifier:
+        result=conditioned_part(part,index,base);result['variant']=variant
+        if modifier in ('default','none'):result['cookingMode']=modifier
+        elif modifier=='nobake':result['skipBake']=True
+        elif modifier=='reverse':
+            result['triangles']=np.array(result['triangles']).reshape(-1,3)[:,[0,2,1]].ravel().tolist()
+        else:raise ValueError('Unknown cooking modifier: '+modifier)
+        return result
     points = np.array([[v[a] for a in 'xyz'] for v in part['vertices']], dtype=np.float32)
-    if variant.startswith('uniform'):
+    if variant in ('native','box'):
+        center=points.astype(float).mean(0).astype(np.float32)
+        axes=np.eye(3);scale=np.ones(3,dtype=np.float32)
+    elif variant.startswith('uniform'):
         center = points[0].copy()
         half = np.zeros(3, dtype=np.float32)
         for point in points:
@@ -45,7 +57,7 @@ def conditioned_part(part, index, variant):
         projected = (points-center)@axes
         midpoint = (projected.min(0)+projected.max(0))/2
         center += axes@midpoint
-        scale = np.ptp(projected, axis=0)/float(variant[3:]) if variant.startswith('pca') else None
+        scale = np.ptp(projected, axis=0)/float(variant[3:]) if variant.startswith('pca') and variant!='pcabaked' else None
         center = center.astype(np.float32)
     rotation = Rotation.from_matrix(axes).as_quat().astype(np.float32)
     axes = Rotation.from_quat(rotation).as_matrix()
@@ -57,6 +69,9 @@ def conditioned_part(part, index, variant):
         scale=np.full(3,np.ptp(projected,axis=0).max()/100,dtype=np.float32)
         normalized=(projected/scale).astype(np.float32)
         normalized=normalized[ConvexHull(normalized).vertices]
+    elif variant=='pcabaked':
+        scale=np.ones(3,dtype=np.float32)
+        normalized=((points-center)@axes).astype(np.float32)
     else:
         scale = scale.astype(np.float32)
         normalized = (((points-center)@axes)/scale).astype(np.float32)
@@ -72,6 +87,7 @@ def conditioned_part(part, index, variant):
                 rotation=dict(zip('xyzw', map(float, rotation))))
     if padding is not None:
         result['padding_upper_bound_m']=float(np.linalg.norm(padding))
+    if variant=='box':result['primitiveBox']=True
     return result
 
 
@@ -80,6 +96,7 @@ def main():
     parser.add_argument('--indices', type=int, nargs='+')
     parser.add_argument('--all', action='store_true')
     parser.add_argument('--manifest', type=Path)
+    parser.add_argument('--payload-only', action='store_true', help='Write cook inputs without starting Unity')
     parser.add_argument('--variants', nargs='+', default=['uniform100', 'uniform1', 'pca1', 'pca100'])
     parser.add_argument('--output', type=Path, default=ROOT/'artifacts/compound-reaching/followup/conditioning-probe.json')
     args = parser.parse_args()
@@ -103,6 +120,8 @@ def main():
     parts = [conditioned_part(payload['parts'][i],i,variant) for i in indices for variant in args.variants]
     args.output.parent.mkdir(parents=True,exist_ok=True)
     args.output.with_suffix('.payload.json').write_text(json.dumps(dict(parts=parts)))
+    if args.payload_only:
+        return
     config = load_config(ROOT/'config/arm_reaching_safe_start.yaml')
     config.pop('pose_pattern', None)
     config['rcareworld'].update(executable='scripts/run_compound_reaching_player.sh',graphics=True,port=15970,log_level=0)

@@ -28,7 +28,7 @@ def residuals(row):
 
 
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--source',type=Path,default=ROOT/'artifacts/compound-reaching/followup/consistency-probe.json');ap.add_argument('--output',type=Path,default=ROOT/'artifacts/compound-reaching/followup/residual-contacts.json');ap.add_argument('--variants',nargs='+',default=['pca1']);mode=ap.add_mutually_exclusive_group();mode.add_argument('--all',action='store_true');mode.add_argument('--controls',action='store_true');ap.add_argument('--surface-overlaps',action='store_true');ap.add_argument('--scene-only',action='store_true');ap.add_argument('--simulate',action='store_true');ap.add_argument('--probe-radius',type=float,default=.0001);ap.add_argument('--approach',action='store_true');ap.add_argument('--indices',type=int,nargs='+');args=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--source',type=Path,default=ROOT/'artifacts/compound-reaching/followup/consistency-probe.json');ap.add_argument('--output',type=Path,default=ROOT/'artifacts/compound-reaching/followup/residual-contacts.json');ap.add_argument('--variants',nargs='+',default=['pca1']);mode=ap.add_mutually_exclusive_group();mode.add_argument('--all',action='store_true');mode.add_argument('--controls',action='store_true');ap.add_argument('--surface-overlaps',action='store_true');ap.add_argument('--scene-only',action='store_true');ap.add_argument('--simulate',action='store_true');ap.add_argument('--probe-radius',type=float,default=.0001);ap.add_argument('--approach',action='store_true');ap.add_argument('--indices',type=int,nargs='+');ap.add_argument('--identity-pose',action='store_true');args=ap.parse_args()
     if args.probe_radius<=0:ap.error('Probe radius must be positive')
     parts=[]
     originals=json.loads((ROOT/'artifacts/compound-reaching/native-compound-payload.json').read_text())['parts']
@@ -66,7 +66,7 @@ def main():
             parts.append(dict(shape=selected,rays=rays,points=points))
     if not parts:raise ValueError('No parts in the supplied source')
     for part in parts:part.update(surfaceOverlapProbes=args.surface_overlaps,surfaceProbeRadius=args.probe_radius,approachContacts=args.approach)
-    args.output.parent.mkdir(parents=True,exist_ok=True);args.output.with_suffix('.payload.json').write_text(json.dumps(dict(parts=parts,sceneOnly=args.scene_only)))
+    args.output.parent.mkdir(parents=True,exist_ok=True);args.output.with_suffix('.payload.json').write_text(json.dumps(dict(parts=parts,sceneOnly=args.scene_only,identityPose=args.identity_pose)))
     config=load_config(ROOT/'config/arm_reaching_safe_start.yaml');config.pop('pose_pattern',None);config['rcareworld'].update(executable='scripts/run_compound_reaching_player.sh',graphics=True,port=15970,log_level=0);config['assets']['output_dir']=str(args.output.parent/'contact-assets');scenario=scenario_from_config(config,seed=0);prepared=_prepare(config,scenario)
     with SockDressingEnv(config) as env:
         env.load(Path(prepared['runtime_urdf']),Path(config['assets']['output_dir'])/'sock.obj',initial_joints=scenario.initial_joints);env.apply_scenario(scenario)
@@ -74,7 +74,7 @@ def main():
         batches=args.output.with_suffix('.batches');batches.mkdir(exist_ok=True)
         for offset in range(0,len(parts),16):
             method,key=('SimulateSockCompoundContacts','sock_compound_simulated_contacts') if args.simulate else ('ProbeSockCompoundContacts','sock_compound_contacts')
-            env.sock_cloth._send_data(method,env.robot.id,json.dumps(dict(parts=parts[offset:offset+16],sceneOnly=args.scene_only)));env._env.step(3,simulate=False);data=env.sock_cloth.data[key];result['parts'].extend(data['parts']);result['controls'].extend(data.get('controls',[]));(batches/f'{offset:05d}.json').write_text(json.dumps(data));print('contact parts',len(result['parts']),len(parts),flush=True)
+            env.sock_cloth._send_data(method,env.robot.id,json.dumps(dict(parts=parts[offset:offset+16],sceneOnly=args.scene_only,identityPose=args.identity_pose)));env._env.step(3,simulate=False);data=env.sock_cloth.data[key];result['parts'].extend(data['parts']);result['controls'].extend(data.get('controls',[]));(batches/f'{offset:05d}.json').write_text(json.dumps(data));print('contact parts',len(result['parts']),len(parts),flush=True)
         args.output.write_text(json.dumps(result))
 
 

@@ -18,18 +18,91 @@ namespace RCareWorld.Attributes
   [Serializable] private class CompoundPartQuery {public string link;public Vector3[] vertices;public int[] triangles;}
   [Serializable] private class CompoundQuery {public CompoundPartQuery[] parts;public float cookUnitScale=100f;}
   private readonly List<GameObject> compoundObjects=new List<GameObject>();
+  [Serializable] private class CompoundSupportSeed {public Vector3 anchor,direction;}
   [Serializable] private class CompoundProbePart
   {
-   public int index;public string link,variant;public Vector3[] vertices;public int[] triangles;
-   public Vector3 position,scale;public Quaternion rotation;
+   public int index;public string link,variant,cookingMode;public Vector3[] vertices;public int[] triangles;public bool primitiveBox,skipBake;
+   public Vector3 position,scale;public Quaternion rotation;public Vector3[] targets,directions;public bool measureSupport,supportStretch;
+   public CompoundSupportSeed[] supportSeeds;
   }
   [Serializable] private class CompoundProbeQuery {public CompoundProbePart[] parts;}
   [Serializable] private class CompoundContactPoint {public int sample;public string kind;public Vector3 center,normal;public float radius;}
   [Serializable] private class CompoundContactRay {public int sample;public string kind;public Vector3 origin,direction;public float length;}
   [Serializable] private class CompoundContactPart {public CompoundProbePart shape;public CompoundContactPoint[] points;public CompoundContactRay[] rays;public int sphereDirections;public bool vertexDirections;public float[] interiorContactRadii;public bool surfaceOverlapProbes;public float surfaceProbeRadius;public bool approachContacts;}
-  [Serializable] private class CompoundContactQuery {public CompoundContactPart[] parts;public bool sceneOnly;}
+  [Serializable] private class CompoundContactQuery {public CompoundContactPart[] parts;public bool sceneOnly,identityPose;}
   private static List<List<float>> CompoundMatrix(Matrix4x4 m)
   {var rows=new List<List<float>>();for(int i=0;i<4;i++){var row=new List<float>();for(int j=0;j<4;j++)row.Add(m[i,j]);rows.Add(row);}return rows;}
+  private static Collider CompoundProbeCollider(GameObject obj,Mesh mesh,CompoundProbePart p,MeshColliderCookingOptions cooking)
+  {
+   if(p.primitiveBox){var box=obj.AddComponent<BoxCollider>();box.center=mesh.bounds.center;box.size=mesh.bounds.size;return box;}
+   var collider=obj.AddComponent<MeshCollider>();collider.convex=true;collider.cookingOptions=cooking;collider.sharedMesh=mesh;return collider;
+  }
+  private static MeshColliderCookingOptions CompoundCooking(CompoundProbePart p)
+  {
+   if(p.cookingMode=="none")return MeshColliderCookingOptions.None;
+   if(p.cookingMode=="default")return MeshColliderCookingOptions.CookForFasterSimulation|MeshColliderCookingOptions.EnableMeshCleaning|MeshColliderCookingOptions.WeldColocatedVertices|MeshColliderCookingOptions.UseFastMidphase;
+   return MeshColliderCookingOptions.CookForFasterSimulation|MeshColliderCookingOptions.UseFastMidphase;
+  }
+  // Read supporting faces in the cooked mesh's own coordinates. This avoids
+  // world-position rounding and non-uniform mesh scale in the query itself.
+  [RFUAPI] public void ReadSockCompoundCookedPlanes(string json)
+  {
+   var query=JsonUtility.FromJson<CompoundProbeQuery>(json);var rows=new List<object>();
+   foreach(var p in query.parts)
+   {
+    var mesh=new Mesh{name="compound_plane_probe_"+p.index};mesh.vertices=p.vertices;mesh.triangles=p.triangles;mesh.RecalculateBounds();var obj=new GameObject("compound_plane_probe");
+    try
+    {
+     var cooking=CompoundCooking(p);if(!p.skipBake)Physics.BakeMesh(mesh.GetInstanceID(),true,cooking);var collider=CompoundProbeCollider(obj,mesh,p,cooking);Physics.SyncTransforms();
+     Vector3 center=new Vector3((float)p.vertices.Average(v=>(double)v.x),(float)p.vertices.Average(v=>(double)v.y),(float)p.vertices.Average(v=>(double)v.z));float radius=p.vertices.Max(v=>Vector3.Distance(v,center));var directions=new List<Vector3>();var kinds=new List<string>();
+     for(int sample=0;sample<512;sample++){double z=1-2*(sample+.5)/512.0,angle=sample*2.399963229728653;float rr=(float)Math.Sqrt(1-z*z);directions.Add(new Vector3(rr*(float)Math.Cos(angle),rr*(float)Math.Sin(angle),(float)z));kinds.Add("sphere");}
+     foreach(var v in p.vertices){directions.Add(CompoundUnit(v-center));kinds.Add("input_vertex");}
+     if(p.targets!=null)foreach(var v in p.targets){directions.Add(CompoundUnit(v-center));kinds.Add("reconstructed_vertex");}
+     if(p.directions!=null)foreach(var d in p.directions){directions.Add(CompoundUnit(d));kinds.Add("independent");}
+     var rays=new List<object>();
+     for(int i=0;i<directions.Count;i++)
+     {
+      var ray=new Ray(center+directions[i]*(4*radius+1),-directions[i]);bool found=collider.Raycast(ray,out RaycastHit hit,8*radius+2);
+      rays.Add(new Dictionary<string,object>{{"kind",kinds[i]},{"origin",PreinsertVector(ray.origin)},{"direction",PreinsertVector(ray.direction)},{"hit",found},{"distance",found?hit.distance:-1},{"point",PreinsertVector(found?hit.point:Vector3.zero)},{"normal",PreinsertVector(found?hit.normal:Vector3.zero)}});
+     }
+     var supports=new List<object>();var vertexProjections=new List<object>();
+     if(p.measureSupport)
+     {
+      Vector3 stretch=p.supportStretch?new Vector3(1/mesh.bounds.size.x,1/mesh.bounds.size.y,1/mesh.bounds.size.z):Vector3.one;
+      var supportObject=new GameObject("compound_support_probe");supportObject.transform.localScale=stretch;var supportCollider=CompoundProbeCollider(supportObject,mesh,p,cooking);Physics.SyncTransforms();
+      Vector3 supportCenter=Vector3.Scale(center,stretch);var supportVertices=p.vertices.Select(v=>Vector3.Scale(v,stretch)).ToArray();float supportRadius=supportVertices.Max(v=>Vector3.Distance(v,supportCenter));
+      var queryDirections=new List<Vector3>(directions.Take(512));var anchors=new List<Vector3>();for(int i=0;i<512;i++)anchors.Add(supportCenter);
+      for(int i=0;i<p.vertices.Length;i++)
+      {
+       var normals=new List<Vector3>();
+       for(int f=0;f<p.triangles.Length;f+=3)if(p.triangles[f]==i||p.triangles[f+1]==i||p.triangles[f+2]==i)
+       {Vector3 a=supportVertices[p.triangles[f]],b=supportVertices[p.triangles[f+1]],c=supportVertices[p.triangles[f+2]],n=CompoundUnit(Vector3.Cross(b-a,c-a));if(Vector3.Dot(n,supportVertices[i]-supportCenter)<0)n=-n;if(!normals.Any(v=>Vector3.Dot(v,n)>.999999f))normals.Add(n);}
+       Vector3 normal=Vector3.zero;foreach(var n in normals)normal+=n;if(normal.sqrMagnitude==0)normal=supportVertices[i]-supportCenter;queryDirections.Add(CompoundUnit(normal));anchors.Add(supportVertices[i]);
+      }
+      int ordinaryDirections=queryDirections.Count;
+      if(p.supportSeeds!=null)foreach(var seed in p.supportSeeds){queryDirections.Add(CompoundUnit(Vector3.Scale(seed.direction,stretch)));anchors.Add(Vector3.Scale(seed.anchor,stretch));}
+      for(int i=0;i<queryDirections.Count;i++)foreach(float multiplier in new[]{1024f,65536f})
+      {
+       Vector3 queryPoint=anchors[i]+queryDirections[i]*(supportRadius*multiplier+1),closest=supportCollider.ClosestPoint(queryPoint),normal=Vector3.Scale(queryPoint-closest,stretch);
+       supports.Add(new Dictionary<string,object>{{"kind",i<512?"direction":i<ordinaryDirections?"input_vertex_normal_cone":"serialized_vertex_normal_cone"},{"index",i<512?i:i-512},{"range_multiplier",multiplier},{"query",PreinsertVector(supportObject.transform.InverseTransformPoint(queryPoint))},{"point",PreinsertVector(supportObject.transform.InverseTransformPoint(closest))},{"normal",PreinsertVector(normal)}});
+      }
+      // Input vertices themselves are independent probes of vertex removal.
+      // Unlike far support queries these do not rely on discovering a narrow
+      // vertex normal cone. Keep each observation, including inside returns.
+      for(int i=0;i<supportVertices.Length;i++)foreach(float distance in new[]{0f,.000001f,.0001f,.01f})
+      {
+       Vector3 queryPoint=supportVertices[i]+queryDirections[512+i]*distance;
+       Vector3 closest=supportCollider.ClosestPoint(queryPoint);
+       vertexProjections.Add(new Dictionary<string,object>{{"index",i},{"offset_query_units",distance},{"query",PreinsertVector(supportObject.transform.InverseTransformPoint(queryPoint))},{"point",PreinsertVector(supportObject.transform.InverseTransformPoint(closest))}});
+      }
+      DestroyImmediate(supportObject);
+     }
+     rows.Add(new Dictionary<string,object>{{"index",p.index},{"variant",p.variant},{"rays",rays},{"supports",supports},{"vertex_projections",vertexProjections},{"vertices",p.vertices.Select(PreinsertVector).ToList()},{"bounds_center",PreinsertVector(collider.bounds.center)},{"bounds_size",PreinsertVector(collider.bounds.size)}});
+    }
+    finally{DestroyImmediate(obj);DestroyImmediate(mesh);}
+   }
+   collectData.AddDataNextStep("sock_compound_cooked_planes",new Dictionary<string,object>{{"parts",rows},{"physics_executed",false}});
+  }
   // Advance only a disposable local physics scene. The robot and cloth scene
   // remains frozen; this tests actual contact generation, not query helpers.
   [RFUAPI] public void SimulateSockCompoundContacts(int robotId,string json)
@@ -44,11 +117,12 @@ namespace RCareWorld.Attributes
     foreach(var part in query.parts)
     {
      var p=part.shape;var pose=new GameObject("compound_contact_pose");pose.transform.SetParent(bodies[p.link].transform,false);pose.transform.localPosition=p.position;pose.transform.localRotation=p.rotation;pose.transform.localScale=p.scale;
+     if(query.identityPose)pose.transform.SetPositionAndRotation(Vector3.zero,Quaternion.identity);
      var mesh=new Mesh{name="compound_simulated_"+p.index};mesh.vertices=p.vertices;mesh.triangles=p.triangles;mesh.RecalculateBounds();var target=new GameObject("compound_contact_target");
      UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(target,scene);target.transform.SetPositionAndRotation(Vector3.zero,pose.transform.rotation);target.transform.localScale=pose.transform.lossyScale;
      try
      {
-      var cooking=MeshColliderCookingOptions.CookForFasterSimulation|MeshColliderCookingOptions.UseFastMidphase;Physics.BakeMesh(mesh.GetInstanceID(),true,cooking);var collider=target.AddComponent<MeshCollider>();collider.convex=true;collider.cookingOptions=cooking;collider.sharedMesh=mesh;collider.contactOffset=.00001f;
+      var cooking=CompoundCooking(p);if(!p.skipBake)Physics.BakeMesh(mesh.GetInstanceID(),true,cooking);var collider=CompoundProbeCollider(target,mesh,p,cooking);collider.contactOffset=.00001f;
       var points=new List<CompoundContactPoint>(part.points??new CompoundContactPoint[0]);var vertices=p.vertices.Select(v=>pose.transform.TransformPoint(v)).ToArray();
       Vector3 interior=new Vector3((float)vertices.Average(v=>(double)v.x),(float)vertices.Average(v=>(double)v.y),(float)vertices.Average(v=>(double)v.z));
       if(part.interiorContactRadii!=null)foreach(float r in part.interiorContactRadii)points.Add(new CompoundContactPoint{sample=-1,kind="interior",center=interior,radius=r});
@@ -111,10 +185,11 @@ namespace RCareWorld.Attributes
      try
      {
       world.layer=31;shifted.layer=31;world.transform.SetParent(bodies[p.link].transform,false);world.transform.localPosition=p.position;world.transform.localRotation=p.rotation;world.transform.localScale=p.scale;
+      if(query.identityPose)world.transform.SetPositionAndRotation(Vector3.zero,Quaternion.identity);
       shifted.transform.SetPositionAndRotation(Vector3.zero,world.transform.rotation);shifted.transform.localScale=world.transform.lossyScale;
-      var cooking=MeshColliderCookingOptions.CookForFasterSimulation|MeshColliderCookingOptions.UseFastMidphase;Physics.BakeMesh(mesh.GetInstanceID(),true,cooking);
-      var a=world.AddComponent<MeshCollider>();a.convex=true;a.cookingOptions=cooking;a.sharedMesh=mesh;
-      var b=shifted.AddComponent<MeshCollider>();b.convex=true;b.cookingOptions=cooking;b.sharedMesh=mesh;Physics.SyncTransforms();
+      var cooking=CompoundCooking(p);if(!p.skipBake)Physics.BakeMesh(mesh.GetInstanceID(),true,cooking);
+      var a=CompoundProbeCollider(world,mesh,p,cooking);
+      var b=CompoundProbeCollider(shifted,mesh,p,cooking);Physics.SyncTransforms();
       var contacts=new List<object>();var rays=new List<object>();var queryPoints=new List<CompoundContactPoint>(part.points??new CompoundContactPoint[0]);var queryRays=new List<CompoundContactRay>(part.rays??new CompoundContactRay[0]);
       var vertices=p.vertices.Select(v=>world.transform.TransformPoint(v)).ToArray();
       Vector3 interior=new Vector3((float)vertices.Average(v=>(double)v.x),(float)vertices.Average(v=>(double)v.y),(float)vertices.Average(v=>(double)v.z));float radius=vertices.Max(v=>Vector3.Distance(v,interior));
