@@ -82,3 +82,24 @@ def test_convex_subdivision_preserves_volume_and_parent_containment():
     assert all(len(child.vertices)<=24 for child in children)
     assert sum(child.volume for child in children)==pytest.approx(parent.volume,rel=1e-6,abs=1e-12)
     assert all((child.vertices@planes[:,:3].T+planes[:,3]).max()<1e-8 for child in children)
+
+
+def test_lazy_collision_objects_follow_the_current_transform_after_skipped_queries():
+    from types import SimpleNamespace
+    from sock_dressing_simulation.compound_reaching import CompoundScene
+    from sock_dressing_simulation.grasp_geometry import convex_geometry,HANDEDNESS
+    points=np.array([[0.,0.,0.],[1.,0.,0.],[0.,1.,0.],[0.,0.,1.]])
+    geometry,vertices,_=convex_geometry(points)
+    row=dict(link='link',obj=fcl.CollisionObject(geometry),vertices=vertices)
+    checker=CompoundScene.__new__(CompoundScene)
+    def fk(q,gap,only):
+        T=np.eye(4);T[0,3]=q[0];return {'link':T}
+    checker.k=SimpleNamespace(fk=fk,A=np.eye(3),b=np.zeros(3));checker.links=['link'];checker.groups={'link':[row]};checker.group_vertices={'link':vertices};checker.group_starts={'link':np.array([0])};checker.transform_epoch=0;checker.obstacles=[]
+    checker.update([1.],.04,np.zeros(3));checker.query_object(row)
+    np.testing.assert_allclose(row['obj'].getTranslation(),[1.,0.,0.])
+    checker.update([2.],.04,np.zeros(3))
+    checker.update([3.],.04,np.zeros(3))
+    checker.query_object(row)
+    np.testing.assert_allclose(row['obj'].getTranslation(),[3.,0.,0.])
+    expected=vertices@HANDEDNESS.T+[3.,0.,0.]
+    np.testing.assert_allclose(row['bounds'],[expected.min(0),expected.max(0)])

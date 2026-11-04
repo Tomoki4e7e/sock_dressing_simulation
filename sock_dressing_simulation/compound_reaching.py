@@ -61,6 +61,11 @@ class CompoundScene(CollisionScene):
         self.base_obstacle_bounds={name:(p.min(0),p.max(0)) for name,p in self.obstacle_points.items()}
         self.groups={}
         for row in self.shapes:self.groups.setdefault(row['link'],[]).append(row)
+        # Transform all vertices of a link in one array operation. FCL objects
+        # are updated only when a broadphase candidate actually needs a query.
+        self.group_vertices={name:np.concatenate([r['vertices'] for r in rows]) for name,rows in self.groups.items()}
+        self.group_starts={name:np.r_[0,np.cumsum([len(r['vertices']) for r in rows])[:-1]] for name,rows in self.groups.items()}
+        self.transform_epoch=0
         names=list(self.groups);self.pairs=[]
         for i,a in enumerate(names):
             for b in names[i+1:]:
@@ -92,13 +97,23 @@ class CompoundScene(CollisionScene):
 
     def update(self,q,gap,delta):
         frames=self.k.fk(q,gap,only=self.links)
-        for row in self.shapes:
-            T=frames[row['link']];R=self.k.A@T[:3,:3]@HANDEDNESS;t=self.k.A@T[:3,3]+self.k.b
-            row['obj'].setTransform(fcl.Transform(R,t));points=row['vertices']@R.T+t;row['bounds']=(points.min(0),points.max(0))
+        self.transform_epoch+=1;self.group_bounds={};self.group_transforms={}
+        for name,rows in self.groups.items():
+            T=frames[name];R=self.k.A@T[:3,:3]@HANDEDNESS;t=self.k.A@T[:3,3]+self.k.b
+            self.group_transforms[name]=fcl.Transform(R,t)
+            points=self.group_vertices[name]@R.T+t;starts=self.group_starts[name]
+            lo=np.minimum.reduceat(points,starts,axis=0);hi=np.maximum.reduceat(points,starts,axis=0)
+            self.group_bounds[name]=(lo,hi)
+            for i,row in enumerate(rows):row['bounds']=(lo[i],hi[i])
         self.obstacle_bounds={}
         for name,obj in self.obstacles:
             d=np.zeros(3) if 'Ground' in name else np.asarray(delta)
             obj.setTransform(fcl.Transform(np.eye(3),d));lo,hi=self.base_obstacle_bounds[name];self.obstacle_bounds[name]=(lo+d,hi+d)
+
+    def query_object(self,row):
+        if 'link' in row and row.get('transform_epoch')!=self.transform_epoch:
+            row['obj'].setTransform(self.group_transforms[row['link']]);row['transform_epoch']=self.transform_epoch
+        return row['obj']
 
     def slacks(self,q,gap,delta,allow_cloth_overlap=False,cap=.02,details=False,with_jacobian=False):
         self.update(q,gap,delta);values=[];issues=[];jacobian=[]
@@ -121,15 +136,16 @@ class CompoundScene(CollisionScene):
             best=cap+margin;feature=None
             rows_b=self.groups[b] if b in self.groups else [dict(obj=self.obstacle_objects[b],bounds=self.obstacle_bounds[b])]
             rows_a=self.groups[a]
-            lo_a=np.array([r['bounds'][0] for r in rows_a]);hi_a=np.array([r['bounds'][1] for r in rows_a])
-            lo_b=np.array([r['bounds'][0] for r in rows_b]);hi_b=np.array([r['bounds'][1] for r in rows_b])
+            lo_a,hi_a=self.group_bounds[a]
+            if b in self.groups:lo_b,hi_b=self.group_bounds[b]
+            else:lo_b,hi_b=(np.asarray(v)[None,:] for v in self.obstacle_bounds[b])
             lower=np.linalg.norm(np.maximum(np.maximum(lo_a[:,None]-hi_b[None,:],lo_b[None,:]-hi_a[:,None]),0),axis=2)
             ids=np.flatnonzero(lower.ravel()<=best)
             ids=ids[np.argsort(lower.ravel()[ids])]
             for idx in ids:
                 if lower.ravel()[idx]>max(best,0):break
                 i,j=divmod(int(idx),len(rows_b))
-                f=distance_feature(rows_a[i]['obj'],rows_b[j]['obj'])
+                f=distance_feature(self.query_object(rows_a[i]),self.query_object(rows_b[j]))
                 if f[0]<best:best=f[0];feature=f
             slack=best-margin;values.append(slack)
             if with_jacobian:
@@ -152,10 +168,12 @@ class CompoundScene(CollisionScene):
         self.update(q,gap,delta)
         for a,b,margin in self.pairs:
             rows_a=self.groups[a];rows_b=self.groups[b] if b in self.groups else [dict(obj=self.obstacle_objects[b],bounds=self.obstacle_bounds[b])]
-            lo_a=np.array([r['bounds'][0] for r in rows_a]);hi_a=np.array([r['bounds'][1] for r in rows_a]);lo_b=np.array([r['bounds'][0] for r in rows_b]);hi_b=np.array([r['bounds'][1] for r in rows_b])
+            lo_a,hi_a=self.group_bounds[a]
+            if b in self.groups:lo_b,hi_b=self.group_bounds[b]
+            else:lo_b,hi_b=(np.asarray(v)[None,:] for v in self.obstacle_bounds[b])
             lower=np.linalg.norm(np.maximum(np.maximum(lo_a[:,None]-hi_b[None,:],lo_b[None,:]-hi_a[:,None]),0),axis=2)
             for flat in np.flatnonzero(lower.ravel()<=margin):
-                i,j=divmod(int(flat),len(rows_b));distance=float(fcl.distance(rows_a[i]['obj'],rows_b[j]['obj'],fcl.DistanceRequest(),fcl.DistanceResult()))
+                i,j=divmod(int(flat),len(rows_b));distance=float(fcl.distance(self.query_object(rows_a[i]),self.query_object(rows_b[j]),fcl.DistanceRequest(),fcl.DistanceResult()))
                 if not np.isfinite(distance):raise ValueError('Nonfinite planning distance')
                 if distance<=0 or distance<margin-1e-9:return False
         return True
