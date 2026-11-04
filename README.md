@@ -120,7 +120,8 @@ episode metadata. Unity error logging remains enabled so native failures are
 not discarded. Every run gets a new UTC-named episode.
 
 Whenever Dry-AIREC is loaded, both arms are first moved to the ShareSet
-`change_pose.py` `ka` posture and the three torso joints are set to its `kb`
+`change_pose.py` `na` apron posture (`[47, 0, -2.7, 131, 1, 1, 20]`
+degrees for each arm) and the three torso joints are set to its `kb`
 posture (`[-45, 100, 0]` degrees). The torso targets are outside the learned
 18-D action and are held fixed while inference continues to command only both
 arms and both grippers.
