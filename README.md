@@ -521,3 +521,9 @@ feature→visualization→audit regression. They do not launch Unity.
 現在の閉鎖評価は摩擦保持を使わない幾何学的な方式です。[設定・結果・再現手順](artifacts/geometric-closure/README.md) を参照してください。
 
 新合格候補5配置の接近・閉鎖の実画像と、1mm・4mm²を幾何タスクの基準として固定した判断は[画像レビュー](artifacts/geometric-closure-photos-clean/README.md)にあります。布の変形を伴う把持成功の検証とは区別しています。
+
+No.3候補8・No.12候補9の旧開始姿勢での事前検証は[腕リーチング検証](artifacts/arm-reaching/README.md)にあります。目標IK不成立と、開始姿勢の衝突形状の重なりを確認した記録です。開始姿勢とモデル固有の除外については以下の更新を参照してください。
+
+更新：[腕IKによる60候補の再選別・開始姿勢の修正・足裏側の追加探索](artifacts/arm-reaching-reselection/README.md)。新しい開始姿勢は `config/arm_reaching_safe_start.yaml` に保存しました。SRDFのモデル固有の除外を反映し、検査対象の手首干渉を解消しています。既存候補と追加した足裏側候補は、今回の条件では採用0件です。
+
+開口から15mmを中心に半径を5mm増やした32初期形状での再探索は[膨らみ追加後の再検証](artifacts/bulged-cuff/README.md)にあります。胴体IKは無効のまま、34配置が布・手先の幾何条件を通過しましたが、右腕の関節余裕・自己干渉・接近前IKの条件まで満たす採用候補は得られていません。

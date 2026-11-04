@@ -111,7 +111,15 @@ def projected_cloth_area(local,faces,fingers,distances,depth,*,half_extent_m=.00
     cells=jaw_cells(fingers,half_extent_m,edge_clearance_m)
     if not cells:return dict(area_m2=0.,effective_pad_area_m2=0.,area_fraction=0.,largest_component_area_m2=0.,span_x_m=0.,span_z_m=0.,polygons_xz_m=[])
     triangles=[]
-    for face in faces:
+    # Conservative vectorized rejection only: keep every face that can
+    # intersect the finite window and material band, then clip as before.
+    faces=np.asarray(faces,dtype=int).reshape(-1,3)
+    face_vertices=np.asarray(local)[faces]
+    bounds=face_vertices[:,:,[0,2]]
+    possible=(bounds.min(axis=1)<=half_extent_m).all(axis=1)&(bounds.max(axis=1)>=-half_extent_m).all(axis=1)
+    possible&=np.asarray(distances)[faces].min(axis=1)<=material_radius_m+1e-12
+    possible&=np.asarray(depth)[faces].min(axis=1)<=band_width_m+1e-12
+    for face in np.asarray(faces)[possible]:
         v=local[face]
         if np.any(v[:,[0,2]].min(0)>half_extent_m) or np.any(v[:,[0,2]].max(0)<-half_extent_m):continue
         augmented=np.c_[v,np.asarray(distances)[face],np.asarray(depth)[face]]
