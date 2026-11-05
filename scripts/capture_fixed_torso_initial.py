@@ -28,7 +28,11 @@ from photograph_grasp_candidates import photograph
 
 
 def main():
-    ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--output',type=Path,default=ROOT/'artifacts/fixed-torso-start-search');ap.add_argument('--index',type=int,default=5);ap.add_argument('--port',type=int,default=16680);ap.add_argument('--trajectory',type=Path);ap.add_argument('--initial-configuration',type=Path);ap.add_argument('--replay',action='store_true');a=ap.parse_args();a.output=a.output.resolve()
+    ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--output',type=Path,default=ROOT/'artifacts/fixed-torso-start-search');ap.add_argument('--index',type=int,default=5);ap.add_argument('--port',type=int,default=16680);ap.add_argument('--trajectory',type=Path);ap.add_argument('--initial-configuration',type=Path);ap.add_argument('--replay',action='store_true')
+    ap.add_argument('--state',type=Path,help='Explicit frozen cloth state for an initial-configuration capture')
+    # Parse the optional shape before loading the selected configuration.
+    a=ap.parse_args();a.output=a.output.resolve()
+    if a.state and (a.trajectory or not a.initial_configuration):ap.error('--state requires --initial-configuration and cannot accompany --trajectory')
     if a.replay and not a.trajectory:ap.error('--replay requires --trajectory')
     if a.trajectory and a.initial_configuration:ap.error('Choose either --trajectory or --initial-configuration')
     if a.trajectory:
@@ -50,7 +54,7 @@ def main():
     def local_lock_init(self,name):
         self.lck_path=str(lock_dir/(name+'.lck'));Path(self.lck_path).touch(exist_ok=True);self.fp=None
     locker.Locker.__init__=local_lock_init;sys.modules['pyrcareworld.utils.locker']=locker
-    state=state_for(saved['geometry_record']) if a.trajectory else json.loads((ROOT/f'artifacts/bulged-cuff/pose-{number:02d}/state.json').read_text());scene_number=state.get('scene_number',number);delta=np.array(selected['translation_m']);k,checker,dl,du,contract,source_scene=context(number,state,REGISTERED_MANIFEST,left_foot_floor_allowance=selected.get('left_foot_floor_allowance_m',0.));checker.park_left(selected['left_q_rad'],selected['left_gap_m'])
+    state=state_for(saved['geometry_record']) if a.trajectory else json.loads((a.state if a.state else ROOT/f'artifacts/bulged-cuff/pose-{number:02d}/state.json').read_text());scene_number=state.get('scene_number',number);delta=np.array(selected['translation_m']);k,checker,dl,du,contract,source_scene=context(number,state,REGISTERED_MANIFEST,left_foot_floor_allowance=selected.get('left_foot_floor_allowance_m',0.));checker.park_left(selected['left_q_rad'],selected['left_gap_m'])
     if any(abs(k.q0[n]-v)>1e-8 for n,v in selected.get('torso_joints_rad',{}).items()):raise ValueError('Initial configuration asks to change the fixed torso')
     offline=checker.slacks(np.array(selected['right_q_rad']),selected['right_gap_m'],delta,details=True)
     if not offline['passed']:raise ValueError('Initial configuration failed registered-geometry validation')
@@ -129,6 +133,14 @@ def main():
         if a.trajectory:
             target=np.array(saved['geometry_record']['candidate']['grasp_center_unity_world_m'])+delta
             result['close_image']=photograph(env,out/'endpoint-close.png',target,np.array([-.7,.3,-1.]),np.array([0.,1.,0.]),.65,45)
+        if a.state:
+            # Preserve the normal full-scene initial photograph above; use a
+            # separate unlit cloth view so its tail and foot fit are visible.
+            target=(np.array(state['source']['ankle'])+np.array(state['source']['toe']))*.5+delta+np.array([0.,-.015,.03])
+            attr._send_data('SetSockInspectionMaterial',True,env.robot.id);env._env.step(simulate=False)
+            result['sock_inspection_image']=photograph(env,out/'sock-inspection.png',target,np.array([-1.,.15,-.3]),np.array([0.,1.,0.]),.65,45)
+            result['sock_inspection_front_image']=photograph(env,out/'sock-inspection-front.png',target,np.array([-.2,.1,1.]),np.array([0.,1.,0.]),.65,45)
+            attr._send_data('SetSockInspectionMaterial',False,env.robot.id);env._env.step(simulate=False)
         result['inspection_camera_repositioned_after_comparison']=True
     write(out/'result.json',result);print('NATIVE INITIAL',result['passed'],'fixed drift',result['maximum_fixed_frame_position_error_m'],'planned link error',result['maximum_planned_link_position_error_m'],'camera unchanged',result['camera_transform_unchanged'],flush=True)
 

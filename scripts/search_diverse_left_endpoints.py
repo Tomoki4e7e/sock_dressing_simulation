@@ -25,6 +25,7 @@ from sock_dressing_simulation.held_ankle_poses import foot_basis
 from sock_dressing_simulation.pose_patterns import read_patterns
 from dataclasses import asdict
 from sock_dressing_simulation.reaching_dataset import file_sha256
+from sock_dressing_simulation.fitted_b_cuff import build_fitted_b_state,PROFILE as FITTED_B_PROFILE
 
 
 def existing_geometry(numbers,output,initial_path):
@@ -74,7 +75,7 @@ def existing_geometry(numbers,output,initial_path):
         print('EXISTING GRID',n,'found',bool(accepted),counts,'seconds',round(time.monotonic()-began,1),flush=True)
 
 
-def run(numbers, stages, output, initial_path, seconds, arm_guided=False,retry=False):
+def run(numbers, stages, output, initial_path, seconds, arm_guided=False,retry=False,maximum_joint_distance_rad=None):
     initial = yaml.safe_load(initial_path.read_text())
     initial_sha=file_sha256(initial_path)
     workbook_sha=file_sha256(ROOT/'artifacts/sock-pose-pattern/sock_pose_patterns.xlsx')
@@ -96,10 +97,15 @@ def run(numbers, stages, output, initial_path, seconds, arm_guided=False,retry=F
                 cached=json.loads(path.read_text())
                 if cached.get('initial_sha256')!=initial_sha or cached.get('workbook_sha256',workbook_sha)!=workbook_sha:
                     raise ValueError('Cached endpoint inputs differ; use a new output directory: '+str(path))
+                if stage=='B' and cached.get('shape_profile')!=FITTED_B_PROFILE:
+                    raise ValueError('Cached B uses the old, unfitted shape; use a new output directory: '+str(path))
                 continue
             state = copy.deepcopy(original)
             state.update(scene_number=source_number, pattern=asdict(pattern))
-            if stage != 'held-A':
+            if stage == 'B':
+                state,_,_=build_fitted_b_state(original,pattern)
+                state['scene_number']=source_number
+            elif stage != 'held-A':
                 points, placement = generate_preinsert(state['source'], stage, clearance_m=.015)
                 state.update(particles_world=points.tolist(), opening_normal=placement['opening_inward_normal_world'])
                 state['placement'] = placement
@@ -108,23 +114,35 @@ def run(numbers, stages, output, initial_path, seconds, arm_guided=False,retry=F
                 state.pop('bulge', None)
                 state['settings'] = dict(generator='generate_preinsert',clearance_m=.015,above_heel_m=.05)
             state['applied_opening_stage']='A' if stage=='held-A' else stage
+            write(output/'states'/path.name,state)
             base, scene, *rest = context(n, state, REGISTERED_MANIFEST, left_foot_floor_allowance=initial['left_foot_floor_allowance_m'])
             scene.park_left(start, .04)
             model = ControlledArmKinematics(base, 'left', initial['right_q_rad'], .04)
             checker = ControlledCollisionScene(scene, 'left', initial['right_q_rad'], .04)
             initial_check = checker.slacks(start, .04, delta, details=True)
             if not initial_check['passed']:
-                write(path, dict(number=n, stage=stage, initial_configuration=str(initial_path), initial_sha256=initial_sha,workbook_sha256=workbook_sha, initial_check=initial_check, accepted=[]))
+                write(path, dict(number=n, stage=stage,shape_profile=state.get('shape_profile'), initial_configuration=str(initial_path), initial_sha256=initial_sha,workbook_sha256=workbook_sha, initial_check=initial_check, accepted=[]))
                 print('PROBE initial rejected', n, stage, initial_check['issues'], flush=True)
                 continue
             samples = candidate_samples(state)
-            samples.sort(key=lambda s: -s['position'][1])
+            samples.sort(key=(lambda s:(abs(s['depth_m']-.015),-s['position'][1])) if stage=='B' else (lambda s:-s['position'][1]))
             skin = SkinBody(state['source']['skin_surface']); cloth = ClothScreen(state['particles_world'], state['triangles'])
             faces = np.array(state['triangles']).reshape(-1, 3); material = np.array(state['source']['rest_positions'])
             comfortable = copy.copy(model); comfortable.lower = model.lower + np.deg2rad(5); comfortable.upper = model.upper - np.deg2rad(5)
             counts = {}; accepted = []; began = time.monotonic()
             transported = foot_basis(state['source']) @ foot_basis(reference_state['source']).T @ Rref
             rotations = [transported, Rref] + [Rotation.from_rotvec(axis * np.deg2rad(a)).as_matrix() @ transported for a in (15, -15, 30, -30) for axis in np.eye(3)]
+            preferred_seed=qref
+            previous_b=ROOT/f'artifacts/diverse-left-reaching/final/routes/pose-{n:02d}-B-v00-trajectory.json'
+            if stage=='B' and previous_b.exists():
+                previous=json.loads(previous_b.read_text());preferred_seed=np.array(previous['q_rad'][-1]);old_R=np.array(previous['geometry_record']['candidate']['rotation_matrix'])
+                rotations=[old_R]+[Rotation.from_rotvec(axis*np.deg2rad(a)).as_matrix()@old_R for a in (5,-5,10,-10,15,-15,30,-30) for axis in np.eye(3)]+rotations
+            fitted_seed=ROOT/f'artifacts/diverse-left-reaching/b-fitted-bulge/probe/pose-{n:02d}-B.json'
+            if stage=='B' and fitted_seed.exists():
+                proposals=json.loads(fitted_seed.read_text()).get('accepted',[])
+                if proposals:
+                    preferred_seed=np.array(proposals[0]['q']);seed_R=np.array(proposals[0]['geometry']['candidate']['rotation_matrix'])
+                    rotations=[seed_R]+[Rotation.from_rotvec(axis*np.deg2rad(a)).as_matrix()@seed_R for a in (5,-5,10,-10,15,-15) for axis in np.eye(3)]+rotations
             for s in samples:
                 if time.monotonic() - began > seconds: break
                 if s['depth_m'] > .030: continue
@@ -150,14 +168,33 @@ def run(numbers, stages, output, initial_path, seconds, arm_guided=False,retry=F
                     if time.monotonic()-began>seconds:break
                     geometry, reason = geometric_check(model, state, s, R, skin, cloth, settings, dist, approach_distance=0.)
                     counts[reason] = counts.get(reason, 0) + 1
+                    # A compact cuff can have only a narrow orientation range
+                    # that clears the foot. Refine the surviving orientations
+                    # instead of enlarging the garment to fit the hand.
+                    if stage=='B' and reason=='area':
+                        coarse_rotation=R
+                        for angle in (2.5,-2.5,5,-5,10,-10,15,-15):
+                            for axis in np.eye(3):
+                                refined=Rotation.from_rotvec(axis*np.deg2rad(angle)).as_matrix()@coarse_rotation
+                                geometry,refined_reason=geometric_check(model,state,s,refined,skin,cloth,settings,dist,approach_distance=0.)
+                                key='fine_rotation_'+refined_reason;counts[key]=counts.get(key,0)+1
+                                if geometry:R=refined;break
+                            if geometry or time.monotonic()-began>seconds:break
                     if not geometry: continue
-                    sol = comfortable.solve(np.array(s['position']) + delta, R, np.clip(qref, comfortable.lower+1e-9, comfortable.upper-1e-9))
+                    sol = comfortable.solve(np.array(s['position']) + delta, R, np.clip(preferred_seed, comfortable.lower+1e-9, comfortable.upper-1e-9))
                     if guided_q is not None:sol=dict(q=guided_q.tolist(),position_error_m=float(np.linalg.norm(model.pose(guided_q)[0]-np.array(s['position'])-delta)),orientation_error_deg=0.)
                     if sol['position_error_m'] > 1e-4 or sol['orientation_error_deg'] > .5:
                         sol = comfortable.solve(np.array(s['position']) + delta, R, np.clip(start, comfortable.lower+1e-9, comfortable.upper-1e-9))
                     for seed in (np.deg2rad([140,-60,-100,90,-140,60,60]), np.deg2rad([100,-40,-80,90,140,60,0])):
                         if sol['position_error_m'] <= 1e-4 and sol['orientation_error_deg'] <= .5: break
                         sol = comfortable.solve(np.array(s['position']) + delta, R, np.clip(seed, comfortable.lower+1e-9, comfortable.upper-1e-9))
+                    if maximum_joint_distance_rad is not None and np.linalg.norm(np.array(sol['q'])-start)>maximum_joint_distance_rad:
+                        for seed in (qref,start,np.deg2rad([140,-40,-90,85,150,-60,65])):
+                            alternative=comfortable.solve(np.array(s['position'])+delta,R,np.clip(seed,comfortable.lower+1e-9,comfortable.upper-1e-9))
+                            if alternative['position_error_m']<=1e-4 and alternative['orientation_error_deg']<=.5 and np.linalg.norm(np.array(alternative['q'])-start)<=maximum_joint_distance_rad:
+                                sol=alternative;break
+                        if np.linalg.norm(np.array(sol['q'])-start)>maximum_joint_distance_rad:
+                            counts['outside_near_start_search_budget']=counts.get('outside_near_start_search_budget',0)+1;continue
                     if sol['position_error_m'] > 1e-4 or sol['orientation_error_deg'] > .5:
                         counts['ik_failed'] = counts.get('ik_failed', 0) + 1; continue
                     for opening in sorted(geometry['valid_openings'], key=lambda g: -g['gap_m']):
@@ -173,7 +210,7 @@ def run(numbers, stages, output, initial_path, seconds, arm_guided=False,retry=F
                     if accepted: break
                 if accepted: break
             if file_sha256(initial_path)!=initial_sha:raise ValueError('Shared initial configuration changed during search')
-            write(path, dict(number=n, stage=stage, initial_configuration=str(initial_path), initial_sha256=initial_sha,workbook_sha256=workbook_sha, initial_check=initial_check, accepted=accepted, counts=counts, elapsed_s=time.monotonic()-began))
+            write(path, dict(number=n, stage=stage,shape_profile=state.get('shape_profile'),maximum_joint_distance_rad=maximum_joint_distance_rad, initial_configuration=str(initial_path), initial_sha256=initial_sha,workbook_sha256=workbook_sha, initial_check=initial_check, accepted=accepted, counts=counts, elapsed_s=time.monotonic()-began))
             if accepted:
                 write(output / 'states' / f'pose-{n:02d}-{stage}.json', state)
             print('PROBE', n, stage, counts, 'elapsed', round(time.monotonic()-began, 1), flush=True)
@@ -182,8 +219,10 @@ def run(numbers, stages, output, initial_path, seconds, arm_guided=False,retry=F
 if __name__ == '__main__':
     import argparse
     ap = argparse.ArgumentParser(description=__doc__); ap.add_argument('--numbers', type=int, nargs='+'); ap.add_argument('--stages', nargs='+', choices=['held-A','A','B','C','D','E','workbook'], default=['workbook']); ap.add_argument('--output', type=Path, default=ROOT/'artifacts/diverse-left-reaching/workbook-shared-probe'); ap.add_argument('--initial', type=Path, default=ROOT/'config/diverse_left_reaching_shared.yaml'); ap.add_argument('--seconds', type=float, default=45.); ap.add_argument('--arm-guided',action='store_true');ap.add_argument('--retry',action='store_true');ap.add_argument('--existing-geometry',action='store_true')
+    ap.add_argument('--maximum-joint-distance-rad',type=float,help='Optional endpoint-search budget relative to the common start; not a physical reachability claim')
     args = ap.parse_args()
     if not np.isfinite(args.seconds) or args.seconds<=0:ap.error('--seconds must be finite and positive')
+    if args.maximum_joint_distance_rad is not None and (not np.isfinite(args.maximum_joint_distance_rad) or args.maximum_joint_distance_rad<=0):ap.error('Joint-distance search budget must be finite and positive')
     numbers=args.numbers or [p.number for p in read_patterns(ROOT/'artifacts/sock-pose-pattern/sock_pose_patterns.xlsx')]
     if args.existing_geometry:existing_geometry(numbers,args.output.resolve(),args.initial.resolve())
-    else:run(numbers, args.stages, args.output.resolve(), args.initial.resolve(), args.seconds,args.arm_guided,args.retry)
+    else:run(numbers, args.stages, args.output.resolve(), args.initial.resolve(), args.seconds,args.arm_guided,args.retry,args.maximum_joint_distance_rad)

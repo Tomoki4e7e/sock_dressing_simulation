@@ -16,6 +16,7 @@ sys.path[:0]=[str(ROOT),str(ROOT/'scripts')]
 from search_centered_reaching import write
 from sock_dressing_simulation.pose_patterns import read_patterns
 from sock_dressing_simulation.reaching_dataset import file_sha256,verify_dataset_inputs,spatial_route_distance
+from sock_dressing_simulation.fitted_b_cuff import PROFILE as FITTED_B_PROFILE
 
 
 def main():
@@ -26,14 +27,19 @@ def main():
         validation=json.loads(path.with_name(path.name.replace('trajectory','validation')).read_text())
         if validation['trajectory_sha256']!=file_sha256(path):raise ValueError('Stale validation: '+str(path))
         pattern=plan['workbook_pattern'];dest=out/'replays'/path.stem
+        cloth_state=json.loads((ROOT/plan['geometry_record']['state_file']).read_text())
+        profile_ok=plan['applied_opening_stage']!='B' or cloth_state.get('shape_profile')==FITTED_B_PROFILE
         native_path=dest/'native-route-initial/replay-result.json';initial_path=dest/'native-route-initial/result.json';closed_path=dest/'actual-closed-grasp-recheck.json'
         native=json.loads(native_path.read_text()) if native_path.exists() else {}
         initial=json.loads(initial_path.read_text()) if initial_path.exists() else {}
         closed=json.loads(closed_path.read_text()) if closed_path.exists() else {}
         current=native.get('source_sha256')==file_sha256(path)
-        offline=validation['offline_passed'];executed=bool(current and initial.get('passed') and native.get('passed'));captured=bool(executed and closed.get('passed'))
+        offline=validation['offline_passed'] and profile_ok;executed=bool(current and initial.get('passed') and native.get('passed') and profile_ok);captured=bool(executed and closed.get('passed'))
         row=dict(id=path.stem,number=plan['number'],pitch_deg=pattern['pitch_deg'],roll_deg=pattern['roll_deg'],stage=plan['applied_opening_stage'],workbook_stage=pattern['stage'],
             offline_passed=offline,native_replay_passed=executed,actual_closed_capture_passed=captured,
+            historical_native_replay_passed=bool(current and initial.get('passed') and native.get('passed')),
+            current_shape_qualified=profile_ok,shape_profile=cloth_state.get('shape_profile'),
+            opening_reduction_percent=cloth_state.get('cuff_fit',{}).get('opening_reduction_fraction',0)*100 if cloth_state.get('cuff_fit') else None,
             trajectory=str(path.relative_to(ROOT)),duration_s=plan['duration_s'],minimum_joint_margin_deg=validation['minimum_joint_margin_deg'],minimum_slack_mm=validation['minimum_slack_m']*1000,
             planned_area_mm2=validation['actual_grasp_geometry']['projection']['area_m2']*1e6 if validation['actual_grasp_geometry'] else None,
             actual_area_mm2=closed.get('actual_projection',{}).get('area_m2',0)*1e6 if captured else None,
@@ -65,13 +71,16 @@ def main():
     coverage=[dict(number=p.number,pitch_deg=p.pitch_deg,roll_deg=p.roll_deg,stage=p.stage,angle_and_stage_covered=(p.pitch_deg,p.roll_deg,p.stage) in verified) for p in patterns]
     searched=[]
     initial_file=ROOT/'config/diverse_left_reaching_shared.yaml'
-    for folder in out.parent.iterdir():
+    probe_folders=[folder for folder in out.iterdir() if folder.is_dir() and 'probe' in folder.name]
+    if not probe_folders:probe_folders=list(out.parent.iterdir())
+    for folder in probe_folders:
         if not folder.is_dir() or 'probe' not in folder.name:continue
         for path in sorted(folder.glob('pose-*.json')):
             probe=json.loads(path.read_text())
             if probe.get('initial_sha256')!=file_sha256(initial_file):continue
+            if probe['stage']=='B' and probe.get('shape_profile')!=FITTED_B_PROFILE:continue
             searched.append(dict(number=probe['number'],stage='A' if probe['stage']=='held-A' else probe['stage'],endpoint_found=bool(probe['accepted']),initial_passed=probe['initial_check']['passed'],counts=probe.get('counts',{}),elapsed_s=probe.get('elapsed_s'),record=str(path.relative_to(ROOT))))
-    summary=dict(shared_initial_configuration=next(iter(plans.values()))['shared_initial_configuration'] if plans else None,
+    summary=dict(shared_initial_configuration=next(iter(plans.values()))['shared_initial_configuration'] if plans else 'config/diverse_left_reaching_shared.yaml',
         offline_routes=sum(r['offline_passed'] for r in rows),native_verified_routes=sum(r['actual_closed_capture_passed'] for r in rows),
         verified_conditions=len(verified),verified_ankle_angles=len({c[:2] for c in verified}),verified_opening_stages=sorted({c[2] for c in verified}),
         rows=rows,spatial_diversity=diversity,workbook_coverage=coverage,searched_conditions=searched,
@@ -104,24 +113,34 @@ def main():
         ax.legend(fontsize=7,loc='upper left',bbox_to_anchor=(1.,1.));fig.tight_layout();fig.savefig(out/'trajectories.png',dpi=170);plt.close(fig)
     cells=[];gallery=[]
     for row in rows:
-        state='実再生・閉鎖検査合格' if row['actual_closed_capture_passed'] else ('幾何検査合格・実再生未合格' if row['offline_passed'] else '不合格')
+        state='旧B形状・採用対象外' if not row['current_shape_qualified'] else ('実再生・閉鎖検査合格' if row['actual_closed_capture_passed'] else ('幾何検査合格・実再生未合格' if row['offline_passed'] else '不合格'))
         cells.append('<tr>'+''.join(f'<td>{html.escape(str(v))}</td>' for v in [row['id'],row['pitch_deg'],row['roll_deg'],row['stage'],state,round(row['duration_s'],2),round(row['minimum_slack_mm'],3),None if row['actual_area_mm2'] is None else round(row['actual_area_mm2'],3)])+'</tr>')
         image=out/'replays'/row['id']/'native-route-initial/endpoint-close.png'
         if image.exists():gallery.append(f'<figure><img src="{image.relative_to(out)}"><figcaption>{html.escape(row["id"])}</figcaption></figure>')
     separation=', '.join(f'{d["measured_rms_tcp_separation_mm"]:.2f} mm（実測）' if d['measured_rms_tcp_separation_mm'] is not None else f'{d["rms_tcp_separation_mm"]:.2f} mm（計画）' for d in diversity) or '比較対象なし'
+    shape_html=''
+    if (out/'shape-summary.json').exists() and json.loads((out/'shape-summary.json').read_text()).get('shape_profile')==FITTED_B_PROFILE:
+        shape_html='<h2>Bのつま先形状</h2><p>開口位置Bの前足部寸法と余り長さから、外周を保った連続形状を作成。人体のつま先位置で靴下を絞らず、自由部分を扁平に曲げ、靴下自体の閉じた端だけを丸くする。<a href="shape-report.html">A・前回B・今回Bの比較と形状検査</a>。</p><img src="toe-circumference-comparison.png">'
+    test_html='検証ログはvalidation/に保存。'
+    if (out/'validation/tests.json').exists():
+        stats=json.loads((out/'validation/tests.json').read_text());t=stats.get('targeted',{});f=stats.get('full',{})
+        test_html=f"関連テスト {t.get('passed','未集計')} 合格。全体試験 {f.get('passed','未集計')} 合格・{f.get('failed','未集計')} 未通過。既存の再生フック試験の引数不足とtorch未導入による未通過を含む。ログはvalidation/に保存。"
+    route_image_html='<img src="trajectories.png" alt="手先の三次元軌道">' if plans else ''
     content=f'''<!doctype html><html lang="ja"><meta charset="utf-8"><title>共通初期姿勢からの左手リーチング</title>
 <style>body{{font:16px sans-serif;max-width:1250px;margin:40px auto;padding:0 20px;line-height:1.7}}table{{border-collapse:collapse;font-size:13px}}th,td{{border:1px solid #ccd;padding:6px}}img{{max-width:100%}}.gallery{{display:flex;flex-wrap:wrap}}figure{{width:45%;margin:2%}}code{{word-break:break-all}}</style>
 <h1>共通初期姿勢からの左手リーチング</h1>
 <p>幾何検査合格 {summary['offline_routes']} 本、PhysX実再生・実測閉鎖検査合格 {summary['native_verified_routes']} 本。実再生済み条件 {summary['verified_conditions']} 種、足首角度 {summary['verified_ankle_angles']} 種、開口位置 {', '.join(summary['verified_opening_stages'])}。</p>
 <p>共通設定: <code>{summary['shared_initial_configuration']}</code>。成功例から両腕の第2関節だけ−3°。人体・台座・ロボットの配置、torso・head・baseは成功例と共通。全軌道に同じ開始関節角・初期開き幅を要求し、入力ファイルのSHA-256を検証する。</p>
 <p>同一条件内の経路差（時間を除き、弧長を正規化した手先位置のRMS）: {separation}。別軌道の採用閾値は5 mm。</p>
-<img src="trajectories.png" alt="手先の三次元軌道"><table><tr><th>軌道</th><th>pitch°</th><th>roll°</th><th>開口位置</th><th>検証状態</th><th>接近時間 s</th><th>最小余裕 mm</th><th>実測捕捉面積 mm²</th></tr>{''.join(cells)}</table>
+{shape_html}
+{route_image_html}<table><tr><th>軌道</th><th>pitch°</th><th>roll°</th><th>開口位置</th><th>検証状態</th><th>接近時間 s</th><th>最小余裕 mm</th><th>実測捕捉面積 mm²</th></tr>{''.join(cells)}</table>
 <div class="gallery">{''.join(gallery)}</div>
-<h2>適用範囲</h2><p>足首角度と開口位置A〜Eを参照した探索。Aは成功例と同じ保存済み形状、B〜Eは既存の解剖学的経路による正常開口形状を使用。Eは踵・足首位置から下腿方向50 mmという既存定義。Excelの素材・前後ずらし・斜め角・しわ・ねじれ・折り返し・開口のつぶれは未再現。</p>
-<p>開口位置C〜Eも探索したが、今回の探索範囲では、閉鎖条件と腕IK・全身衝突条件を併せて満たす軌道は得られていない。探索記録はsummary.jsonのsearched_conditionsに保存する。表の条件とExcel行の足首角度・開口位置の対応はworkbook_coverageに記録する。足首角度だけを参照した追加条件も含むため、Excelの全50行を再現した結果ではない。</p>
+<h2>形状と適用範囲</h2><p>Aは成功例と同じ保存済み形状。最新版Bは前足部から自由部分へ外周を保って接続し、余り長さに応じて扁平に曲げ、材料座標30mm帯の中心15mmで半径を5mm増やす。開口縁と30mm帯の外側は膨らみ処理で変更しない。旧Bの楕円形状、太い胴部・上向き尾部を残したv3、およびつま先が局所的に細いv4は採用対象外とし、CSV一式から除外する。</p>
+<p>Bの修正後の結果は <a href="../b-natural-toe/shape-report.html">修正版Bのレポート</a>。Bの差し込み深さ・前足部形状・残り長さから凍結した基準形状を作り、半径5mmの膨らみを追加する。布変形・重力釣合い・摩擦保持の成立は未検証。前回Bの12軌道を最新形状での成功として引き継がない。C〜Eの既存探索は今回のBの再探索とは別。Eは踵・足首位置から下腿方向50mmという既存定義。Excelの素材・前後ずらし・斜め角・しわ・ねじれ・折り返し・開口のつぶれは未再現。</p>
+<p>以前の開口位置C〜Eの探索では、閉鎖条件と腕IK・全身衝突条件を併せて満たす軌道は得られていない。今回の修正と再探索はBが対象。各出力で参照した探索記録はsummary.jsonのsearched_conditionsに保存する。表の条件とExcel行の足首角度・開口位置の対応はworkbook_coverageに記録する。足首角度だけを参照した追加条件も含むため、Excelの全50行を再現した結果ではない。</p>
 <p>足との離隔1 mm以上、捕捉面積4 mm²以上、全身・自己干渉、関節余裕5°以上、速度・加速度を検査。保存布形状での接近・幾何学的な閉鎖検査であり、布変形、摩擦保持、牽引は未検証。従来と同じ人体左足の床貫通約96.6 mmと150 mmの明示的許容を継承する。その他の床検査は維持する。</p>
 <p>実再生合格軌道の各フォルダにangle.csv（実測18列）、frames.csv、demonstration.jsonを出力。合格分の関節データは<a href="demonstrations.zip">demonstrations.zip</a>にもまとめる。トルクと同期画像は未収集のため、学習可能データとするフラグはfalse。軌道・検証・再生ログ・Excel対応はsummary.jsonとsummary.csvを参照。</p>
-<p>関連する57テストは合格。全体試験は511合格・2未通過（既存の再生フック試験の引数不足1件、検証環境のtorch未導入1件）。ログと環境情報はvalidation/に保存。</p></html>'''
+<p>{test_html}</p></html>'''
     (out/'report.html').write_text(content)
     with zipfile.ZipFile(out/'demonstrations.zip','w',compression=zipfile.ZIP_DEFLATED) as archive:
         archive.write(initial_file,'shared_initial_configuration.yaml')

@@ -188,7 +188,7 @@ def local_features(pattern, amplitude_m, length_m, depth_m, heel_path_m, seed=17
     return features
 
 
-def _tight_base(source, pattern, clearance_m, above_heel_m, signs, slab_fraction=.65):
+def _tight_base(source, pattern, clearance_m, above_heel_m, signs, slab_fraction=.65, section_surfaces=None):
     """Fit a polygonal sleeve to each skin section, without a global ellipse."""
     from scipy.spatial import ConvexHull
     from .preinsert import _slab_points
@@ -203,7 +203,7 @@ def _tight_base(source, pattern, clearance_m, above_heel_m, signs, slab_fraction
                                             clearance_m=.003, path_offset_m=offset)
     levels = np.unique(np.round(rest[:, 2], 6))
     spacing = float(np.median(np.diff(levels)))*report['axial_initial_scale']
-    surfaces = [(np.asarray(s['vertices']), np.asarray(s['triangles']).reshape(-1, 3)) for s in source['surfaces']]
+    surfaces = [(np.asarray(s['vertices']), np.asarray(s['triangles']).reshape(-1, 3)) for s in (source['surfaces'] if section_surfaces is None else section_surfaces)]
     frames = []
     for index, z in enumerate(levels):
         ids = np.flatnonzero(np.isclose(rest[:, 2], z, atol=1e-6, rtol=0))

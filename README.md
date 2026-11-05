@@ -556,3 +556,37 @@ python scripts/report_diverse_left_reaching.py
 同一条件の別経路は、弧長を正規化した手先経路のRMS差5mm以上を要求します。平滑化後の補間検査、実再生、実測角度・開き幅での閉鎖検査を別々に保存します。実再生合格分には18列の実測 `angle.csv` と位相・時刻の `frames.csv` を出力します。布は保存形状に固定され、摩擦保持と牽引、同期画像・トルクの収集は未検証のため、`learning_ready` は `false` です。写真基準と同じ人体左足の床貫通と明示的な許容も継承しています。再生スクリプトはMesaによるソフトウェア描画を既定で使います。
 
 生成時の軌道JSONは変更せず、実行結果は `replays/*/native-route-initial/replay-result.json` と `summary.json` に保存します。容量を抑えるため、再生後の中間シーンは `.json.gz`、生成アセットは `assets.tar.gz`、Playerのログは `.log.gz` として保持します。
+
+開口位置Bの最新版は[つま先の外周を保ったB専用形状](artifacts/diverse-left-reaching/b-natural-toe/shape-report.html)を参照してください。
+前回は皮膚のつま先断面に追従して外周が急減し、その先の細い自由部分へ接続していました。
+今回は、Bの前足部から基準外周を求め、差し込み深さと余り長さに合わせて、足先を包む部分から扁平な自由部分へ滑らかに接続します。
+人体のつま先と靴下自体の閉じた端を区別し、閉じた端の25mmだけを丸く絞ります。
+Aの54%という自然長は適用しません。B専用の凍結した幾何形状として構築しており、布変形や重力釣合いの物理検証を意味しません。
+30mm帯・中心15mmの半径+5mm、共通のロボット初期姿勢と配置は維持します。
+
+足首10条件（No.3/43は重複、No.10は追加角度）、保存形状11件で、皮膚・自己交差と外周連続性を検査しました。
+つま先付近から閉じた端の丸みの手前までは前足部外周の80%以上、隣接断面間の外周比85%以上を要求します。
+現在の生成設定では自由部分へ90%まで滑らかに移行させています。
+比較写真、外周曲線、JSON/CSVの検査値、形状一式ZIPを同じレポートから参照できます。
+
+```bash
+# 既存の足首ごとのネイティブ足形状を参照し、B専用の基準メッシュを生成する。
+python scripts/prepare_native_b_sock.py
+python scripts/report_fitted_b_geometry.py
+python scripts/search_diverse_left_endpoints.py --stages B \
+  --numbers 8 10 3 15 19 22 23 31 38 41 43 \
+  --maximum-joint-distance-rad 2 \
+  --output artifacts/diverse-left-reaching/b-natural-toe/probe
+python scripts/generate_diverse_left_reaching.py \
+  --probe artifacts/diverse-left-reaching/b-natural-toe/probe \
+  --output artifacts/diverse-left-reaching/b-natural-toe --variants 1
+python scripts/replay_diverse_left_reaching.py \
+  --output artifacts/diverse-left-reaching/b-natural-toe
+python scripts/report_diverse_left_reaching.py \
+  --output artifacts/diverse-left-reaching/b-natural-toe
+python scripts/package_corrected_reaching_collection.py
+```
+
+新形状のB把持軌道は現在未採用です。従来の大きい楕円B、v3の12軌道、つま先にくびれのあるv4は現行データから除外します。
+採用済みの実測CSVは `artifacts/diverse-left-reaching/corrected-collection/demonstrations.zip`、
+対応表は同じフォルダの `manifest.json` と `manifest.csv` です。現在はAの既存12軌道を収録しています。

@@ -27,6 +27,7 @@ from sock_dressing_simulation.geometric_closure import material_distances
 from sock_dressing_simulation.held_ankle_poses import audit_actual_skin
 from sock_dressing_simulation.reaching_dataset import file_sha256, spatial_route_distance,verify_dataset_inputs
 from plan_fixed_torso_route import rrt
+from sock_dressing_simulation.fitted_b_cuff import PROFILE as FITTED_B_PROFILE
 
 
 def generate(args):
@@ -41,24 +42,38 @@ def generate(args):
         saved=json.loads(path.read_text())
         if not saved.get('offline_passed'):continue
         verify_dataset_inputs(saved,ROOT)
+        if saved['applied_opening_stage']=='B':
+            previous_state=json.loads((ROOT/saved['geometry_record']['state_file']).read_text())
+            if previous_state.get('shape_profile')!=FITTED_B_PROFILE:continue
         p=saved['workbook_pattern'];key=(p['pitch_deg'],p['roll_deg'],saved['applied_opening_stage'])
         known.setdefault(key,[]).append((saved['tcp_world_m'],str(path.relative_to(ROOT))))
     files = sorted(args.probe.glob('pose-*.json'))
+    if args.numbers:
+        order={n:i for i,n in enumerate(args.numbers)}
+        files.sort(key=lambda path:order.get(int(path.name.split('-')[1]),len(order)))
     for path in files:
         probe = json.loads(path.read_text())
         if args.numbers and probe['number'] not in args.numbers:continue
         if not probe['accepted']: continue
         stem = path.stem
         status_path = args.output/'search'/f'{stem}.json'
-        if status_path.exists() and not args.retry: continue
         state_path = args.probe/'states'/path.name
         state = json.loads(state_path.read_text())
+        if probe['stage']=='B' and state.get('shape_profile')!=FITTED_B_PROFILE:
+            raise ValueError('B requires its continuous forefoot/toe envelope and the 15 mm / +5 mm cuff bulge')
         p=state['pattern'];condition=(p['pitch_deg'],p['roll_deg'],'A' if probe['stage']=='held-A' else probe['stage'])
+        if status_path.exists() and not args.retry:
+            cached=json.loads(status_path.read_text())
+            if probe['stage']=='B' and not known.get(condition) and cached.get('shape_profile')!=FITTED_B_PROFILE:
+                raise ValueError('Cached B route search predates the fitted shape; choose a new output or --retry')
+            if cached.get('state_sha256') and cached['state_sha256']!=file_sha256(state_path):
+                raise ValueError('Cached route search uses a different cloth shape')
+            continue
         if len(known.get(condition,[]))>=args.variants:
             write(status_path,dict(number=probe['number'],stage=probe['stage'],reused_condition_routes=[p for _,p in known[condition]],routes=[]))
             continue
         body, surface = audit_actual_skin(np.asarray(state['particles_world']), state['source']['skin_surface'], state['edges'], state['triangles'])
-        status = dict(number=probe['number'], stage=probe['stage'], state_body=body, state_surface=surface, routes=[], rejected=[])
+        status = dict(number=probe['number'], stage=probe['stage'],shape_profile=state.get('shape_profile'),state_sha256=file_sha256(state_path), state_body=body, state_surface=surface, routes=[], rejected=[])
         if not body['geometry_ok'] or not surface['surface_ok']:
             write(status_path,status); print('STATE AUDIT REJECTED', stem, flush=True); continue
         samples_path = args.output/'samples'/path.name

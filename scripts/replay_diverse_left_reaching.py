@@ -51,7 +51,8 @@ def export_angles(plan,trace,out):
     if plan['applied_opening_stage']!=plan['workbook_pattern']['stage'] and 'stage' not in ignored:ignored.append('stage')
     write(out/'demonstration.json',dict(joint_names=names,angle_units='radians; gripper prismatic columns in metres',samples=len(trace),fixed_step_s=.02,
         shared_initial_configuration=plan['shared_initial_configuration'],dataset_inputs=plan['dataset_inputs'],workbook_pattern=plan['workbook_pattern'],applied_opening_stage=plan['applied_opening_stage'],
-        cloth_geometry='normal anatomical preinsertion' if placement else 'saved held-A with 5 mm cuff bulge',cloth_placement=placement,
+        cloth_geometry='B-specific continuous forefoot/toe envelope with 5 mm cuff bulge' if state.get('cuff_fit') else ('normal anatomical preinsertion' if placement else 'saved held-A with 5 mm cuff bulge'),cloth_placement=placement,
+        shape_profile=state.get('shape_profile'),cuff_fit=state.get('cuff_fit'),cuff_bulge=state.get('bulge'),
         ignored_workbook_conditions=ignored,workbook_row_fully_reproduced=False,
         angle_source='PhysX joint feedback; each mimic is 0.5 times its measured source joint',torque_recorded=False,images_synchronized=False,learning_ready=False,
         scope='Reaching and geometric jaw closure around frozen reference cloth; deformation, friction retention and pull-up are not validated'))
