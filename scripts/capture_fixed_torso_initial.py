@@ -13,7 +13,8 @@ from PIL import Image
 from scipy.spatial import cKDTree
 from scipy.spatial.transform import Rotation
 ROOT=Path(__file__).resolve().parents[1];sys.path[:0]=[str(ROOT),str(ROOT/'scripts')]
-from search_centered_reaching import write,REGISTERED_MANIFEST,URDF
+from search_centered_reaching import write,REGISTERED_MANIFEST,URDF,state_for
+from sock_dressing_simulation.reaching_dataset import verify_dataset_inputs
 from search_fixed_torso_starts import context
 from sock_dressing_simulation.config import load_config
 from sock_dressing_simulation.cli import _prepare
@@ -32,6 +33,7 @@ def main():
     if a.trajectory and a.initial_configuration:ap.error('Choose either --trajectory or --initial-configuration')
     if a.trajectory:
         saved=json.loads(a.trajectory.read_text());selected=dict(number=saved['number'],right_q_rad=saved['start_q_rad'],right_q_deg=np.rad2deg(saved['start_q_rad']).tolist(),left_q_rad=saved['left_q_rad'],left_q_deg=np.rad2deg(saved['left_q_rad']).tolist(),translation_m=saved['translation_m'],right_gap_m=saved['opening_gap_m'],left_gap_m=saved['left_gap_m'],trajectory=str(a.trajectory),left_foot_floor_allowance_m=saved.get('left_foot_floor_allowance_m',0.))
+        verify_dataset_inputs(saved,ROOT)
         if saved.get('moving_side')=='left':
             selected.update(right_q_rad=saved['right_q_rad'],right_q_deg=np.rad2deg(saved['right_q_rad']).tolist(),left_q_rad=saved['start_q_rad'],left_q_deg=np.rad2deg(saved['start_q_rad']).tolist(),right_gap_m=saved['right_gap_m'],left_gap_m=saved.get('initial_opening_gap_m',saved['opening_gap_m']))
         elif 'initial_opening_gap_m' in saved:selected['right_gap_m']=saved['initial_opening_gap_m']
@@ -48,7 +50,7 @@ def main():
     def local_lock_init(self,name):
         self.lck_path=str(lock_dir/(name+'.lck'));Path(self.lck_path).touch(exist_ok=True);self.fp=None
     locker.Locker.__init__=local_lock_init;sys.modules['pyrcareworld.utils.locker']=locker
-    state=json.loads((ROOT/f'artifacts/bulged-cuff/pose-{number:02d}/state.json').read_text());delta=np.array(selected['translation_m']);k,checker,dl,du,contract,source_scene=context(number,state,REGISTERED_MANIFEST,left_foot_floor_allowance=selected.get('left_foot_floor_allowance_m',0.));checker.park_left(selected['left_q_rad'],selected['left_gap_m'])
+    state=state_for(saved['geometry_record']) if a.trajectory else json.loads((ROOT/f'artifacts/bulged-cuff/pose-{number:02d}/state.json').read_text());scene_number=state.get('scene_number',number);delta=np.array(selected['translation_m']);k,checker,dl,du,contract,source_scene=context(number,state,REGISTERED_MANIFEST,left_foot_floor_allowance=selected.get('left_foot_floor_allowance_m',0.));checker.park_left(selected['left_q_rad'],selected['left_gap_m'])
     if any(abs(k.q0[n]-v)>1e-8 for n,v in selected.get('torso_joints_rad',{}).items()):raise ValueError('Initial configuration asks to change the fixed torso')
     offline=checker.slacks(np.array(selected['right_q_rad']),selected['right_gap_m'],delta,details=True)
     if not offline['passed']:raise ValueError('Initial configuration failed registered-geometry validation')
@@ -57,7 +59,7 @@ def main():
     pattern=next(p for p in read_patterns(Path(workbook)) if p.number==number)
     result=dict(selected_index=a.index,initial_configuration=selected,offline_registered_check=offline,initial_only=True,motion_replayed=False,passed=False)
     with SockDressingEnv(config) as env:
-        env.load(Path(prepared['runtime_urdf']),ROOT/f'artifacts/bulged-cuff/pose-{number:02d}/rest.obj',initial_joints=scenario.initial_joints);env.apply_scenario(scenario);attr=env.sock_cloth
+        env.load(Path(prepared['runtime_urdf']),ROOT/f'artifacts/bulged-cuff/pose-{scene_number:02d}/rest.obj',initial_joints=scenario.initial_joints);env.apply_scenario(scenario);attr=env.sock_cloth
         attr.set_pattern_held(False);attr.set_pattern_foot_pose(pattern.pitch_deg,settings['signs']['roll']*pattern.roll_deg);env._env.step(2,simulate=False);attr.request_preinsert_source();env._env.step(2,simulate=False)
         native_rest=np.array(attr.data['sock_preinsert_source']['rest_positions']);rest=np.array(state['source']['rest_positions']);dist,order=cKDTree(rest).query(native_rest)
         if len(native_rest)!=len(rest) or len(set(order.tolist()))!=len(rest) or dist.max()>5e-6:raise ValueError('Native refined cloth topology differs')

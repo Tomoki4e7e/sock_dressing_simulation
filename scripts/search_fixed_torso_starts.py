@@ -23,7 +23,7 @@ from sock_dressing_simulation.fixed_torso_reaching import FixedTorsoScene,LEFT_A
 
 
 def context(number,state,manifest=FAST_MANIFEST,left_foot_floor_allowance=0.):
-    reference=json.loads(ROBOT.read_text());scene=overlay_robot(load(number),reference);scene['particles_world']=state['particles_world']
+    reference=json.loads(ROBOT.read_text());scene=overlay_robot(load(state.get('scene_number',number)),reference);scene['particles_world']=state['particles_world']
     k=Kinematics(URDF,scene);checker=FixedTorsoScene(k,scene,state['triangles'],manifest,ROOT)
     # Bounds use the unchanged reference frames, never the newly selected arms.
     dl,du,contract=placement_bounds(scene,state,edge_margin=0.)

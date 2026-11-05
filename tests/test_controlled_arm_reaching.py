@@ -70,3 +70,25 @@ def test_jaw_profile_closes_smoothly_within_finger_velocity_limit():
     t=np.linspace(0,10,1001);positions,rates=jaw_profile(t,10,.05,.001)
     np.testing.assert_allclose(positions[[0,-1]],[.05,.001],atol=1e-15,rtol=0);np.testing.assert_allclose(rates[[0,-1]],0,atol=1e-15,rtol=0)
     assert np.all(np.diff(positions)<=1e-12) and np.max(abs(rates))<.02
+
+
+def test_fixed_pair_cache_matches_uncached_checks_when_both_arms_and_scene_change(native_model):
+    from sock_dressing_simulation.controlled_arm_reaching import ControlledCollisionScene
+    k, checker = native_model
+    original = dict(k.q0)
+    view = ControlledCollisionScene(checker, 'left', k.start)
+    left = np.array([k.q0[f'left_arm/joint_{i}'] for i in range(1, 8)])
+    try:
+        for offset in (0., .015):
+            q = left.copy(); q[0] += offset
+            delta = np.array([offset, .12, -.3])
+            cached = view.slacks(q, .04, delta)
+            checker.fixed_pair_cache_key = None
+            checker.park_left(q, .04)
+            direct = checker.slacks(view.fixed_right_q, view.fixed_right_gap, delta)
+            np.testing.assert_allclose(cached, direct, atol=1e-12, rtol=0)
+            view.fixed_right_q = view.fixed_right_q.copy()
+            view.fixed_right_q[0] += .01
+    finally:
+        k.q0.clear(); k.q0.update(original)
+        checker.fixed_pair_cache_key = None

@@ -13,6 +13,7 @@ from sock_dressing_simulation.arm_reaching import ARM,ROS_UNITY
 from sock_dressing_simulation.fixed_torso_reaching import LEFT_ARM
 from sock_dressing_simulation.grasp_geometry import HANDEDNESS
 from sock_dressing_simulation.controlled_arm_reaching import ControlledArmKinematics,shared_gripper_geometry_audit
+from sock_dressing_simulation.reaching_dataset import verify_dataset_inputs
 
 
 def jaw_profile(t,duration,start,end):
@@ -21,6 +22,7 @@ def jaw_profile(t,duration,start,end):
 
 
 def replay(env,mapping,action,reference,k,checker,saved,source_path,delta,expected_cloth,out,dt=.02):
+    verify_dataset_inputs(saved,ROOT)
     gate=json.loads(source_path.with_name(source_path.name.replace('trajectory','validation')).read_text())
     if not gate['offline_passed'] or not gate['virtual_closure_passed'] or not gate['actual_grasp_geometry_passed'] or gate['trajectory_sha256']!=hashlib.sha256(source_path.read_bytes()).hexdigest() or gate['geometry_manifest_sha256']!=hashlib.sha256(REGISTERED_MANIFEST.read_bytes()).hexdigest():raise ValueError('Approach/capture/closure validation is missing or stale')
     side=saved['moving_side'];model=ControlledArmKinematics(k,side,saved['right_q_rad'],saved['right_gap_m']);checker.closure_side=side
@@ -61,7 +63,7 @@ def replay(env,mapping,action,reference,k,checker,saved,source_path,delta,expect
                 check=checker.slacks(right,right_gap,delta,allow_cloth_overlap=closing_stage,details=True);all_checks.append(dict(step=len(trace),stage=stage,minimum_slack_m=check['minimum_slack_m']))
                 if not check['passed']:result['actual_configuration_failures'].append(dict(step=len(trace),stage=stage,check=check))
             if closing_stage:closure_gaps.append(actual_gap)
-            record=dict(step=len(trace),stage=stage,stage_time_s=t,requested_q_rad=np.asarray(q).tolist(),actual_q_rad=actual.tolist(),actual_right_q_rad=right.tolist(),actual_left_q_rad=left.tolist(),requested_gap_m=gap,actual_gap_m=actual_gap,tcp_world_m=tcp.tolist(),tracking_error_m=tracking,cloth_time_s=native['cloth_time_s'],cloth_fixed_steps=native['cloth_fixed_steps'],contacts=native['contacts'])
+            record=dict(step=len(trace),stage=stage,stage_time_s=t,requested_q_rad=np.asarray(q).tolist(),actual_q_rad=actual.tolist(),actual_right_q_rad=right.tolist(),actual_left_q_rad=left.tolist(),actual_right_gap_m=right_gap,actual_left_gap_m=left_gap,requested_gap_m=gap,actual_gap_m=actual_gap,tcp_world_m=tcp.tolist(),tracking_error_m=tracking,cloth_time_s=native['cloth_time_s'],cloth_fixed_steps=native['cloth_fixed_steps'],contacts=native['contacts'])
             trace.append(record);stream.write(json.dumps(record)+'\n');last=(native,tcp,R,actual,actual_gap)
             if len(trace)%100==0:stream.flush();print('CONTROLLED REPLAY',side,stage,len(trace),'tracking mm',tracking*1000,'fixed drift um',maximum_fixed_drift*1e6,flush=True)
             return not unexpected and not result['actual_configuration_failures']

@@ -539,3 +539,20 @@ torsoを従来の角度 [−45°, 100°, 0°] に固定し、両腕の開始姿�
 
 
 閉鎖時の足との干渉については、同じ写真の初期配置を維持し、左手で靴下の上縁へ回り込む経路で解消しました。[接近・閉鎖までの検証](artifacts/photo-grasp-adjustment/report.html)。右腕は初期姿勢に保持し、左手を40→50mmに開いて接近し、50→1mmまで閉じます。1,361点の補間検査と101点の閉鎖検査、PhysXによる閉鎖までの再生に合格しました。実測関節角度と閉じ幅での再検査でも皮膚離隔約6.70mm、布捕捉面積約4.17mm²です。保存布形状での検証であり、布の変形・摩擦保持・牽引の成功判定は含みません。
+
+共通初期姿勢からの複数条件・複数経路の結果は[左手リーチングの多様化](artifacts/diverse-left-reaching/final/report.html)に保存します。共通設定は [config/diverse_left_reaching_shared.yaml](config/diverse_left_reaching_shared.yaml) です。写真基準の成功例から両腕の第2関節のみ−3°調整し、人体・台座の移動量、torso・head・baseは維持します。条件ごとの開始姿勢の変更を検証時に拒否します。Excelの足首角度と開口位置を参照し、素材・しわ・折り返し等は適用しません。足首だけを変えた追加条件と、開口位置までExcelと一致する条件は結果に別々に記録します。
+
+```bash
+# Python 3.11 と geometry extras、opencv-python が必要。
+# 既存の成功例・32足首状態・登録済み衝突形状を読み取り専用の入力として使用。
+python scripts/search_diverse_left_endpoints.py --stages workbook \
+  --output artifacts/diverse-left-reaching/workbook-shared-probe
+python scripts/generate_diverse_left_reaching.py \
+  --probe artifacts/diverse-left-reaching/workbook-shared-probe
+python scripts/replay_diverse_left_reaching.py
+python scripts/report_diverse_left_reaching.py
+```
+
+同一条件の別経路は、弧長を正規化した手先経路のRMS差5mm以上を要求します。平滑化後の補間検査、実再生、実測角度・開き幅での閉鎖検査を別々に保存します。実再生合格分には18列の実測 `angle.csv` と位相・時刻の `frames.csv` を出力します。布は保存形状に固定され、摩擦保持と牽引、同期画像・トルクの収集は未検証のため、`learning_ready` は `false` です。写真基準と同じ人体左足の床貫通と明示的な許容も継承しています。再生スクリプトはMesaによるソフトウェア描画を既定で使います。
+
+生成時の軌道JSONは変更せず、実行結果は `replays/*/native-route-initial/replay-result.json` と `summary.json` に保存します。容量を抑えるため、再生後の中間シーンは `.json.gz`、生成アセットは `assets.tar.gz`、Playerのログは `.log.gz` として保持します。

@@ -61,7 +61,12 @@ class ControlledCollisionScene:
     def prepare(self,q,gap):
         self.base.closure_side=self.side
         if self.side=='left':
+            # Fixed right-arm/body/obstacle pairs can be reused between left
+            # poses. The key includes every right joint and its jaw opening;
+            # CompoundScene adds translation and distance cap to each query.
+            self.base.fixed_pair_cache_key=('left',tuple(self.fixed_right_q),float(self.fixed_right_gap))
             self.base.park_left(q,gap);return self.fixed_right_q,self.fixed_right_gap
+        self.base.fixed_pair_cache_key=None
         return q,gap
 
     def is_clear(self,q,gap,delta):

@@ -13,6 +13,7 @@ import hashlib
 import json
 import sys
 import time
+from uuid import uuid4
 from collections import Counter
 from pathlib import Path
 import numpy as np
@@ -39,7 +40,7 @@ REGISTERED_MANIFEST = ROOT / 'artifacts/compound-reaching/registration/candidate
 
 def write(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix('.tmp')
+    temporary = path.with_name(path.name+'.'+uuid4().hex+'.tmp')
     temporary.write_text(json.dumps(value, indent=2) + '\n')
     temporary.replace(path)
 

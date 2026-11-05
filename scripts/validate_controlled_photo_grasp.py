@@ -19,6 +19,7 @@ from sock_dressing_simulation.grasp_geometry import SkinBody
 from sock_dressing_simulation.grasp_cloth_geometry import ClothScreen
 from sock_dressing_simulation.geometric_closure import material_distances
 import yaml
+from sock_dressing_simulation.reaching_dataset import load_grasp_samples, verify_dataset_inputs
 
 
 def validate(source,out,time_scale):
@@ -47,13 +48,14 @@ def validate(source,out,time_scale):
     c=row['geometry_record']['candidate'];p=np.array(c['grasp_center_unity_world_m'])+d;actual,R=model.pose(qs[-1]);pe=float(np.linalg.norm(actual-p));ae=float(np.rad2deg(Rotation.from_matrix(R@np.array(c['rotation_matrix']).T).magnitude()))
     # Recompute capture for the actual IK endpoint instead of accepting the
     # desired material sample/rotation merely because pose tolerance passed.
-    samples=json.loads((ROOT/f"artifacts/bulged-cuff/pose-{row['number']:02d}/samples.json").read_text());sample=dict(samples[c['sample_index']],position=(actual-d).tolist());faces=np.array(state['triangles']).reshape(-1,3);dist=material_distances(np.array(state['source']['rest_positions']),faces,faces[sample['face']],sample['weights'])
+    samples=load_grasp_samples(row['geometry_record'],ROOT);sample=dict(samples[c['sample_index']],position=(actual-d).tolist());faces=np.array(state['triangles']).reshape(-1,3);dist=material_distances(np.array(state['source']['rest_positions']),faces,faces[sample['face']],sample['weights'])
     geo,reason=geometric_check(model,state,sample,R,SkinBody(state['source']['skin_surface']),ClothScreen(state['particles_world'],state['triangles']),yaml.safe_load((ROOT/'config/geometric_closure.yaml').read_text()),dist,approach_distance=0.)
     margin=float(np.rad2deg(np.minimum(qs-model.lower,model.upper-qs)).min());vf=float(np.max(profile['velocity_bound']/model.velocity));af=float(np.max(profile['acceleration_bound']/model.acceleration))
     passed=bool(not failures and all(g['passed'] for g in opening+closure) and geo and pe<=1e-4 and ae<=.5 and margin>=5-1e-6 and position_drift<1e-12 and rotation_drift<1e-12 and vf<=.1+1e-9 and af<=.1+1e-9 and np.all(d>=dl-1e-9) and np.all(d<=du+1e-9))
     record=dict(row,source_record=str(source.relative_to(ROOT)),translation_m=d.tolist(),joint_names=model.arm_names,start_q_rad=raw[0].tolist(),raw_q_rad=raw.tolist(),times_s=profile['t'].tolist(),q_rad=profile['q'].tolist(),velocity_rad_s=profile['velocity'].tolist(),acceleration_rad_s2=profile['acceleration'].tolist(),
         tcp_world_m=[model.pose(q)[0].tolist() for q in profile['q']],duration_s=profile['duration'],time_scale=time_scale,opening_gap_m=gap,close_after_reach=True,closing_gap_m=.001,
         preopen_duration_s=2.,closure_duration_s=10.,torso_joints_rad=base.reference_torso,fixed_joint_values_rad=base.reference_fixed_joints,geometry_manifest_sha256=hashlib.sha256(REGISTERED_MANIFEST.read_bytes()).hexdigest(),offline_passed=passed,executed=False,virtual_closure_passed=all(g['passed'] for g in closure),continuous_collision_certified=False)
+    verify_dataset_inputs(record,ROOT)
     trajectory=out/'routes'/f'{source.stem}-trajectory.json';write(trajectory,record)
     result=dict(offline_passed=passed,moving_side=side,sample_count=len(qs),minimum_slack_m=minimum,minimum_joint_margin_deg=margin,maximum_velocity_fraction=vf,maximum_acceleration_fraction=af,failures=failures,
         start_opening_checks=opening,virtual_closure_checks=closure,virtual_closure_passed=record['virtual_closure_passed'],endpoint_position_error_m=pe,endpoint_orientation_error_deg=ae,actual_grasp_geometry_passed=bool(geo),actual_grasp_geometry_reason=reason,

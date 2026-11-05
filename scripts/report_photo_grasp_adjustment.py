@@ -18,12 +18,13 @@ from sock_dressing_simulation.controlled_arm_reaching import ControlledArmKinema
 from sock_dressing_simulation.grasp_geometry import SkinBody
 from sock_dressing_simulation.grasp_cloth_geometry import ClothScreen
 from sock_dressing_simulation.geometric_closure import material_distances,projected_cloth_area
+from sock_dressing_simulation.reaching_dataset import load_grasp_samples
 
 
 def actual_recheck(plan,motion,out):
     trace=[json.loads(line) for line in (out/'native-route-initial/motion-trace.jsonl').read_text().splitlines()];last=trace[-1];side=plan['moving_side'];state=state_for(plan['geometry_record']);d=np.array(plan['translation_m'])
     k,checker,*_=context(plan['number'],state,REGISTERED_MANIFEST,left_foot_floor_allowance=plan['left_foot_floor_allowance_m']);checker.park_left(last['actual_left_q_rad'],last['actual_gap_m'] if side=='left' else plan['left_gap_m']);checker.closure_side=side
-    v=ControlledArmKinematics(k,side,last['actual_right_q_rad'],plan['right_gap_m']);p,R=v.pose(last['actual_q_rad']);sample=json.loads((ROOT/f"artifacts/bulged-cuff/pose-{plan['number']:02d}/samples.json").read_text())[plan['geometry_record']['candidate']['sample_index']];sample=dict(sample,position=(p-d).tolist());faces=np.array(state['triangles']).reshape(-1,3);rest=np.array(state['source']['rest_positions']);dist=material_distances(rest,faces,faces[sample['face']],sample['weights']);settings=yaml.safe_load((ROOT/'config/geometric_closure.yaml').read_text());skin=SkinBody(state['source']['skin_surface']);cloth=ClothScreen(state['particles_world'],state['triangles'])
+    v=ControlledArmKinematics(k,side,last['actual_right_q_rad'],plan['right_gap_m']);p,R=v.pose(last['actual_q_rad']);sample=load_grasp_samples(plan['geometry_record'],ROOT)[plan['geometry_record']['candidate']['sample_index']];sample=dict(sample,position=(p-d).tolist());faces=np.array(state['triangles']).reshape(-1,3);rest=np.array(state['source']['rest_positions']);dist=material_distances(rest,faces,faces[sample['face']],sample['weights']);settings=yaml.safe_load((ROOT/'config/geometric_closure.yaml').read_text());skin=SkinBody(state['source']['skin_surface']);cloth=ClothScreen(state['particles_world'],state['triangles'])
     geometry,reason=geometric_check(v,state,sample,R,skin,cloth,settings,dist,approach_distance=0.);gap=last['actual_gap_m'];fingers=[g for n,g in v.hand.vertices(gap).items() if n.endswith(('/left_finger_link','/right_finger_link'))];depth=rest[:,2]-rest[:,2].min()
     area=projected_cloth_area((np.array(state['particles_world'])-(p-d))@R,faces,fingers,dist,depth,**{n:settings[n] for n in ('half_extent_m','edge_clearance_m','material_radius_m','band_width_m','topology_tolerance_m')})
     clear,distance,limiting,why=skin.inspect(v.hand.bank(gap),R,p-d,.001)
