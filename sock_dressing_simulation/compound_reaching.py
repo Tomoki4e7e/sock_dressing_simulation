@@ -115,7 +115,7 @@ class CompoundScene(CollisionScene):
             row['obj'].setTransform(self.group_transforms[row['link']]);row['transform_epoch']=self.transform_epoch
         return row['obj']
 
-    def slacks(self,q,gap,delta,allow_cloth_overlap=False,cap=.02,details=False,with_jacobian=False):
+    def slacks(self,q,gap,delta,allow_cloth_overlap=False,cap=.02,details=False,with_jacobian=False,cloth_overlap_side='right'):
         self.update(q,gap,delta);values=[];issues=[];jacobian=[]
         if with_jacobian:
             from scipy.spatial.transform import Rotation
@@ -131,7 +131,7 @@ class CompoundScene(CollisionScene):
                 elif 'Ground' not in name:J[:,7:]=np.eye(3)
                 return J
         for a,b,margin in self.pairs:
-            if allow_cloth_overlap and b=='frozen_cloth' and a.startswith('right_gripper/'):
+            if allow_cloth_overlap and b=='frozen_cloth' and a.startswith(cloth_overlap_side+'_gripper/'):
                 values.append(cap);jacobian.append(np.zeros(10));continue
             best=cap+margin;feature=None
             rows_b=self.groups[b] if b in self.groups else [dict(obj=self.obstacle_objects[b],bounds=self.obstacle_bounds[b])]

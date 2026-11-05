@@ -22,6 +22,7 @@ def replay(env,mapping,action,reference,k,checker,saved,source_path,delta,expect
     native_ids=mapping.simulator_indices[right_ids];kp=np.array(env.robot.data['joint_stiffness'])[native_ids];kd=np.array(env.robot.data['joint_damping'])[native_ids];phase=dt*kd/(kd+kp*dt)
     attr._send_data('BeginSockCompoundReplay',env.robot.id);env._env.step(2,simulate=False);initial=json.loads(json.dumps(attr.data['sock_compound_replay'],default=lambda v:v.tolist()));initial_links={r['link']:r for r in initial['links']}
     result=dict(number=saved['number'],source=str(source_path.relative_to(ROOT)),source_sha256=hashlib.sha256(source_path.read_bytes()).hexdigest(),passed=False,executed=False,torso_fixed=True,reference_cloth_held=True,dynamic_grasp_validated=False,actual_configuration_failures=[],unexpected_contacts=[],fixed_step_s=dt,drive_phase_compensation_s=phase.tolist())
+    result.update(endpoint_task=saved.get('endpoint_task','geometric_grasp_target'),virtual_closure_passed=saved.get('virtual_closure_passed'),left_foot_floor_allowance_m=saved.get('left_foot_floor_allowance_m',0.))
     trace=[];maximum_tracking=0.;maximum_fixed_drift=0.;fixed_angle=0.;last=None
     with (out/'motion-trace.jsonl').open('w') as f:
         def advance(q,qd,stage,t):

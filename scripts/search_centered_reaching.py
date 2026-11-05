@@ -44,8 +44,14 @@ def write(path, value):
     temporary.replace(path)
 
 
-def geometric_check(k, state, sample, R, skin, cloth, settings, dist):
-    """Same geometric inclusion rules as the previous bulged-cuff search."""
+def geometric_check(k, state, sample, R, skin, cloth, settings, dist, approach_distance=.05):
+    """Check capture/skin, plus the requested straight tool-only approach.
+
+    A zero distance screens endpoints only; a robot trajectory must still be
+    checked separately before accepting such a proposal as reachable.
+    """
+    if not np.isfinite(approach_distance) or approach_distance<0:
+        raise ValueError('Approach distance must be finite and nonnegative')
     h = k.hand
     p = np.asarray(sample['position'])
     if not skin.inspect(h.bank(.001), R, p, .001)[0]:
@@ -65,7 +71,7 @@ def geometric_check(k, state, sample, R, skin, cloth, settings, dist):
     c = dict(sample_index=sample['index'], rotation_matrix=R.tolist(), grasp_center_unity_world_m=p.tolist())
     gaps = []
     for gap in (.0015, .002, .003, .004, .005, .0075, .01, .015, .02, .025, .03, .04, .05):
-        bank = h.bank(gap, 'approach', approach=.05)
+        bank = h.bank(gap, 'approach', approach=approach_distance)
         if not skin.inspect(bank, R, p, .001)[0] or cloth.intersections(bank, R, p):
             continue
         ins = insertion(h, skin, dict(c, gap_m=gap), sample)

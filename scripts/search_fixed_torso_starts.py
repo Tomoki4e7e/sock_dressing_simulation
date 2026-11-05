@@ -22,11 +22,15 @@ from sock_dressing_simulation.centered_reaching import placement_bounds
 from sock_dressing_simulation.fixed_torso_reaching import FixedTorsoScene,LEFT_ARM
 
 
-def context(number,state,manifest=FAST_MANIFEST):
+def context(number,state,manifest=FAST_MANIFEST,left_foot_floor_allowance=0.):
     reference=json.loads(ROBOT.read_text());scene=overlay_robot(load(number),reference);scene['particles_world']=state['particles_world']
     k=Kinematics(URDF,scene);checker=FixedTorsoScene(k,scene,state['triangles'],manifest,ROOT)
     # Bounds use the unchanged reference frames, never the newly selected arms.
     dl,du,contract=placement_bounds(scene,state,edge_margin=0.)
+    if left_foot_floor_allowance:
+        checker.allow_grounded_left_foot_penetration(left_foot_floor_allowance)
+        dl[1]=max(-.3,max(checker.floor_top-y for y in checker.floor_minima.values()))
+        contract.update(left_foot_floor_allowance_m=float(left_foot_floor_allowance),translation_lower_m=dl.tolist())
     contract['reference']='Original robot lateral interval, anchored to the unchanged base/torso; independent of selected arm starts'
     return k,checker,dl,du,contract,scene
 

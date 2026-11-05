@@ -21,7 +21,14 @@ from sock_dressing_simulation.fixed_torso_reaching import LEFT_ARM
 def validate(path,out,time_scale=1.):
     row=json.loads(path.read_text());attempts=[(i,a) for i,a in enumerate(row['attempts']) if a.get('trajectory',{}).get('passed')]
     if not attempts:return []
-    state=state_for(row['geometry_record']);k,checker,dl,du,contract,scene=context(row['number'],state,REGISTERED_MANIFEST)
+    state=state_for(row['geometry_record']);k,checker,dl,du,contract,scene=context(row['number'],state,REGISTERED_MANIFEST,left_foot_floor_allowance=row.get('left_foot_floor_allowance_m',0.))
+    if row.get('central_contract'):
+        contract=row['central_contract'];dl=np.maximum(dl,contract['translation_lower_m']);du=np.minimum(du,contract['translation_upper_m'])
+    minimum_start_distance=row.get('minimum_start_tcp_distance_m',.15)
+    minimum_start_clearance=row.get('minimum_start_skin_cloth_clearance_m',.02)
+    require_closure=row.get('require_virtual_closure',True)
+    endpoint_task=row.get('endpoint_task','geometric_grasp_target')
+    if not require_closure and endpoint_task!='pregrasp_reaching_only':raise ValueError('Closure may only be diagnostic for an explicitly labeled pregrasp trajectory')
     registration=REGISTERED_MANIFEST.parent;native=json.loads((registration/'native-validation/summary.json').read_text())
     if not native['passed'] or native['payload_sha256']!=hashlib.sha256((registration/'payload.json').read_bytes()).hexdigest():raise ValueError('Native registration validation is missing or stale')
     fixed_names=['base_link','torso/link_1','torso/link_2','torso/link_3','head/link_1','head/link_2','head/link_3']
@@ -49,9 +56,10 @@ def validate(path,out,time_scale=1.):
             T=k.fk(q,only=['right_gripper/gripper_base'])['right_gripper/gripper_base'];tcp.append((k.A@(T[:3,3]+T[:3,:3]@k.hand.grasp_center_urdf)+k.b).tolist())
         T=k.fk(samples[-1],only=['right_gripper/gripper_base'])['right_gripper/gripper_base'];R=k.A@T[:3,:3]@HANDEDNESS
         pe=float(np.linalg.norm(np.array(tcp[-1])-p));ae=float(np.rad2deg(Rotation.from_matrix(R@np.array(c['rotation_matrix']).T).magnitude()));central=bool(np.all(d>=dl-1e-9) and np.all(d<=du+1e-9))
-        clearance=checker.gripper_clearances(k.start,gap,d);separated=all(min(clearance[s]['skin_m'],clearance[s]['cloth_m'])>=.02-1e-7 and clearance[s]['robot_body_m']>=.03-1e-7 for s in ('left','right'))
+        clearance=checker.gripper_clearances(k.start,gap,d);separated=all(min(clearance[s]['skin_m'],clearance[s]['cloth_m'])>=minimum_start_clearance-1e-7 and clearance[s]['robot_body_m']>=.03-1e-7 for s in ('left','right'))
         vf=float(np.max(profile['velocity_bound']/k.velocity));af=float(np.max(profile['acceleration_bound']/k.acceleration));distance=float(np.linalg.norm(np.array(tcp[0])-p))
-        passed=not failures and central and separated and qmargin>=5-1e-6 and leftmargin>=5-1e-6 and all(v['passed'] for v in opening+closure) and pe<=1e-4 and ae<=.5 and frame_error<1e-12 and frame_angle<1e-12 and vf<=.1+1e-9 and af<=.1+1e-9 and distance>=.15-1e-4
+        closure_passed=all(v['passed'] for v in closure)
+        passed=not failures and central and separated and qmargin>=5-1e-6 and leftmargin>=5-1e-6 and all(v['passed'] for v in opening) and (closure_passed or not require_closure) and pe<=1e-4 and ae<=.5 and frame_error<1e-12 and frame_angle<1e-12 and vf<=.1+1e-9 and af<=.1+1e-9 and distance>=minimum_start_distance-1e-4
         name=path.parent.name+'-'+path.stem+f'-trial-{trial}';prefix=out/'routes'/name
         plan=dict(number=row['number'],source_record=str(path.relative_to(ROOT)),trial=trial,geometry_record=row['geometry_record'],
             joint_names=ARM,left_joint_names=LEFT_ARM,start_q_rad=k.start.tolist(),left_q_rad=left.tolist(),
@@ -59,13 +67,16 @@ def validate(path,out,time_scale=1.):
             translation_m=d.tolist(),central_contract=contract,opening_gap_m=gap,left_gap_m=row['left_gap_m'],
             times_s=profile['t'].tolist(),q_rad=profile['q'].tolist(),velocity_rad_s=profile['velocity'].tolist(),acceleration_rad_s2=profile['acceleration'].tolist(),
             tcp_world_m=tcp,duration_s=profile['duration'],time_scale=time_scale,raw_q_rad=raw.tolist(),offline_passed=bool(passed),executed=False,continuous_collision_certified=False,
-            geometry_manifest_sha256=hashlib.sha256(REGISTERED_MANIFEST.read_bytes()).hexdigest(),reference_robot_scene_sha256=hashlib.sha256(ROBOT.read_bytes()).hexdigest())
+            geometry_manifest_sha256=hashlib.sha256(REGISTERED_MANIFEST.read_bytes()).hexdigest(),reference_robot_scene_sha256=hashlib.sha256(ROBOT.read_bytes()).hexdigest(),
+            endpoint_task=endpoint_task,virtual_closure_required=require_closure,virtual_closure_passed=closure_passed,left_foot_floor_allowance_m=row.get('left_foot_floor_allowance_m',0.))
         route_path=prefix.with_name(prefix.name+'-trajectory.json');write(route_path,plan)
         result=dict(number=row['number'],offline_passed=bool(passed),source_record=str(path.relative_to(ROOT)),trial=trial,sample_count=len(samples),exported_sample_count=len(profile['q']),minimum_slack_m=minslack,
             minimum_joint_margin_deg=qmargin,left_joint_margin_deg=leftmargin,central_placement_passed=central,start_separated_passed=separated,start_tcp_distance_m=distance,start_gripper_clearances=clearance,
             endpoint_position_error_m=pe,endpoint_orientation_error_deg=ae,maximum_fixed_frame_position_error_m=frame_error,maximum_fixed_frame_orientation_error_rad=frame_angle,
             maximum_velocity_fraction=vf,maximum_acceleration_fraction=af,failures=failures,start_opening_checks=opening,virtual_closure_checks=closure,
-            trajectory_sha256=hashlib.sha256(route_path.read_bytes()).hexdigest(),geometry_manifest_sha256=plan['geometry_manifest_sha256'],executed=False,continuous_collision_certified=False)
+            trajectory_sha256=hashlib.sha256(route_path.read_bytes()).hexdigest(),geometry_manifest_sha256=plan['geometry_manifest_sha256'],executed=False,continuous_collision_certified=False,
+            endpoint_task=endpoint_task,virtual_closure_required=require_closure,virtual_closure_passed=closure_passed,minimum_start_skin_cloth_clearance_m=minimum_start_clearance,
+            left_foot_floor_allowance_m=row.get('left_foot_floor_allowance_m',0.),grounded_left_foot_penetration_m=max(0.,checker.floor_top-checker.obstacle_points['human_full_skin'][:,1].min()-d[1]))
         write(prefix.with_name(prefix.name+'-validation.json'),result)
         with prefix.with_name(prefix.name+'-trajectory.csv').open('w') as f:
             w=csv.writer(f);w.writerow(['time_s']+[n+'_deg' for n in ARM]);w.writerows(np.c_[profile['t'],np.rad2deg(profile['q'])])

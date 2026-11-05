@@ -72,6 +72,21 @@ class FixedTorsoScene(CompoundScene):
         self.k.q0['left_gripper/finger_joint']=self.k.hand.joint_for_gap(gap)
         self.assert_fixed()
 
+    def allow_grounded_left_foot_penetration(self,depth_m):
+        """Apply an explicit floor exception to the human, retaining other floors.
+
+        The saved raised right leg has a separate skin surface. Its floor
+        constraint, the sock floor, the support floor, and all robot collision
+        pairs remain active. Record the allowance rather than moving the floor.
+        """
+        if not np.isfinite(depth_m) or depth_m<0 or depth_m>.25:
+            raise ValueError('Grounded left foot allowance must be within 0–250 mm')
+        if hasattr(self,'left_foot_floor_allowance_m'):
+            raise ValueError('Floor allowance has already been configured')
+        self.left_foot_floor_allowance_m=float(depth_m)
+        self.original_human_minimum_y=self.floor_minima['human_full_skin']
+        self.floor_minima['human_full_skin']+=float(depth_m)
+
     def assert_fixed(self):
         if any(self.k.q0[n]!=v for n,v in self.reference_fixed_joints.items()):
             raise ValueError('A torso, head or base joint changed during fixed-torso search')
@@ -85,7 +100,7 @@ class FixedTorsoScene(CompoundScene):
 
     def slacks(self,q,gap,delta,allow_cloth_overlap=False,cap=.02,details=False,with_jacobian=False):
         self.assert_fixed()
-        raw=super().slacks(q,gap,delta,allow_cloth_overlap=allow_cloth_overlap,cap=cap,details=details,with_jacobian=with_jacobian)
+        raw=super().slacks(q,gap,delta,allow_cloth_overlap=allow_cloth_overlap,cap=cap,details=details,with_jacobian=with_jacobian,cloth_overlap_side=getattr(self,'closure_side','right'))
         values,J=raw if with_jacobian else (raw,None)
         for side,i in self.shoulder_pairs.items():
             a,b,m=self.pairs[i];value=min(cap,self.shoulder_distance(q,side)-m)
