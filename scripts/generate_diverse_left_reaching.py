@@ -25,7 +25,7 @@ from sock_dressing_simulation.grasp_geometry import candidate_samples,SkinBody
 from sock_dressing_simulation.grasp_cloth_geometry import ClothScreen
 from sock_dressing_simulation.geometric_closure import material_distances
 from sock_dressing_simulation.held_ankle_poses import audit_actual_skin
-from sock_dressing_simulation.reaching_dataset import file_sha256, spatial_route_distance,verify_dataset_inputs
+from sock_dressing_simulation.reaching_dataset import file_sha256, spatial_route_distance,verify_dataset_inputs,load_endpoint_samples
 from plan_fixed_torso_route import rrt
 from sock_dressing_simulation.fitted_b_cuff import PROFILE as FITTED_B_PROFILE
 
@@ -77,13 +77,14 @@ def generate(args):
         if not body['geometry_ok'] or not surface['surface_ok']:
             write(status_path,status); print('STATE AUDIT REJECTED', stem, flush=True); continue
         samples_path = args.output/'samples'/path.name
-        write(samples_path, candidate_samples(state))
+        samples=load_endpoint_samples(probe,state,ROOT)
+        write(samples_path, samples)
         k, base, dl, du, contract, scene = context(probe['number'], state, REGISTERED_MANIFEST, left_foot_floor_allowance=initial['left_foot_floor_allowance_m'])
         base.park_left(start,initial['left_gap_m'])
         model = ControlledArmKinematics(k, 'left', initial['right_q_rad'], initial['right_gap_m'])
         checker = ControlledCollisionScene(base, 'left', initial['right_q_rad'], initial['right_gap_m'])
         successful_tcp = [np.array(tcp) for tcp,_ in known.get(condition,[])]
-        samples=candidate_samples(state);faces=np.array(state['triangles']).reshape(-1,3);material=np.array(state['source']['rest_positions'])
+        faces=np.array(state['triangles']).reshape(-1,3);material=np.array(state['source']['rest_positions'])
         skin=SkinBody(state['source']['skin_surface']);cloth=ClothScreen(state['particles_world'],state['triangles'])
         closure_settings=yaml.safe_load((ROOT/'config/geometric_closure.yaml').read_text())
         for endpoint in probe['accepted']:
@@ -121,7 +122,7 @@ def generate(args):
                 if distances and min(distances)<args.minimum_diversity:
                     status['rejected'].append(dict(variant=variant, reason='insufficient_spatial_diversity', rms_m=min(distances))); continue
                 geometry = dict(endpoint['geometry'], number=probe['number'], state_file=str(state_path.relative_to(ROOT)), samples_file=str(samples_path.relative_to(ROOT)))
-                inputs = [args.initial, ROOT/'artifacts/sock-pose-pattern/sock_pose_patterns.xlsx', state_path, samples_path, reference_path]
+                inputs = [args.initial, ROOT/'artifacts/sock-pose-pattern/sock_pose_patterns.xlsx', state_path, samples_path, reference_path,ROOT/'config/geometric_closure.yaml']
                 record = dict(number=probe['number'], geometry_record=geometry, central_contract=contract,
                     left_q_rad=initial['left_q_rad'], right_q_rad=initial['right_q_rad'], left_gap_m=initial['left_gap_m'], right_gap_m=initial['right_gap_m'],
                     moving_side='left', left_foot_floor_allowance_m=initial['left_foot_floor_allowance_m'], initial_opening_gap_m=initial['left_gap_m'],

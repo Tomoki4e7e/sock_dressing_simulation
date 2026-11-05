@@ -72,6 +72,7 @@ def main():
     searched=[]
     initial_file=ROOT/'config/diverse_left_reaching_shared.yaml'
     probe_folders=[folder for folder in out.iterdir() if folder.is_dir() and 'probe' in folder.name]
+    if (out/'grasp-search').exists():probe_folders+=sorted((out/'grasp-search').glob('*probe'))
     if not probe_folders:probe_folders=list(out.parent.iterdir())
     for folder in probe_folders:
         if not folder.is_dir() or 'probe' not in folder.name:continue

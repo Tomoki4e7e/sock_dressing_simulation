@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from sock_dressing_simulation.reaching_dataset import (
-    assert_shared_initial, file_sha256, spatial_route_distance, verify_dataset_inputs,
+    assert_shared_initial, file_sha256, spatial_route_distance, verify_dataset_inputs,load_endpoint_samples,
 )
 
 
@@ -40,3 +40,19 @@ def test_timing_resampling_does_not_count_as_spatial_diversity():
     same = [[0, 0, 0], [.01, 0, 0], [.9, 0, 0], [1, 0, 0]]
     assert spatial_route_distance(straight, same) < 1e-14
     assert spatial_route_distance(straight, [[0, 0, 0], [.5, .05, 0], [1, 0, 0]]) > .02
+
+
+def test_dense_endpoint_samples_are_reused_without_default_resampling(tmp_path):
+    state=dict(particles_world=[[0,0,0],[1,0,0],[0,1,0]],triangles=[0,1,2])
+    samples=[dict(index=0,face=0,weights=[.2,.3,.5],position=[.3,.5,0]),dict(index=1,face=0,weights=[.1,.7,.2],position=[.7,.2,0])]
+    path=tmp_path/'samples.json';path.write_text(json.dumps(samples));probe=dict(samples_file='samples.json',samples_sha256=file_sha256(path))
+    assert load_endpoint_samples(probe,state,tmp_path)==samples
+    path.write_text('[]')
+    with pytest.raises(ValueError,match='samples changed'):load_endpoint_samples(probe,state,tmp_path)
+
+
+def test_endpoint_samples_must_match_their_frozen_material_face(tmp_path):
+    state=dict(particles_world=[[0,0,0],[1,0,0],[0,1,0]],triangles=[0,1,2])
+    path=tmp_path/'samples.json';path.write_text(json.dumps([dict(index=0,face=0,weights=[.2,.3,.5],position=[.3,.5,.001])]))
+    probe=dict(samples_file='samples.json',samples_sha256=file_sha256(path))
+    with pytest.raises(ValueError,match='off its material face'):load_endpoint_samples(probe,state,tmp_path)

@@ -45,7 +45,7 @@ def write(path, value):
     temporary.replace(path)
 
 
-def geometric_check(k, state, sample, R, skin, cloth, settings, dist, approach_distance=.05):
+def geometric_check(k, state, sample, R, skin, cloth, settings, dist, approach_distance=.05,diagnostics=None):
     """Check capture/skin, plus the requested straight tool-only approach.
 
     A zero distance screens endpoints only; a robot trajectory must still be
@@ -64,6 +64,7 @@ def geometric_check(k, state, sample, R, skin, cloth, settings, dist, approach_d
     fingers = [v for n, v in h.vertices(.001).items() if n.endswith('/left_finger_link') or n.endswith('/right_finger_link')]
     projection = projected_cloth_area((points-p)@R, faces, fingers, dist, depth,
         **{n: settings[n] for n in ('half_extent_m', 'edge_clearance_m', 'material_radius_m', 'band_width_m', 'topology_tolerance_m')})
+    if diagnostics is not None:diagnostics['projection']=projection
     if (min(projection['area_m2'], projection['largest_component_area_m2']) < 4e-6
             or projection['area_fraction'] < .05
             or min(projection['span_x_m'], projection['span_z_m']) < .0005):
@@ -71,13 +72,20 @@ def geometric_check(k, state, sample, R, skin, cloth, settings, dist, approach_d
     from reevaluate_geometric_closure import insertion
     c = dict(sample_index=sample['index'], rotation_matrix=R.tolist(), grasp_center_unity_world_m=p.tolist())
     gaps = []
-    for gap in (.0015, .002, .003, .004, .005, .0075, .01, .015, .02, .025, .03, .04, .05):
+    opening_rejections={}
+    for gap in (.00101,.00105,.0011,.00125,.0015, .002, .003, .004, .005, .0075, .01, .015, .02, .025, .03, .04, .05):
         bank = h.bank(gap, 'approach', approach=approach_distance)
-        if not skin.inspect(bank, R, p, .001)[0] or cloth.intersections(bank, R, p):
+        if not skin.inspect(bank, R, p, .001)[0]:
+            opening_rejections['skin']=opening_rejections.get('skin',0)+1
+            continue
+        if cloth.intersections(bank, R, p):
+            opening_rejections['cloth']=opening_rejections.get('cloth',0)+1
             continue
         ins = insertion(h, skin, dict(c, gap_m=gap), sample)
         if ins['passed'] and skin.inspect(h.bank(gap, 'closure', pinch_gap=.001), R, p, .001)[0]:
             gaps.append(dict(gap_m=gap, insertion=ins))
+        else:opening_rejections['insertion_or_closure']=opening_rejections.get('insertion_or_closure',0)+1
+    if diagnostics is not None:diagnostics['opening_rejections']=opening_rejections
     if not gaps:
         return None, 'opening_or_approach'
     return dict(candidate=c, projection=projection, valid_openings=gaps), 'accepted'

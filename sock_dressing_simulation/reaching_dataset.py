@@ -57,3 +57,21 @@ def spatial_route_distance(first, second, count=101):
 def load_grasp_samples(record, root):
     path = record.get('samples_file', f"artifacts/bulged-cuff/pose-{record['number']:02d}/samples.json")
     return json.loads((Path(root) / path).read_text())
+
+
+def load_endpoint_samples(probe,state,root):
+    """Keep dense endpoint indices tied to the exact material-face samples."""
+    if not probe.get('samples_file'):
+        from .grasp_geometry import candidate_samples
+        return candidate_samples(state)
+    path=Path(root)/probe['samples_file']
+    if file_sha256(path)!=probe['samples_sha256']:raise ValueError('Endpoint samples changed')
+    samples=json.loads(path.read_text());points=np.asarray(state['particles_world']);faces=np.asarray(state['triangles']).reshape(-1,3)
+    if not isinstance(samples,list) or not samples:raise ValueError('Empty endpoint samples')
+    for index,sample in enumerate(samples):
+        weights=np.asarray(sample['weights']);face=int(sample['face']);position=np.asarray(sample['position'])
+        if sample['index']!=index or not 0<=face<len(faces):raise ValueError('Endpoint sample index differs')
+        if weights.shape!=(3,) or position.shape!=(3,) or not np.isfinite(weights).all() or weights.min()< -1e-5 or abs(weights.sum()-1)>1e-8:
+            raise ValueError('Invalid material-face sample')
+        if not np.allclose(position,weights@points[faces[face]],rtol=0,atol=1e-9):raise ValueError('Endpoint sample moved off its material face')
+    return samples

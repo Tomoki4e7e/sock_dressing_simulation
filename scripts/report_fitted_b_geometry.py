@@ -48,7 +48,7 @@ def main():
 <p><a href="initial-views/pose-10-B/native-initial/sock-inspection-front.png">別方向からの拡大図</a> / <a href="initial-views/pose-10-B/native-initial/fixed-camera-after.png">両腕を含む初期姿勢</a> / <a href="shapes.zip">Bの形状データ一式</a></p>
 <h2>つま先と自由部分の外周</h2><img src="toe-circumference-comparison.png"><p>人体のつま先位置と、靴下自体の閉じた端を区別する。つま先付近から端の丸みが始まる手前まで、外周を前足部基準の80%以上、隣接断面間の外周比を85%以上とする検査を加えた。今回の生成値は自由部分へ90%まで滑らかに移行する設定。端面中央の頂点は外周計算から除いている。</p>
 <table><tr><th>No.</th><th>前足部外周mm</th><th>前回のつま先位置外周mm</th><th>今回mm</th><th>最小外周/前足部</th><th>隣接断面の最小外周比</th><th>接触部分と皮膚の隙間中央値mm</th><th>帯中心の半径増分mm</th></tr>'''+table+'''</table><p>接触部分の隙間は材料深さ30mmから前足部基準断面までで評価。No.3と43は足首角度が重複しており、足首角度は10条件、保存形状は11件。Excelの素材・しわ等の全条件を再現した結果ではない。</p>
-<p>詳細はshape-summary.jsonとvalidation/final-audit.jsonを参照。</p></html>''')
+<p><a href="grasp-search/report.html">最新版B・全足首条件での把持軌道探索結果</a>。詳細はshape-summary.jsonとvalidation/final-audit.jsonを参照。</p></html>''')
     with zipfile.ZipFile(out/'shapes.zip','w',compression=zipfile.ZIP_DEFLATED) as z:
         z.write(out/'shape-summary.json','shape-summary.json');z.write(out/'shape-summary.csv','shape-summary.csv');z.write(ROOT/'config/diverse_left_reaching_shared.yaml','shared_initial_configuration.yaml')
         for path in sorted((out/'final-shapes').glob('pose-*/*.json')):z.write(path,str(path.relative_to(out/'final-shapes')))

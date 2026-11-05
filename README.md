@@ -590,3 +590,29 @@ python scripts/package_corrected_reaching_collection.py
 新形状のB把持軌道は現在未採用です。従来の大きい楕円B、v3の12軌道、つま先にくびれのあるv4は現行データから除外します。
 採用済みの実測CSVは `artifacts/diverse-left-reaching/corrected-collection/demonstrations.zip`、
 対応表は同じフォルダの `manifest.json` と `manifest.csv` です。現在はAの既存12軌道を収録しています。
+
+最新版Bの全足首条件に対する追加探索は[把持軌道探索の結果](artifacts/diverse-left-reaching/b-natural-toe/grasp-search/report.html)にまとめています。
+共通初期姿勢・配置と保存形状を固定し、10条件で合計4,258,552姿勢候補を評価しました。
+従来格子、周方向64点×帯深さ13点、実際の評価窓に対する手先の三次元位置、連続した姿勢修正、開口幅の細分化、局所連続最適化を含みます。
+閉じ幅1mm・皮膚離隔1mm・捕捉面積4mm²・固定8×8mm窓の条件は維持しています。
+一部に閉鎖時の離隔と面積を満たす候補がありましたが、把持前の布・足との非干渉を同時に満たす把持目標は得られず、新規合格軌道は0本です。
+これは有限の探索範囲での結果であり、不可能性の証明ではありません。
+
+```bash
+python scripts/search_diverse_left_endpoints.py --stages B \
+  --numbers 8 10 3 15 19 22 23 31 38 41 --seconds 90 \
+  --output artifacts/diverse-left-reaching/b-natural-toe/grasp-search/probe
+python scripts/search_natural_b_grasps.py --seconds 120 \
+  --normal-offset-mm 0.3 --tangent-offset-mm 4 \
+  --output artifacts/diverse-left-reaching/b-natural-toe/grasp-search/dense-probe
+python scripts/search_natural_b_grasps.py --numbers 19 38 8 --seconds 150 \
+  --normal-offset-mm 2 --tangent-offset-mm 6 \
+  --output artifacts/diverse-left-reaching/b-natural-toe/grasp-search/wide-pose-probe
+python scripts/polish_natural_b_grasps.py --numbers 19 38 8 --seconds 90
+python scripts/report_natural_b_grasp_search.py
+```
+
+時間制限を使うため、実行環境によって試行数は変わります。
+探索記録には形状と共通初期設定のハッシュ、補間点、乱数種、位置範囲、段階別の不合格理由を保存しています。
+密な補間点から候補が見つかった場合は、保存した補間点を軌道生成でもそのまま使い、実際のIK姿勢で再評価します。
+数値的に不確定な幾何判定は不合格として記録します。
