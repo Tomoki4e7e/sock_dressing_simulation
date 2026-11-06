@@ -591,6 +591,66 @@ python scripts/package_corrected_reaching_collection.py
 採用済みの実測CSVは `artifacts/diverse-left-reaching/corrected-collection/demonstrations.zip`、
 対応表は同じフォルダの `manifest.json` と `manifest.csv` です。現在はAの既存12軌道を収録しています。
 
+### 既存12経路のShareSet同期収集
+
+`scripts/run_reaching_shareset.py` は上記 `corrected-collection/manifest.json`
+だけを採用元に使い、別の `artifacts/reaching-shareset-v1/` に収集します。
+元の軌道・実測CSV・形状は変更しません。No.10-v00 と No.38-v00 の試験収集、
+全12経路の再生、実測状態での閉鎖再検査、ShareSet SAM2・Depth Anything V2 の
+前処理、代表経路と全経路の短時間学習を順に実行します。
+
+```bash
+# Python 3.11 geometry環境でUnity再生・一括制御を実行する。
+# 画像処理・ShareSet学習は --ml-python の環境（このPCではPython 3.8）で実行する。
+OPENBLAS_NUM_THREADS=1 MPLCONFIGDIR=/tmp/sock-collection-mpl \
+  /tmp/sock-diversity-venv/bin/python scripts/run_reaching_shareset.py \
+  --collection-python /tmp/sock-diversity-venv/bin/python \
+  --ml-python /usr/bin/python3
+```
+
+物理刻みは20ms、実測状態・関節力ログは50Hz、学習用のRGB・CSVは10Hzです。
+撮影は `simulate=False` で行い、撮影前後の物理ステップ番号と毎ステップの
+関節力取得クロックを検査します。カメラは既存経路の固定外部カメラ（ID 1301）で、
+実機の頭部右カメラとの視点一致は主張しません。
+`angle.csv` の回転関節はrad、直動関節はm、対応する `torque.csv` はNmとNです。
+mimicの角度は実測主関節の0.5倍、関節力列は同じ駆動DOFの複製です。
+関節力は凍結布・高剛性ドライブでの測定値であり、布の摩擦保持力を意味しません。
+
+RGBは1280×960で保持します。SAM2は足と靴下の周辺
+`[570, 370, 880, 590]` を切り出し、内部解像度512で追跡して原画像座標へ戻します。
+初期の青い開口縁と保存布の投影形状をプロンプトに使い、以後のマスクはSAM2の
+追跡出力です。布と足の重複はSAM2のクラス間スコアで解決します。
+布の投影形状との一致は誤領域検出の検査で、遮蔽を考慮した正解マスクではありません。
+二値化した投影輪郭とSAM2のリサイズ済みスコアの差には画像の各軸2pxの許容を使い、
+元の厳密な投影検査も `perception/validation-strict-projection.json` に保持します。
+`scripts/audit_reaching_perception.py` は保存マスクを変えずに再検査でき、
+撮影画像やネイティブの衝突・把持検査の許容値は変更しません。
+一部フレームで指への追跡ずれが残る場合は、`scripts/repair_reaching_perception.py`
+が現在の画像の可視開口縁を正例、指にずれた領域を負例にしてSAM2を再初期化します。
+この再処理は内部解像度1024を使い、元の予測・プロンプト・ハッシュを
+`perception/repair-originals/` と `perception/repairs.json` に保持します。
+再初期化フレームでは連続トラッカーの面積比を主張せず、注釈の切り替わりを明示します。
+RGB、深度推定値、関節角、関節力は変更しません。
+Depth Anything V2のスケールは訓練条件だけの初期・終端画像から固定し、
+検証・テスト画像で再推定しません。両モデルの重みは既存ファイルを読み取り専用で参照します。
+
+分割はNo.10/13/25/38をtrain（8経路）、No.20をvalidation（2経路）、
+No.50をtest（2経路）とし、同じ条件の経路を異なる分割へ入れません。
+ShareSet設定は `../ShareSet/share_folder/configs/reaching_simulation.yaml` です。
+ヘッダーなしCSVの先頭行を保持し、正規化をtrainだけから求め、可変長系列の
+パディング部分を損失から除外します。`skip_num=2` の学習刻みは0.2秒です。
+
+合格済みの収集と画像処理は再利用します。途中で失敗した生収集は上書きせず停止するため、
+`metadata.json`・ログを確認して、失敗した今回のepisodeを退避してから再開してください。
+実行中の状態は `artifacts/reaching-shareset-v1/pipeline.log`、
+完了時の成果物は同じフォルダの `report.html`・`report.json`・`episodes.csv`、
+分割は `data/dataset_reaching.yaml` に保存します。
+学習確認は各1 epochで、モデルの動作成功率を検証するものではありません。
+`reaching_learning_ready` は接近・幾何学的閉鎖のデータ品質だけを表し、
+汎用の `learning_ready` と `dynamic_grasp_validated` はfalseのままです。
+
+### 最新版Bの把持軌道探索
+
 最新版Bの全足首条件に対する追加探索は[把持軌道探索の結果](artifacts/diverse-left-reaching/b-natural-toe/grasp-search/report.html)にまとめています。
 共通初期姿勢・配置と保存形状を固定し、10条件で合計4,258,552姿勢候補を評価しました。
 従来格子、周方向64点×帯深さ13点、実際の評価窓に対する手先の三次元位置、連続した姿勢修正、開口幅の細分化、局所連続最適化を含みます。

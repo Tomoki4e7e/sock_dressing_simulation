@@ -21,7 +21,7 @@ def jaw_profile(t,duration,start,end):
     return start+(end-start)*u,(end-start)*du
 
 
-def replay(env,mapping,action,reference,k,checker,saved,source_path,delta,expected_cloth,out,dt=.02):
+def replay(env,mapping,action,reference,k,checker,saved,source_path,delta,expected_cloth,out,dt=.02,collector=None):
     verify_dataset_inputs(saved,ROOT)
     gate=json.loads(source_path.with_name(source_path.name.replace('trajectory','validation')).read_text())
     if not gate['offline_passed'] or not gate['virtual_closure_passed'] or not gate['actual_grasp_geometry_passed'] or gate['trajectory_sha256']!=hashlib.sha256(source_path.read_bytes()).hexdigest() or gate['geometry_manifest_sha256']!=hashlib.sha256(REGISTERED_MANIFEST.read_bytes()).hexdigest():raise ValueError('Approach/capture/closure validation is missing or stale')
@@ -43,6 +43,7 @@ def replay(env,mapping,action,reference,k,checker,saved,source_path,delta,expect
             nonlocal maximum_tracking,maximum_fixed_drift,fixed_angle,last
             action[controlled]=np.array(q)-phase*np.asarray(qd);action[finger]=model.hand.joint_for_gap(gap-finger_phase*gap_rate)
             command=mapping.merge_for_simulator(mapping.bound(action),reference);command[mapping.fixed_simulator_indices]=reference[mapping.fixed_simulator_indices];env.robot.SetJointPosition(command.tolist());velocity=np.zeros(len(command));velocity[native_ids]=np.rad2deg(qd);velocity[native_finger]=gap_rate
+            if collector is not None:env.robot.GetJointInverseDynamicsForce()
             attr._send_data('SetSockReplayDriveVelocities',env.robot.id,json.dumps(dict(values=velocity.tolist())));env._env.Simulate(dt,1);attr._send_data('GetSockCompoundReplay',env.robot.id);env._env.step(simulate=False)
             native=json.loads(json.dumps(attr.data['sock_compound_replay'],default=lambda v:v.tolist()));feedback=mapping.from_simulator(env.robot.data['joint_positions']);right=feedback[right_ids];left=feedback[left_ids];actual=feedback[controlled];right_gap=float(feedback[right_finger]+k.hand.gap_offset_m);left_gap=float(feedback[left_finger]+k.hand.gap_offset_m);actual_gap=left_gap if side=='left' else right_gap
             checker.park_left(left,left_gap);tcp,R=tcp_pose(native);tracking=float(np.linalg.norm(tcp-model.pose(q)[0]));maximum_tracking=max(maximum_tracking,tracking)
@@ -65,6 +66,7 @@ def replay(env,mapping,action,reference,k,checker,saved,source_path,delta,expect
             if closing_stage:closure_gaps.append(actual_gap)
             record=dict(step=len(trace),stage=stage,stage_time_s=t,requested_q_rad=np.asarray(q).tolist(),actual_q_rad=actual.tolist(),actual_right_q_rad=right.tolist(),actual_left_q_rad=left.tolist(),actual_right_gap_m=right_gap,actual_left_gap_m=left_gap,requested_gap_m=gap,actual_gap_m=actual_gap,tcp_world_m=tcp.tolist(),tracking_error_m=tracking,cloth_time_s=native['cloth_time_s'],cloth_fixed_steps=native['cloth_fixed_steps'],contacts=native['contacts'])
             trace.append(record);stream.write(json.dumps(record)+'\n');last=(native,tcp,R,actual,actual_gap)
+            if collector is not None:collector.append(env,mapping,record)
             if len(trace)%100==0:stream.flush();print('CONTROLLED REPLAY',side,stage,len(trace),'tracking mm',tracking*1000,'fixed drift um',maximum_fixed_drift*1e6,flush=True)
             return not unexpected and not result['actual_configuration_failures']
         okay=True;zero=np.zeros(7);qstart=np.array(saved['start_q_rad']);qgoal=np.array(saved['q_rad'][-1])

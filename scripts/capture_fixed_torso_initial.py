@@ -30,10 +30,12 @@ from photograph_grasp_candidates import photograph
 def main():
     ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--output',type=Path,default=ROOT/'artifacts/fixed-torso-start-search');ap.add_argument('--index',type=int,default=5);ap.add_argument('--port',type=int,default=16680);ap.add_argument('--trajectory',type=Path);ap.add_argument('--initial-configuration',type=Path);ap.add_argument('--replay',action='store_true')
     ap.add_argument('--state',type=Path,help='Explicit frozen cloth state for an initial-configuration capture')
+    ap.add_argument('--collect-episode',type=Path,help='New synchronized RGB/effort episode (controlled closure routes only)')
     # Parse the optional shape before loading the selected configuration.
     a=ap.parse_args();a.output=a.output.resolve()
     if a.state and (a.trajectory or not a.initial_configuration):ap.error('--state requires --initial-configuration and cannot accompany --trajectory')
     if a.replay and not a.trajectory:ap.error('--replay requires --trajectory')
+    if a.collect_episode and not a.replay:ap.error('--collect-episode requires --replay')
     if a.trajectory and a.initial_configuration:ap.error('Choose either --trajectory or --initial-configuration')
     if a.trajectory:
         saved=json.loads(a.trajectory.read_text());selected=dict(number=saved['number'],right_q_rad=saved['start_q_rad'],right_q_deg=np.rad2deg(saved['start_q_rad']).tolist(),left_q_rad=saved['left_q_rad'],left_q_deg=np.rad2deg(saved['left_q_rad']).tolist(),translation_m=saved['translation_m'],right_gap_m=saved['opening_gap_m'],left_gap_m=saved['left_gap_m'],trajectory=str(a.trajectory),left_foot_floor_allowance_m=saved.get('left_foot_floor_allowance_m',0.))
@@ -123,7 +125,14 @@ def main():
                 from replay_controlled_photo_grasp import replay
             else:
                 from replay_fixed_torso_motion import replay
-            result['motion']=replay(env,mapping,action,native_reference,k,checker,saved,a.trajectory.resolve(),delta,expected_cloth,out)
+            if a.collect_episode:
+                if not saved.get('close_after_reach'):raise ValueError('Collection requires a controlled closure route')
+                from sock_dressing_simulation.reaching_collection import ReachingCollector
+                with ReachingCollector(a.collect_episode,mapping,saved,a.trajectory.resolve(),ROOT,config) as collector:
+                    result['motion']=replay(env,mapping,action,native_reference,k,checker,saved,a.trajectory.resolve(),delta,expected_cloth,out,collector=collector)
+                    collector.finish(result['motion'])
+            else:
+                result['motion']=replay(env,mapping,action,native_reference,k,checker,saved,a.trajectory.resolve(),delta,expected_cloth,out)
             result['initial_only']=False;result['motion_replayed']=True;result['camera_after_motion']=snapshot_camera('fixed-camera-endpoint.png')
             result['camera_transform_unchanged_during_motion']=result['camera_before']==result['camera_after_motion']
             write(out/'result.json',result)
