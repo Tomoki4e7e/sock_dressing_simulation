@@ -117,6 +117,13 @@ def calibration(args, depth):
 
 
 def process(args):
+    for meta_path in (args.output/'data/data_sock_reaching_v1').glob('*/*/metadata.json'):
+        if json.loads(meta_path.read_text()).get('camera_profile')=='head-stereo-zero-offset-v2':
+            raise ValueError('Head dataset requires process_head_reaching_shareset.py, including depth calibration')
+    if args.episode is not None:
+        meta_guard=json.loads((args.episode/'metadata.json').read_text())
+        if meta_guard.get('camera_profile')=='head-stereo-zero-offset-v2':
+            raise ValueError('Head images require process_head_reaching_shareset.py; overview preprocessing is incompatible')
     torch.set_num_threads(args.threads)
     torch.set_grad_enabled(False)
     depth = load_depth(args.depth_checkpoint)

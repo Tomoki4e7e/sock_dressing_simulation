@@ -16,10 +16,15 @@ def sha256(path):
 
 
 class ReachingCollector:
-    def __init__(self, path, mapping, plan, source, root, config):
+    def __init__(self, path, mapping, plan, source, root, config, head_cameras=False):
         self.path = Path(path).resolve()
         self.path.mkdir(parents=True, exist_ok=False)
         (self.path / 'camera_right').mkdir()
+        self.head_cameras = bool(head_cameras)
+        if self.head_cameras:
+            (self.path / 'camera_left').mkdir()
+            (self.path / 'camera_overview').mkdir()
+            self.camera_poses = (self.path / 'camera_poses.jsonl').open('w')
         self.signals = {name: (self.path / (name + '.csv')).open('w', newline='')
                         for name in ('angle', 'torque', 'external_torque')}
         self.writers = {name: csv.writer(stream) for name, stream in self.signals.items()}
@@ -56,6 +61,12 @@ class ReachingCollector:
             reaching_learning_ready=False, completed=False,
             scope='Left-arm reaching and geometric closure with frozen cloth; no retention or pulling validation',
             left_foot_floor_allowance_m=plan.get('left_foot_floor_allowance_m', 0.))
+        if self.head_cameras:
+            self.metadata.update(schema='shareset-reaching-head-stereo-v2',
+                camera_source='Dry-AIREC physical head See3CAM right',
+                camera_left_source='Dry-AIREC physical head See3CAM left',
+                camera_overview_source='World-fixed confirmation camera; excluded from learning',
+                camera_profile='head-stereo-zero-offset-v2')
 
     def append(self, env, mapping, record):
         signals = env.robot_signals()
@@ -90,14 +101,26 @@ class ReachingCollector:
         telemetry_sample = copy.deepcopy(env.robot.data) if self.frames == 0 else None
         camera = env.recording_camera
         camera.GetRGB(1280, 960, self.metadata['camera_fov'])
+        if self.head_cameras:
+            from .head_cameras import capture_head_cameras
+            head_images, head_report = capture_head_cameras(env, self.metadata['camera_fov'])
+            # RGB payloads are one-step responses and disappear on the next
+            # exchange. Decode all three views in this same response.
+            image = env._decode(camera.data['rgb'], 'RGB')
+            self.camera_poses.write(json.dumps(dict(frame=self.frames, step=step, **head_report)) + '\n')
         env.sock_cloth._send_data('GetSockCompoundReplay', env.robot.id)
         env._env.step(simulate=False)
         if int(env.sock_cloth.data['sock_compound_replay']['cloth_fixed_steps']) != before:
             raise RuntimeError('Camera capture advanced physics')
-        image = env._decode(camera.data['rgb'], 'RGB')
+        if not self.head_cameras:image = env._decode(camera.data['rgb'], 'RGB')
         if image.shape != (960, 1280, 3):
             raise ValueError('Camera dimensions differ from the ShareSet contract')
-        Image.fromarray(image).save(self.path / 'camera_right' / f'{self.frames}.png')
+        if self.head_cameras:
+            Image.fromarray(image).save(self.path / 'camera_overview' / f'{self.frames}.png')
+            for side, value in head_images.items():
+                Image.fromarray(value).save(self.path / ('camera_' + side) / f'{self.frames}.png')
+        else:
+            Image.fromarray(image).save(self.path / 'camera_right' / f'{self.frames}.png')
         for key, values in arrays.items():
             self.writers[key].writerow(values.tolist())
         self.frames_writer.writerow(dict(frame=self.frames, **{key: row[key] for key in
@@ -106,6 +129,11 @@ class ReachingCollector:
         if self.frames == 0:
             self.metadata['camera_transform'] = {key: copy.deepcopy(camera.data[key]) for key in
                 ('position', 'rotation', 'quaternion', 'local_position', 'local_rotation') if key in camera.data}
+            if self.head_cameras:
+                self.metadata['overview_camera_transform'] = self.metadata['camera_transform']
+                self.metadata['camera_transform'] = head_report['cameras']['right']
+                self.metadata['camera_left_transform'] = head_report['cameras']['left']
+                self.metadata['stereo_baseline_m'] = head_report['baseline_m']
             (self.path / 'native-telemetry-sample.json').write_text(json.dumps(
                 telemetry_sample, default=lambda v: v.tolist(), indent=2) + '\n')
         self.frames += 1
@@ -120,6 +148,7 @@ class ReachingCollector:
     def __exit__(self, typ, value, traceback):
         for stream in list(self.signals.values()) + [self.frames_stream, self.telemetry]:
             stream.close()
+        if self.head_cameras:self.camera_poses.close()
         self.metadata.update(frames=self.frames, physics_steps=self.steps,
                              torque_sources=sorted(self.torque_sources))
         if typ is not None:

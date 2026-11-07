@@ -49,6 +49,13 @@ def check_raw(episode):
             np.loadtxt(episode / (name + '.csv'), delimiter=',', ndmin=2),
             np.array([r[name] for r in rows[4::5]])))
     checks['effort_clock'] = all(r['inverse_dynamics_step'] - rows[0]['inverse_dynamics_step'] == i for i, r in enumerate(rows))
+    if metadata.get('camera_profile') == 'head-stereo-zero-offset-v2':
+        for folder in ('camera_left', 'camera_overview'):
+            checks[folder + '_ids'] = {p.stem for p in (episode / folder).glob('*.png')} == {str(i) for i in range(count)}
+        poses = [json.loads(s) for s in (episode / 'camera_poses.jsonl').read_text().splitlines()]
+        checks['stereo_pose_count'] = len(poses) == count
+        checks['stereo_synchronized'] = all(p['step'] == int(f['step']) and p['frame'] == int(f['frame']) for p, f in zip(poses, frames))
+        checks['stereo_baseline'] = all(abs(p['baseline_m'] - .084) < 1e-4 for p in poses)
     report = dict(passed=all(checks.values()), checks=checks, frames=count,
                   duration_s=len(rows) * .02)
     (episode / 'raw-validation.json').write_text(json.dumps(report, indent=2) + '\n')
@@ -61,6 +68,7 @@ def main():
     ap.add_argument('--ids', nargs='*')
     ap.add_argument('--workers', type=int, default=2)
     ap.add_argument('--python', default='/tmp/sock-diversity-venv/bin/python')
+    ap.add_argument('--head-cameras', action='store_true')
     args = ap.parse_args()
     out = args.output.resolve();out.mkdir(parents=True, exist_ok=True)
     adopted_path = ROOT / 'artifacts/diverse-left-reaching/corrected-collection/manifest.json'
@@ -93,6 +101,7 @@ def main():
             cmd = [args.python, str(ROOT / 'scripts/capture_fixed_torso_initial.py'),
                    '--trajectory', str(source), '--output', str(destination), '--port', str(17500 + i * 10),
                    '--replay', '--collect-episode', str(episode)]
+            if args.head_cameras:cmd.append('--head-cameras')
             print('COLLECT', row['id'], flush=True)
             with (destination / 'replay.log').open('w') as log:
                 subprocess.run(cmd, env=env, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=3600)
@@ -105,6 +114,8 @@ def main():
         if not closed_path.exists():actual_recheck(plan, native, destination)
         if not json.loads(closed_path.read_text())['passed']:raise ValueError('Actual closed grasp geometry failed')
         metadata = json.loads((episode / 'metadata.json').read_text())
+        if args.head_cameras and metadata.get('camera_profile') != 'head-stereo-zero-offset-v2':
+            raise ValueError('Existing episode belongs to the overview-camera profile')
         if metadata['trajectory_sha256'] != sha256(source):raise ValueError('Episode trajectory hash changed')
         report = check_raw(episode)
         compress_intermediates(destination)

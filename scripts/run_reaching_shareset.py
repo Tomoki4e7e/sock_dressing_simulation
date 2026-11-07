@@ -29,6 +29,9 @@ def main():
     ap.add_argument('--perception-threads', type=int, default=2)
     ap.add_argument('--training-epochs', type=int, default=1)
     a = ap.parse_args();out = a.output.resolve();out.mkdir(parents=True, exist_ok=True)
+    for metadata_path in (out / 'data/data_sock_reaching_v1').glob('*/*/metadata.json'):
+        if json.loads(metadata_path.read_text()).get('camera_profile') == 'head-stereo-zero-offset-v2':
+            raise ValueError('Head stereo dataset detected. Use scripts/run_head_reaching_shareset.py to preserve head-camera preprocessing.')
     env = dict(os.environ, OPENBLAS_NUM_THREADS='1', OMP_NUM_THREADS='2', MKL_NUM_THREADS='2',
                MPLCONFIGDIR='/tmp/sock-collection-mpl', PYTHONUNBUFFERED='1')
     rows = json.loads((ROOT / 'artifacts/diverse-left-reaching/corrected-collection/manifest.json').read_text())['rows']

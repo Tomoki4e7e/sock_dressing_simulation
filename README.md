@@ -591,63 +591,89 @@ python scripts/package_corrected_reaching_collection.py
 採用済みの実測CSVは `artifacts/diverse-left-reaching/corrected-collection/demonstrations.zip`、
 対応表は同じフォルダの `manifest.json` と `manifest.csv` です。現在はAの既存12軌道を収録しています。
 
-### 既存12経路のShareSet同期収集
+### 既存12経路のShareSet同期収集（頭部左右カメラ）
 
-`scripts/run_reaching_shareset.py` は上記 `corrected-collection/manifest.json`
-だけを採用元に使い、別の `artifacts/reaching-shareset-v1/` に収集します。
-元の軌道・実測CSV・形状は変更しません。No.10-v00 と No.38-v00 の試験収集、
-全12経路の再生、実測状態での閉鎖再検査、ShareSet SAM2・Depth Anything V2 の
-前処理、代表経路と全経路の短時間学習を順に実行します。
+採用元は `artifacts/diverse-left-reaching/corrected-collection/manifest.json` のAの12経路です。
+元の軌道・実測CSV・形状は変更しません。現行出力は `artifacts/reaching-shareset-head-v2/`、
+従来パス `artifacts/reaching-shareset-v1/` は、全12経路の検査を終えた現行出力へのリンクです。
 
 ```bash
-# Python 3.11 geometry環境でUnity再生・一括制御を実行する。
-# 画像処理・ShareSet学習は --ml-python の環境（このPCではPython 3.8）で実行する。
 OPENBLAS_NUM_THREADS=1 MPLCONFIGDIR=/tmp/sock-collection-mpl \
-  /tmp/sock-diversity-venv/bin/python scripts/run_reaching_shareset.py \
-  --collection-python /tmp/sock-diversity-venv/bin/python \
-  --ml-python /usr/bin/python3
+  /tmp/sock-diversity-venv/bin/python scripts/run_head_reaching_shareset.py \
+  --collection-python /tmp/sock-diversity-venv/bin/python --ml-python /usr/bin/python3
 ```
 
-物理刻みは20ms、実測状態・関節力ログは50Hz、学習用のRGB・CSVは10Hzです。
-撮影は `simulate=False` で行い、撮影前後の物理ステップ番号と毎ステップの
-関節力取得クロックを検査します。カメラは既存経路の固定外部カメラ（ID 1301）で、
-実機の頭部右カメラとの視点一致は主張しません。
-`angle.csv` の回転関節はrad、直動関節はm、対応する `torque.csv` はNmとNです。
-mimicの角度は実測主関節の0.5倍、関節力列は同じ駆動DOFの複製です。
-関節力は凍結布・高剛性ドライブでの測定値であり、布の摩擦保持力を意味しません。
+`camera_right` と `camera_left` はDry-AIRECのURDFにある
+`head/see3cam_right/camera_color_frame` と `head/see3cam_left/camera_color_frame`
+に配置します。両方とも追加の位置・角度オフセットは0、左右間隔は約84 mmです。
+ROSのoptical frameをUnityカメラに直接適用しません。RGBは1280×960、垂直視野角92度で、
+実機レンズの精密な内部較正・歪みを再現したものではありません。
+固定外部カメラの画像は `camera_overview/` に確認用として別保存します。
 
-RGBは1280×960で保持します。SAM2は足と靴下の周辺
-`[570, 370, 880, 590]` を切り出し、内部解像度512で追跡して原画像座標へ戻します。
-初期の青い開口縁と保存布の投影形状をプロンプトに使い、以後のマスクはSAM2の
-追跡出力です。布と足の重複はSAM2のクラス間スコアで解決します。
-布の投影形状との一致は誤領域検出の検査で、遮蔽を考慮した正解マスクではありません。
-二値化した投影輪郭とSAM2のリサイズ済みスコアの差には画像の各軸2pxの許容を使い、
-元の厳密な投影検査も `perception/validation-strict-projection.json` に保持します。
-`scripts/audit_reaching_perception.py` は保存マスクを変えずに再検査でき、
-撮影画像やネイティブの衝突・把持検査の許容値は変更しません。
-一部フレームで指への追跡ずれが残る場合は、`scripts/repair_reaching_perception.py`
-が現在の画像の可視開口縁を正例、指にずれた領域を負例にしてSAM2を再初期化します。
-この再処理は内部解像度1024を使い、元の予測・プロンプト・ハッシュを
-`perception/repair-originals/` と `perception/repairs.json` に保持します。
-再初期化フレームでは連続トラッカーの面積比を主張せず、注釈の切り替わりを明示します。
-RGB、深度推定値、関節角、関節力は変更しません。
-Depth Anything V2のスケールは訓練条件だけの初期・終端画像から固定し、
-検証・テスト画像で再推定しません。両モデルの重みは既存ファイルを読み取り専用で参照します。
+物理刻み20 ms、関節角・関節力ログ50 Hz、RGBと学習用CSVは10 Hzです。
+3台の画像を同一物理ステップで取得し、`simulate=False` の撮影前後で物理クロックが
+進まないことを検査します。各フレームのカメラ姿勢・ステップ・左右間隔は
+`camera_poses.jsonl`、同期検査は `raw-validation.json` に保存します。
+`angle.csv` の回転関節はrad、直動関節はm、`torque.csv` は対応してNmとNです。
+mimic角度は実測主関節の0.5倍、関節力列は同じ駆動DOFの複製です。
+関節力は凍結布・高剛性ドライブでの測定値で、布の摩擦保持力ではありません。
 
-分割はNo.10/13/25/38をtrain（8経路）、No.20をvalidation（2経路）、
-No.50をtest（2経路）とし、同じ条件の経路を異なる分割へ入れません。
-ShareSet設定は `../ShareSet/share_folder/configs/reaching_simulation.yaml` です。
-ヘッダーなしCSVの先頭行を保持し、正規化をtrainだけから求め、可変長系列の
-パディング部分を損失から除外します。`skip_num=2` の学習刻みは0.2秒です。
+データ構成は `/mnt/robot_ssd/ShareSet-from-Trash-20261106-151926/ShareSet.tar`
+内の靴下データを読み取り専用で確認しました。左右RGB、右画像由来の `camera_depth/`、
+`camera_right_mask/{sock_mask,foot_mask}/`、`depth_mask/{sock_depth,foot_depth}/`、
+ヘッダーなし18列の `angle.csv`・`torque.csv`・`external_torque.csv` を保存します。
+参照データにはrawと派生画像で1フレームの差がありますが、今回の全モダリティは同じID・同じ件数に揃えます。
+参照結果は `reference-format.json` に記録します。
 
-合格済みの収集と画像処理は再利用します。途中で失敗した生収集は上書きせず停止するため、
-`metadata.json`・ログを確認して、失敗した今回のepisodeを退避してから再開してください。
-実行中の状態は `artifacts/reaching-shareset-v1/pipeline.log`、
-完了時の成果物は同じフォルダの `report.html`・`report.json`・`episodes.csv`、
-分割は `data/dataset_reaching.yaml` に保存します。
-学習確認は各1 epochで、モデルの動作成功率を検証するものではありません。
-`reaching_learning_ready` は接近・幾何学的閉鎖のデータ品質だけを表し、
-汎用の `learning_ready` と `dynamic_grasp_validated` はfalseのままです。
+SAM2 smallは頭部右画像の全体を内部512で追跡します。可視の青い開口縁と
+保存形状を頭部画像へ投影した領域から正例・負例を選び、保存マスクはSAM2出力を使用します。
+布・足の投影支持率、クラス重複、空マスクを全フレームで検査します。
+投影支持率の検査は画像上2 pxのラスター許容を使い、遮蔽を含む正解領域との一致率ではありません。
+再初期化が必要な場合は現在画像からプロンプトを取り直し、元マスクと理由を
+`perception/before-prompt-reset/` と `perception/validation.json` に保持します。
+再初期化後も支持率を満たさない孤立フレームは `scripts/repair_head_reaching_perception.py`
+で内部1024のSAM2を使い、追跡ずれ領域への負例を追加して自動再処理します。
+元のマスク・マスク付き深度・検査結果と変更後のハッシュを
+`perception/isolated-repair-originals/`・`head-repairs.json` に保持します。
+RGB、右画像の深度推定値、関節信号は変更しません。
+Depth Anything V2 vitsの正規化範囲は、訓練8経路（No.10/13/25/38）の全頭部右画像だけで固定します。
+下限はモデルのReLU下限0、上限は全訓練画像の最大値に量子化1段分の余裕を加えます。
+疎な24枚だけの較正では訓練途中の深度ピークを逃すため、この旧較正は使用しません。
+近くのロボットや背景がこの範囲外になる場合も較正範囲は固定し、全画面のクリップ率を記録します。
+`scripts/audit_head_reaching_shareset.py` は保存画像の復号、左右画像の重複、
+マスクと深度の整合、学習対象の靴下・足の上限飽和率（各2%以下）を独立に検査します。
+Depth Anything V2はReLUで0を出力し、8bit量子化でも0が生じるため、0を欠測とは扱いません。
+訓練較正の下限は0から量子化1段未満であることを確認し、対象領域の0値率も記録します。
+俯瞰画像用のROI・プロンプト・深度較正・学習済み重みは流用しません。
+
+分割はNo.10/13/25/38がtrain（8経路）、No.20がvalidation（2経路）、No.50がtest（2経路）です。
+ShareSetの頭部用設定は `../ShareSet/share_folder/configs/reaching_head_simulation.yaml` です。
+従来の `reaching_simulation.yaml` も同じ頭部用設定に更新しています。
+`expected_camera_profile` により俯瞰データの混入を拒否します。現行モデル入力は頭部右画像で、
+頭部左画像は同期したステレオ対として保持します。CSVの先頭行を保持し、正規化はtrainだけで求め、
+可変長系列のパディング部分を損失から除外します。`skip_num=2` の学習刻みは0.2秒です。
+代表経路と全12経路の各1 epochの学習確認を行います。
+
+旧画像の保存と従来パスの切り替えは、全検査完了後に実行します。
+
+```bash
+/tmp/sock-diversity-venv/bin/python scripts/activate_head_reaching_shareset.py
+```
+
+旧出力一式（俯瞰の深度・マスク・学習モデル・ログを含む）は
+`artifacts/reaching-shareset-overview-v1-archive/` に退避します。元の `camera_right` は
+現行の各episodeの `confirmation/camera_overview_original/` にもそのままコピーし、
+全画像のSHA-256を `camera-migration.json` に記録して照合します。
+旧メタデータ内の絶対パスは履歴として保持し、退避先への対応は `RELOCATION.json` に示します。
+旧俯瞰向けスクリプトは頭部データに対して停止し、誤ったROIでの再処理を防ぎます。
+
+合格済みの生収集と画像処理は再利用します。失敗した生収集は上書きせず停止するため、
+ログを確認して失敗episodeを退避してから再開してください。
+実行状況は現行出力の `collection.log`・`pipeline.log`、成果物は
+`report.html`・`report.json`・`episodes.csv`、分割は `data/dataset_reaching.yaml` です。
+対象は固定布への接近・幾何学的閉鎖です。`reaching_learning_ready` はこの範囲のデータ品質を示し、
+`learning_ready` と `dynamic_grasp_validated` はfalseのままです。
+1 epochの学習確認は動作成功率の検証を含みません。
 
 ### 最新版Bの把持軌道探索
 

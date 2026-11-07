@@ -24,6 +24,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__);ap.add_argument('episode', type=Path)
     ap.add_argument('--threads', type=int, default=2)
     a = ap.parse_args();episode = a.episode.resolve();folder = episode / 'perception'
+    if json.loads((episode / 'metadata.json').read_text()).get('camera_profile') == 'head-stereo-zero-offset-v2':
+        raise ValueError('Overview repair cannot process head images. Use process_head_reaching_shareset.py.')
     report = json.loads((folder / 'validation.json').read_text())
     if report.get('projection_raster_tolerance_px') != 2:raise ValueError('Run the raster-aware audit before repair')
     failures = [r for r in report['rows'] if not r['passed']]

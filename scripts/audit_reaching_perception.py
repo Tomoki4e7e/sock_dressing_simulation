@@ -19,13 +19,15 @@ from sock_dressing_simulation.perception_audit import projection_precision
 
 def audit(episode):
     episode = Path(episode).resolve();folder = episode / 'perception'
+    meta = json.loads((episode / 'metadata.json').read_text())
+    if meta.get('camera_profile') == 'head-stereo-zero-offset-v2':
+        raise ValueError('This audit uses the overview camera profile. Head data are checked by process_head_reaching_shareset.py.')
     path = folder / 'validation.json'
     if not path.exists():raise ValueError(f'Full model processing is incomplete: {episode}')
     original_path = folder / 'validation-strict-projection.json'
     previous = json.loads((original_path if original_path.exists() else path).read_text())
     if not original_path.exists():original_path.write_text(json.dumps(previous, indent=2) + '\n')
     if previous['sample_only']:raise ValueError('A sample report cannot qualify a complete episode')
-    meta = json.loads((episode / 'metadata.json').read_text())
     if not (meta.get('raw_validation_passed') and meta.get('replay_passed')
             and meta.get('actual_closed_capture_passed')):
         raise ValueError('Native replay, closure and raw synchronization must pass before qualification')

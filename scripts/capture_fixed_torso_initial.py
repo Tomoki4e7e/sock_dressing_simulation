@@ -31,6 +31,7 @@ def main():
     ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--output',type=Path,default=ROOT/'artifacts/fixed-torso-start-search');ap.add_argument('--index',type=int,default=5);ap.add_argument('--port',type=int,default=16680);ap.add_argument('--trajectory',type=Path);ap.add_argument('--initial-configuration',type=Path);ap.add_argument('--replay',action='store_true')
     ap.add_argument('--state',type=Path,help='Explicit frozen cloth state for an initial-configuration capture')
     ap.add_argument('--collect-episode',type=Path,help='New synchronized RGB/effort episode (controlled closure routes only)')
+    ap.add_argument('--head-cameras', action='store_true', help='Use the two physical See3CAM frames for the learning streams')
     # Parse the optional shape before loading the selected configuration.
     a=ap.parse_args();a.output=a.output.resolve()
     if a.state and (a.trajectory or not a.initial_configuration):ap.error('--state requires --initial-configuration and cannot accompany --trajectory')
@@ -119,6 +120,11 @@ def main():
         result['camera_after']=snapshot_camera('fixed-camera-after.png');result['camera_transform_unchanged']=bool(result['camera_before'] and result['camera_before']==result['camera_after'])
         result['passed']=bool(result['maximum_fixed_frame_position_error_m']<2e-5 and result['maximum_fixed_frame_orientation_error_deg']<.002 and result['maximum_planned_link_position_error_m']<.002 and result['maximum_actual_fk_link_position_error_m']<3e-5 and result['actual_initial_check']['passed'] and max(result['human_error_m'],result['cloth_error_m'])<2e-5 and result['camera_transform_unchanged'])
         write(out/'result.json',result)
+        if a.head_cameras:
+            from sock_dressing_simulation.head_cameras import create_head_cameras, preview_head_cameras
+            create_head_cameras(env)
+            result['head_cameras'] = preview_head_cameras(env, out, float(config['camera']['fov']))
+            write(out/'result.json', result)
         if a.replay:
             if not result['passed']:raise ValueError('Native initial configuration failed; trajectory will not be replayed')
             if saved.get('close_after_reach'):
@@ -128,7 +134,7 @@ def main():
             if a.collect_episode:
                 if not saved.get('close_after_reach'):raise ValueError('Collection requires a controlled closure route')
                 from sock_dressing_simulation.reaching_collection import ReachingCollector
-                with ReachingCollector(a.collect_episode,mapping,saved,a.trajectory.resolve(),ROOT,config) as collector:
+                with ReachingCollector(a.collect_episode,mapping,saved,a.trajectory.resolve(),ROOT,config,head_cameras=a.head_cameras) as collector:
                     result['motion']=replay(env,mapping,action,native_reference,k,checker,saved,a.trajectory.resolve(),delta,expected_cloth,out,collector=collector)
                     collector.finish(result['motion'])
             else:
