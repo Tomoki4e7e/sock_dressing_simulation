@@ -18,6 +18,7 @@ from search_centered_reaching import write,URDF
 from report_photo_grasp_adjustment import actual_recheck
 from sock_dressing_simulation.grasp_geometry import RightHand
 from sock_dressing_simulation.reaching_dataset import file_sha256,verify_dataset_inputs
+from sock_dressing_simulation.held_stage_shapes import current_shape_qualified
 
 
 def compress_intermediates(destination):
@@ -65,6 +66,9 @@ def main():
     if a.limit:paths=paths[:a.limit]
     for i,path in enumerate(paths):
         plan=json.loads(path.read_text());verify_dataset_inputs(plan,ROOT)
+        shape=json.loads((ROOT/plan['geometry_record']['state_file']).read_text())
+        if not current_shape_qualified(plan['applied_opening_stage'],shape):
+            raise ValueError('Replay requires the current corrected opening-stage shape: '+str(path))
         validation=json.loads(path.with_name(path.name.replace('trajectory','validation')).read_text())
         if not validation['offline_passed'] or validation['trajectory_sha256']!=file_sha256(path):continue
         destination=out/'replays'/path.stem;destination.mkdir(parents=True,exist_ok=True)

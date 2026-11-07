@@ -88,7 +88,7 @@ def assess_fit_hold(rows, *, reference_center=None, minimum_duration_s=1., maxim
     return dict(passed=all(checks.values()),checks=checks,cuff_drift_m=drift,cuff_point_excursion_m=excursion,duration_s=float(times[-1]-times[0]))
 
 
-def begin_fit(environment):
+def begin_fit(environment, *, stage_contact=False):
     """Install a hull of this human pose, then calibrate native garment rest size."""
     attr=environment.sock_cloth
     attr.request_fit_skin();environment._env.step(simulate=False)
@@ -101,7 +101,11 @@ def begin_fit(environment):
     hull=attr.data.get('sock_fit_hull',{})
     if not hull.get('ok') or hull.get('uncovered')!=0 or hull.get('calf_uncovered')!=0:
         raise RuntimeError('Current-pose foot hull does not cover the skin')
-    attr.begin_circumference_fit();environment._env.step(simulate=False)
+    if stage_contact:
+        attr._send_data('BeginSockHeldStageCircumferenceFit')
+    else:
+        attr.begin_circumference_fit()
+    environment._env.step(simulate=False)
     if not attr.data.get('sock_circumference_fit',{}).get('active'):
         raise RuntimeError('Native circumference fitting initialization failed')
     result=dict(vertices=vertices.tolist(),triangles=triangles.ravel().tolist(),native=hull)
@@ -128,7 +132,7 @@ def read_fit(environment):
 
 
 def run_fit(environment, *, minimum_scale=.48, scale_step=.01, settle_steps=5,
-            hold_steps=250, target_cuff_force_n=.08, on_sample=None, on_phase=None):
+            hold_steps=250, target_cuff_force_n=.08, on_sample=None, on_phase=None, stage_contact=False):
     """Contract by rest circumference, then verify finite-mass gravitational hold.
 
     Temporary zero gravity during shape relaxation is explicit. Acceptance only
@@ -140,7 +144,7 @@ def run_fit(environment, *, minimum_scale=.48, scale_step=.01, settle_steps=5,
         raise ValueError('Invalid circumference fitting schedule')
     if environment._cloth_contact_rollout_started:
         raise RuntimeError('Fit before starting the gripper contact rollout')
-    hull=begin_fit(environment)
+    hull=begin_fit(environment, stage_contact=True) if stage_contact else begin_fit(environment)
     rows=[]
     def sample(phase):
         row=read_fit(environment);row['phase']=phase;rows.append(row)
@@ -151,7 +155,10 @@ def run_fit(environment, *, minimum_scale=.48, scale_step=.01, settle_steps=5,
     chosen=1.
     for scale in circumference_schedule(minimum_scale,scale_step):
         chosen=float(max(minimum_scale,scale))
-        environment.sock_cloth.set_circumference_scale(chosen)
+        if stage_contact:
+            environment.sock_cloth._send_data('SetSockHeldStageCircumferenceScale', chosen)
+        else:
+            environment.sock_cloth.set_circumference_scale(chosen)
         environment._env.step(simulate=False)
         environment.advance_physics(settle_steps)
         row=sample('contract')
@@ -209,13 +216,18 @@ def restore_fit(environment, directory):
         raise ValueError('Disable automatic circumference_fit when preparing a scene for saved-state restoration')
     attr.restore_prepared_state((directory/'initial-prepared-state.json').read_text().strip())
     environment._env.step(simulate=False)
-    hull=begin_fit(environment)
+    stage_contact = report.get('fit_settings', {}).get('stage_contact', False)
+    hull=begin_fit(environment, stage_contact=True) if stage_contact else begin_fit(environment)
     old_hull=json.loads((directory/'foot-collision-hull.json').read_text())
     if not equivalent_hulls(hull['vertices'],old_hull['vertices']):
         raise ValueError('Saved fit belongs to a different human pose')
     if old_hull.get('calf_surface') and not equivalent_hulls(hull['calf_surface']['vertices'],old_hull['calf_surface']['vertices']):
         raise ValueError('Saved fit belongs to a different calf pose')
-    attr.set_circumference_scale(report['rest_circumference_scale']);environment._env.step(simulate=False)
+    if stage_contact:
+        attr._send_data('SetSockHeldStageCircumferenceScale', report['rest_circumference_scale'])
+    else:
+        attr.set_circumference_scale(report['rest_circumference_scale'])
+    environment._env.step(simulate=False)
     attr.restore_prepared_state((directory/'fitted-prepared-state.json').read_text().strip())
     attr.request_particles();environment._env.step(simulate=False)
     restored=attr.data.get('prepared_state_restore_report',{})

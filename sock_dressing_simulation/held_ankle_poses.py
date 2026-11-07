@@ -24,14 +24,14 @@ def foot_basis(source):
     return np.column_stack([forward, dorsal, np.cross(forward, dorsal)])
 
 
-def load_reference(directory):
+def load_reference(directory, stage='A'):
     directory = Path(directory)
     raw = (directory/'fitted-geometry.json').read_bytes()
     geometry = json.loads(raw)
     report = json.loads((directory/'report.json').read_text())
     state = json.loads((directory/'fitted-prepared-state.json').read_text())
-    if not report.get('passed') or report.get('stage') != 'A':
-        raise ValueError('Ankle-only mode requires a validated saved held-A reference')
+    if stage not in ('A', 'B', 'C', 'D', 'E') or not report.get('passed') or report.get('stage') != stage:
+        raise ValueError(f'Ankle-only mode requires a validated saved held-{stage} reference')
     points = np.asarray(geometry['particles_world'], dtype=float)
     if points.ndim != 2 or points.shape[1] != 3 or not np.isfinite(points).all():
         raise ValueError('Invalid held reference geometry')
@@ -121,13 +121,14 @@ def audit_actual_skin(points, skin, edges, triangles):
     return body, surface
 
 
-def initialize_held_ankle_pattern(environment, pattern, held_reference, signs=None, gravity_drape=None, toe_contact=None):
+def initialize_held_ankle_pattern(environment, pattern, held_reference, signs=None, gravity_drape=None, toe_contact=None, reference_stage='A'):
     from .circumference_fit import current_pose_hull
     from .config import resolve_package_path
     attr = environment.sock_cloth
     if attr is None or environment._cloth_contact_rollout_started:
         raise RuntimeError('Initialize the held reference before a contact rollout')
-    reference = load_reference(resolve_package_path(held_reference))
+    reference_path = resolve_package_path(held_reference)
+    reference = load_reference(reference_path) if reference_stage == 'A' else load_reference(reference_path, stage=reference_stage)
     signs = signs or dict(shift=1, diagonal=1, roll=1)
     if attr.data.get('sock_toe_contact', {}).get('active'):
         attr._send_data('EndSockToeContact');environment._env.step(simulate=False)
@@ -148,7 +149,21 @@ def initialize_held_ankle_pattern(environment, pattern, held_reference, signs=No
         vertices, faces = current_pose_hull(attr.data[key])
         source['surfaces'].append(dict(vertices=vertices.tolist(), triangles=faces.tolist()))
     pose = copy.deepcopy(attr.data['sock_pattern_pose'])
-    points, normal, rotation = transport_reference(reference, pose)
+    if reference_stage == 'A':
+        points, normal, rotation = transport_reference(reference, pose)
+    else:
+        # C--E wrap the shin as well as the foot. They are fitted separately
+        # for each ankle pose, so do not rigidly rotate their shin around the
+        # ankle using the foot-only frame used by A.
+        saved_pattern = json.loads((Path(reference['directory'])/'report.json').read_text()).get('pattern', {})
+        saved_skin = reference['geometry']['source'].get('skin_surface', {})
+        skin = source['skin_surface']
+        if (any(saved_pattern.get(k) != getattr(pattern, k) for k in ('pitch_deg', 'roll_deg'))
+                or np.shape(saved_skin.get('vertices')) != np.shape(skin['vertices'])
+                or not np.allclose(saved_skin['vertices'], skin['vertices'], atol=5e-6, rtol=0)
+                or saved_skin.get('triangles') != skin['triangles']):
+            raise ValueError(f'Held-{reference_stage} must be fitted to this exact ankle and skin pose')
+        points, normal, rotation = reference['points'].copy(), reference['normal'].copy(), np.eye(3)
     edges = np.asarray(attr.data['particle_edges'], dtype=int).reshape(-1, 2)
     triangles = np.asarray(attr.data['particle_surface_triangles'], dtype=int).reshape(-1, 3)
     reference_edges = np.unique(np.sort(np.asarray(reference['geometry']['edges']).reshape(-1, 2), axis=1), axis=0)
@@ -180,8 +195,8 @@ def initialize_held_ankle_pattern(environment, pattern, held_reference, signs=No
     body, surface = audit_actual_skin(readback, source['skin_surface'], edges, triangles)
     if not body['geometry_ok'] or not surface['surface_ok']:
         raise RuntimeError('Native held reference readback intersects the actual skin or itself')
-    report = dict(stage='A', pattern=asdict(pattern), motion_mode='held_reference_ankle_only',
-        applied_conditions=dict(stage='A', pitch_deg=pattern.pitch_deg, roll_deg=signs['roll']*pattern.roll_deg,
+    report = dict(stage=reference_stage, pattern=asdict(pattern), motion_mode='held_reference_ankle_only',
+        applied_conditions=dict(stage=reference_stage, pitch_deg=pattern.pitch_deg, roll_deg=signs['roll']*pattern.roll_deg,
             shift_cm=0, diagonal_deg=0, added_wrinkles=False, added_collapse=False, added_twist=False, added_fold=False),
         ignored_workbook_conditions=['sock_id', 'stage', 'shift_cm', 'diagonal_deg', 'opening', 'wrinkles', 'fold'],
         reference_directory=reference['directory'], reference_geometry_sha256=reference['sha256'],
@@ -200,7 +215,11 @@ def initialize_held_ankle_pattern(environment, pattern, held_reference, signs=No
         from .toe_contact import apply_toe_contact
         report = apply_toe_contact(environment, reference, source, report, toe_contact)
     elif gravity_drape and gravity_drape.get('enabled', True):
-        report = apply_gravity_drape(environment, reference, source, report, gravity_drape)
+        if reference_stage == 'A':
+            report = apply_gravity_drape(environment, reference, source, report, gravity_drape)
+        else:
+            from .held_stage_shapes import apply_stage_gravity_drape
+            report = apply_stage_gravity_drape(environment, reference, source, report, gravity_drape)
     environment._preinsert_observation_pending = True
     environment._pose_pattern_report = report; environment._pose_pattern_source = source
     return report

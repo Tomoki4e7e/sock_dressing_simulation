@@ -20,12 +20,12 @@ from sock_dressing_simulation.controlled_arm_reaching import ControlledArmKinema
 from sock_dressing_simulation.grasp_geometry import candidate_samples, SkinBody, orientation
 from sock_dressing_simulation.grasp_cloth_geometry import ClothScreen
 from sock_dressing_simulation.geometric_closure import material_distances
-from sock_dressing_simulation.preinsert import generate_preinsert
 from sock_dressing_simulation.held_ankle_poses import foot_basis
 from sock_dressing_simulation.pose_patterns import read_patterns
 from dataclasses import asdict
 from sock_dressing_simulation.reaching_dataset import file_sha256
 from sock_dressing_simulation.fitted_b_cuff import build_fitted_b_state,PROFILE as FITTED_B_PROFILE
+from sock_dressing_simulation.held_stage_shapes import DEFAULT_ROOT as STAGE_SHAPES, ensure_stage_state, current_shape_qualified
 
 
 def existing_geometry(numbers,output,initial_path):
@@ -99,20 +99,18 @@ def run(numbers, stages, output, initial_path, seconds, arm_guided=False,retry=F
                     raise ValueError('Cached endpoint inputs differ; use a new output directory: '+str(path))
                 if stage=='B' and cached.get('shape_profile')!=FITTED_B_PROFILE:
                     raise ValueError('Cached B uses the old, unfitted shape; use a new output directory: '+str(path))
+                if not current_shape_qualified(stage, cached):
+                    raise ValueError('Cached C--E uses the previous circumference; use a new output directory: '+str(path))
                 continue
             state = copy.deepcopy(original)
             state.update(scene_number=source_number, pattern=asdict(pattern))
             if stage == 'B':
                 state,_,_=build_fitted_b_state(original,pattern)
                 state['scene_number']=source_number
-            elif stage != 'held-A':
-                points, placement = generate_preinsert(state['source'], stage, clearance_m=.015)
-                state.update(particles_world=points.tolist(), opening_normal=placement['opening_inward_normal_world'])
-                state['placement'] = placement
-                state['reference_geometry_mode'] = original['mode']
-                state['mode'] = 'frozen_normal_preinsert'
-                state.pop('bulge', None)
-                state['settings'] = dict(generator='generate_preinsert',clearance_m=.015,above_heel_m=.05)
+            elif stage in ('C', 'D', 'E'):
+                state = ensure_stage_state(ROOT / STAGE_SHAPES, pattern, stage)
+            elif stage not in ('held-A', 'A'):
+                raise ValueError('Unknown opening stage: '+stage)
             state['applied_opening_stage']='A' if stage=='held-A' else stage
             write(output/'states'/path.name,state)
             base, scene, *rest = context(n, state, REGISTERED_MANIFEST, left_foot_floor_allowance=initial['left_foot_floor_allowance_m'])

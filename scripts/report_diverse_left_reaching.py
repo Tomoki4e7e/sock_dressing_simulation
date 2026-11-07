@@ -17,6 +17,7 @@ from search_centered_reaching import write
 from sock_dressing_simulation.pose_patterns import read_patterns
 from sock_dressing_simulation.reaching_dataset import file_sha256,verify_dataset_inputs,spatial_route_distance
 from sock_dressing_simulation.fitted_b_cuff import PROFILE as FITTED_B_PROFILE
+from sock_dressing_simulation.held_stage_shapes import current_shape_qualified
 
 
 def main():
@@ -28,7 +29,7 @@ def main():
         if validation['trajectory_sha256']!=file_sha256(path):raise ValueError('Stale validation: '+str(path))
         pattern=plan['workbook_pattern'];dest=out/'replays'/path.stem
         cloth_state=json.loads((ROOT/plan['geometry_record']['state_file']).read_text())
-        profile_ok=plan['applied_opening_stage']!='B' or cloth_state.get('shape_profile')==FITTED_B_PROFILE
+        profile_ok=current_shape_qualified(plan['applied_opening_stage'],cloth_state)
         native_path=dest/'native-route-initial/replay-result.json';initial_path=dest/'native-route-initial/result.json';closed_path=dest/'actual-closed-grasp-recheck.json'
         native=json.loads(native_path.read_text()) if native_path.exists() else {}
         initial=json.loads(initial_path.read_text()) if initial_path.exists() else {}
@@ -79,7 +80,7 @@ def main():
         for path in sorted(folder.glob('pose-*.json')):
             probe=json.loads(path.read_text())
             if probe.get('initial_sha256')!=file_sha256(initial_file):continue
-            if probe['stage']=='B' and probe.get('shape_profile')!=FITTED_B_PROFILE:continue
+            if not current_shape_qualified(probe['stage'],probe):continue
             searched.append(dict(number=probe['number'],stage='A' if probe['stage']=='held-A' else probe['stage'],endpoint_found=bool(probe['accepted']),initial_passed=probe['initial_check']['passed'],counts=probe.get('counts',{}),elapsed_s=probe.get('elapsed_s'),record=str(path.relative_to(ROOT))))
     summary=dict(shared_initial_configuration=next(iter(plans.values()))['shared_initial_configuration'] if plans else 'config/diverse_left_reaching_shared.yaml',
         offline_routes=sum(r['offline_passed'] for r in rows),native_verified_routes=sum(r['actual_closed_capture_passed'] for r in rows),
@@ -137,6 +138,7 @@ def main():
 {route_image_html}<table><tr><th>軌道</th><th>pitch°</th><th>roll°</th><th>開口位置</th><th>検証状態</th><th>接近時間 s</th><th>最小余裕 mm</th><th>実測捕捉面積 mm²</th></tr>{''.join(cells)}</table>
 <div class="gallery">{''.join(gallery)}</div>
 <h2>形状と適用範囲</h2><p>Aは成功例と同じ保存済み形状。最新版Bは前足部から自由部分へ外周を保って接続し、余り長さに応じて扁平に曲げ、材料座標30mm帯の中心15mmで半径を5mm増やす。開口縁と30mm帯の外側は膨らみ処理で変更しない。旧Bの楕円形状、太い胴部・上向き尾部を残したv3、およびつま先が局所的に細いv4は採用対象外とし、CSV一式から除外する。</p>
+<p>C〜Eはnative外周フィットと重力下垂を準備した後、支持部を実皮膚の断面に沿ってさらにフィットさせ、30mm帯・中心15mmの半径+5mmの膨らみを追加する。つま先支持付近と自由端は追加調整で動かさない。調整後の凍結形状によるリーチング検査と、支持なしの摩擦保持・牽引は別であり、後者は未検証。以前の外周の探索・軌道は現行形状の結果に含めない。</p>
 <p>Bの修正後の結果は <a href="../b-natural-toe/shape-report.html">修正版Bのレポート</a>。Bの差し込み深さ・前足部形状・残り長さから凍結した基準形状を作り、半径5mmの膨らみを追加する。布変形・重力釣合い・摩擦保持の成立は未検証。前回Bの12軌道を最新形状での成功として引き継がない。C〜Eの既存探索は今回のBの再探索とは別。Eは踵・足首位置から下腿方向50mmという既存定義。Excelの素材・前後ずらし・斜め角・しわ・ねじれ・折り返し・開口のつぶれは未再現。</p>
 <p>以前の開口位置C〜Eの探索では、閉鎖条件と腕IK・全身衝突条件を併せて満たす軌道は得られていない。今回の修正と再探索はBが対象。各出力で参照した探索記録はsummary.jsonのsearched_conditionsに保存する。表の条件とExcel行の足首角度・開口位置の対応はworkbook_coverageに記録する。足首角度だけを参照した追加条件も含むため、Excelの全50行を再現した結果ではない。</p>
 <p>足との離隔1 mm以上、捕捉面積4 mm²以上、全身・自己干渉、関節余裕5°以上、速度・加速度を検査。保存布形状での接近・幾何学的な閉鎖検査であり、布変形、摩擦保持、牽引は未検証。従来と同じ人体左足の床貫通約96.6 mmと150 mmの明示的許容を継承する。その他の床検査は維持する。</p>

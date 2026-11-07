@@ -28,6 +28,7 @@ from sock_dressing_simulation.held_ankle_poses import audit_actual_skin
 from sock_dressing_simulation.reaching_dataset import file_sha256, spatial_route_distance,verify_dataset_inputs,load_endpoint_samples
 from plan_fixed_torso_route import rrt
 from sock_dressing_simulation.fitted_b_cuff import PROFILE as FITTED_B_PROFILE
+from sock_dressing_simulation.held_stage_shapes import current_shape_qualified
 
 
 def generate(args):
@@ -42,9 +43,9 @@ def generate(args):
         saved=json.loads(path.read_text())
         if not saved.get('offline_passed'):continue
         verify_dataset_inputs(saved,ROOT)
-        if saved['applied_opening_stage']=='B':
+        if saved['applied_opening_stage'] in ('B','C','D','E'):
             previous_state=json.loads((ROOT/saved['geometry_record']['state_file']).read_text())
-            if previous_state.get('shape_profile')!=FITTED_B_PROFILE:continue
+            if not current_shape_qualified(saved['applied_opening_stage'],previous_state):continue
         p=saved['workbook_pattern'];key=(p['pitch_deg'],p['roll_deg'],saved['applied_opening_stage'])
         known.setdefault(key,[]).append((saved['tcp_world_m'],str(path.relative_to(ROOT))))
     files = sorted(args.probe.glob('pose-*.json'))
@@ -61,11 +62,15 @@ def generate(args):
         state = json.loads(state_path.read_text())
         if probe['stage']=='B' and state.get('shape_profile')!=FITTED_B_PROFILE:
             raise ValueError('B requires its continuous forefoot/toe envelope and the 15 mm / +5 mm cuff bulge')
+        if not current_shape_qualified(probe['stage'],state):
+            raise ValueError('C--E require the current skin-section fit, gravity preparation and cuff bulge')
         p=state['pattern'];condition=(p['pitch_deg'],p['roll_deg'],'A' if probe['stage']=='held-A' else probe['stage'])
         if status_path.exists() and not args.retry:
             cached=json.loads(status_path.read_text())
             if probe['stage']=='B' and not known.get(condition) and cached.get('shape_profile')!=FITTED_B_PROFILE:
                 raise ValueError('Cached B route search predates the fitted shape; choose a new output or --retry')
+            if not current_shape_qualified(probe['stage'],cached):
+                raise ValueError('Cached C--E route search uses the previous circumference; choose a new output or --retry')
             if cached.get('state_sha256') and cached['state_sha256']!=file_sha256(state_path):
                 raise ValueError('Cached route search uses a different cloth shape')
             continue
