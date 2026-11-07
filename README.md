@@ -765,7 +765,15 @@ gravity_nm = reference.predict(q18)  # N×18のrad/m入力 → N×14の腕重力
 既存12経路・6,607姿勢の結果は `artifacts/gravity-calibration-v1/simulation-routes/` の
 `gravity_arm.csv` と列順を明記した `metadata.json` に出力します。
 この14列の重力成分は、従来の18列 `torque.csv` と区別してください。
-元のShareSet学習データ・画像・トルク記録は保持し、学習対象の自動切り替えは行っていません。
+重力基準モデル作成時は元のShareSet学習データ・画像・トルク記録を保持し、学習対象は切り替えませんでした。
+現在の `reaching_head_simulation.yaml` と `reaching_simulation.yaml` は
+`dataset.torque.source: recorded_drive_plus_calibrated_gravity` を指定し、読み込み時に
+元の駆動力の腕14列へ同じ姿勢の較正済み重力を加算します。グリッパー4列と元CSVは保持します。
+平滑化・間引き・train正規化は加算後の値に対して行い、入力と次時刻の教師信号の両方に反映します。
+`gravity_root` は `dataset.root` 基準、較正モデルは `gravity_model_sha256` で固定します。
+重力が有効な記録、列順・件数や角度/駆動力/時刻のハッシュが一致しない参照は拒否します。
+旧モデルの正規化や重みは更新されないため、補正後の学習は別の出力先で実行します。
+この補正は重力無効の運動記録への解析的な荷重加算で、摩擦・布反力の較正や、重力下での動的な再収集は含みません。
 
 ### 最新版Bの把持軌道探索
 

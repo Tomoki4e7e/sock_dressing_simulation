@@ -37,8 +37,14 @@ def main():
     ap.add_argument('--render-episode',type=Path)
     ap.add_argument('--render-output',type=Path)
     ap.add_argument('--render-frames',nargs='+',type=int)
+    ap.add_argument('--policy-model-dir',type=Path)
+    ap.add_argument('--policy-checkpoint',type=Path)
+    ap.add_argument('--policy-episode',type=Path)
+    ap.add_argument('--policy-steps',type=int,default=260)
     # Parse the optional shape before loading the selected configuration.
     a=ap.parse_args();a.output=a.output.resolve()
+    if a.policy_model_dir and (not a.policy_checkpoint or not a.policy_episode or not a.head_cameras or not a.lighting_profile or not a.trajectory or a.replay or a.render_episode):
+        ap.error('Policy video requires checkpoint, episode, head cameras, lighting and trajectory, without replay/render-episode')
     if (a.lighting_profile or a.lighting_probe or a.render_episode) and not a.head_cameras:
         ap.error('Lighting and recorded-state rendering require --head-cameras')
     if a.render_episode and (not a.lighting_profile or a.replay or a.collect_episode):
@@ -146,6 +152,11 @@ def main():
                 if not result['passed'] or not a.lighting_profile:raise ValueError('Validated initial scene and a lighting profile required')
                 from sock_dressing_simulation.lit_recording import render_recorded_episode
                 result['lit_render']=render_recorded_episode(env,mapping,a.render_episode,a.render_output or (a.output/'rendered'),expected_cloth,a.render_frames)
+            if a.policy_model_dir:
+                if not result['passed']:raise ValueError('Validated initial scene required for policy inference')
+                from sock_dressing_simulation.reaching_policy_video import run_policy_video
+                result['policy_video']=run_policy_video(env,mapping,a.policy_episode.resolve(),a.policy_model_dir.resolve(),
+                    a.policy_checkpoint.resolve(),a.output/'policy-video',a.policy_steps)
         if a.replay:
             if not result['passed']:raise ValueError('Native initial configuration failed; trajectory will not be replayed')
             if saved.get('close_after_reach'):
