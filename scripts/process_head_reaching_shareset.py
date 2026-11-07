@@ -25,6 +25,8 @@ def calibrate(args,model):
     target=args.output/'data/data_sock_reaching_v1/train/depth.json'
     if target.exists():
         result=json.loads(target.read_text())
+        if result.get('lighting_profile'):
+            raise ValueError('Lighting-corrected data require process_lit_reaching.py and its visible-shape QA')
         if result.get('camera_profile')!=PROFILE or result['checkpoint_sha256']!=digest(args.depth_checkpoint):
             raise ValueError('Depth calibration belongs to another camera/checkpoint')
         if result.get('calibration_version')!='full-training-frames-v3':
@@ -36,6 +38,8 @@ def calibrate(args,model):
     for metadata_path in episodes:
         episode=metadata_path.parent
         meta=json.loads((episode/'metadata.json').read_text())
+        if meta.get('lighting_profile'):
+            raise ValueError('Lighting-corrected data require finish_lit_reaching_dataset.py')
         number=meta['workbook_pattern']['number']
         if number not in (10,13,25,38):raise ValueError('Unexpected calibration condition')
         if not meta.get('raw_validation_passed') or meta.get('camera_profile')!=PROFILE:raise ValueError('Head calibration training episode is not ready')

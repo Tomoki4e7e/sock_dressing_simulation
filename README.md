@@ -591,11 +591,13 @@ python scripts/package_corrected_reaching_collection.py
 採用済みの実測CSVは `artifacts/diverse-left-reaching/corrected-collection/demonstrations.zip`、
 対応表は同じフォルダの `manifest.json` と `manifest.csv` です。現在はAの既存12軌道を収録しています。
 
-### 既存12経路のShareSet同期収集（頭部左右カメラ）
+### 既存12経路のShareSet同期収集（照明補正前の記録）
 
 採用元は `artifacts/diverse-left-reaching/corrected-collection/manifest.json` のAの12経路です。
-元の軌道・実測CSV・形状は変更しません。現行出力は `artifacts/reaching-shareset-head-v2/`、
-従来パス `artifacts/reaching-shareset-v1/` は、全12経路の検査を終えた現行出力へのリンクです。
+元の軌道・実測CSV・形状は変更しません。初回の頭部データは `artifacts/reaching-shareset-head-v2/` に保持します。
+現行の照明補正版は `artifacts/reaching-shareset-lit-v3/`、従来パス `artifacts/reaching-shareset-v1/` は
+全12経路の検査を終えた補正版へのリンクです。補正版の生成手順は次節「頭部画像の照明・深度マスクの修正」を参照してください。
+以下は初回の同期収集の仕様と履歴です。
 
 ```bash
 OPENBLAS_NUM_THREADS=1 MPLCONFIGDIR=/tmp/sock-collection-mpl \
@@ -674,6 +676,96 @@ ShareSetの頭部用設定は `../ShareSet/share_folder/configs/reaching_head_si
 対象は固定布への接近・幾何学的閉鎖です。`reaching_learning_ready` はこの範囲のデータ品質を示し、
 `learning_ready` と `dynamic_grasp_validated` はfalseのままです。
 1 epochの学習確認は動作成功率の検証を含みません。
+
+### 頭部画像の照明・深度マスクの修正
+
+照明補正版は `artifacts/reaching-shareset-lit-v3/` に作成します。
+12経路・全6,607フレームの保存データ検査とShareSetの代表・全12経路の各1 epochの学習確認に合格しています。
+可視布とのIoUは平均0.890→0.959、最小0.259→0.933です。実機例と修正前後は
+[比較レポート](artifacts/reaching-shareset-lit-v3/report.html)で確認できます。
+靴下の表裏が同じ頂点を使う描画メッシュでは法線が打ち消され、布が黒く描画されていました。
+`unity/RuntimeExtensions/SockLearningLighting.cs` は描画用の表裏頂点を分離して法線を復元します。
+物理粒子・布の三角形の位置・保存形状は変えません。
+`balanced` 設定は環境光0.20、主光0.65・回転[55,180,0]、影の強さ0.25、
+左右の補助光0.25・回転[40,90,0]/[40,270,0]です。開発プレイヤーは従来版とは別に保存します。
+
+```bash
+bash scripts/build_lighting_player.sh
+/usr/bin/python3 scripts/render_lit_reaching_dataset.py --workers 6
+/usr/bin/python3 scripts/finish_lit_reaching_dataset.py --workers 6
+/usr/bin/python3 scripts/finalize_lit_reaching_dataset.py
+```
+
+描画と前処理は別プロセスで同時実行できます。描画は旧頭部データの10Hz実測姿勢を配置する処理で、
+新たな力・接触計測ではありません。Unityの関節座標を描画へ同期する1µsの処理を使い、
+姿勢のずれを防ぐため画像配置中のロボット衝突判定を停止します。途中再開した画像については
+各 `camera_poses.jsonl` に衝突判定停止の有無を記録します（旧記録で欄がない場合は有効）。
+全フレームで元の関節座標・頭部カメラ姿勢・固定布の位置との誤差を検査し、
+`angle.csv`・`torque.csv`・`external_torque.csv`・`frames.csv`・50Hzログは元ファイルと同じ内容を保持します。
+
+学習マスクは補正版RGBに対するSAM2出力です。布と足の投影支持率を各0.95以上、
+独立した可視布ID描画とのIoUを0.90以上として全フレームを検査します。
+ID描画は `qa/visible_sock/` に検査専用で保存し、学習入力や正解マスクへの置換には使いません。
+追跡が外れた場合は現在画像から再初期化し、必要なら内部1024のSAM2で再推定します。
+深度較正は補正版のtrain全4,542画像だけで固定し、validation/testは較正に使いません。
+
+最終処理は保存された全画像の独立検査と代表・全12経路のShareSet学習確認を必須とし、
+合格後に従来パスとShareSetの両設定を補正版へ切り替えます。
+`expected_lighting_profile: balanced` が照明修正前データの混入を防ぎます。
+修正前の頭部データは `reaching-shareset-head-v2/` のまま保持し、各新episodeの
+`confirmation/previous_head_data/` から参照できます。元の俯瞰画像も同じく保持します。
+`report.html` には指定tarから抽出した実機例と同じ記録姿勢での修正前後を並べます。
+IoUはシミュレーション内の可視形状との一致率であり、実機との形状一致率ではありません。
+
+### 実機アーカイブから作成した重力負荷の基準モデル
+
+重力だけの基準モデルは `artifacts/gravity-calibration-v1/gravity-model.json` と
+`calibrated_gravity.urdf` に保存しています。
+[較正・検証レポート](artifacts/gravity-calibration-v1/report.html)には抽出画像、関節別誤差、
+実機と同じ角度列で計算した重力負荷、Unityでの検証をまとめています。
+指定tarの靴下11経路から、両グリッパーが開いて布から離れた終端の低速区間135フレームを抽出しました。
+画像上の離隔を確認していますが、独立した力センサーによる無接触証明ではありません。
+元の9 train経路114フレームでモデル選択・較正し、2 test経路21フレームを評価専用に保持します。
+
+```bash
+/usr/bin/python3 scripts/calibrate_gravity_reference.py
+bash scripts/build_gravity_player.sh
+bash scripts/run_gravity_reference.sh
+/usr/bin/python3 scripts/export_gravity_reference.py
+MPLCONFIGDIR=/tmp/sock-gravity-mpl /usr/bin/python3 scripts/report_gravity_reference.py
+```
+
+アーカイブの `torque.csv` は `ToroboState.link_effort`、`external_torque.csv` は
+`external_effort` の記録です。`gravity_effort` 自体は保存されていないため、
+低速区間の `link_effort - external_effort` を制御器の重力成分の推定値として使用しました。
+この推定値に対する較正モデルのテストRMSEは0.0292 Nm、生のlink_effortに対しては1.5015 Nmです。
+生トルクの静止残差は別項に保存し、物理的な重力には加えていません。
+対象は腕14関節であり、グリッパー力の較正・摩擦・慣性テンソル・布の反力は含みません。
+64パラメータに対する回帰行列のランクは28で、質量・重心の個々の値を一意に同定した結果ではありません。
+小さい補正を元URDFへ正則化した重力の基準モデルです。
+
+専用プレイヤー `RegisteredGravityV1` と `StaticGravityReference.configure_unity(env)` は、
+URDFに質量指定のない補助リンクへ残る既定1kgを修正します。質量ゼロのリンクに設定する
+数値計算上の下限は1mgです。重心のROS→Unity座標変換とグリッパー連動軸の直接姿勢同期も検査します。
+重力のみの静止保持として、関節摩擦・剛体抵抗は0、保持用の駆動剛性1e5・駆動減衰5e3を使います。
+SDKの `SetJointDamping` は関節摩擦と剛体抵抗も変えるため、この専用設定では使用しません。
+これは実機サーボの同定値ではありません。
+
+```python
+from sock_dressing_simulation.gravity_reference import StaticGravityReference
+reference = StaticGravityReference("artifacts/gravity-calibration-v1/gravity-model.json")
+gravity_nm = reference.predict(q18)  # N×18のrad/m入力 → N×14の腕重力負荷[Nm]
+# 専用プレイヤー上で、重力のみの静止保持を明示的に設定する場合:
+# reference.configure_unity(env)
+```
+
+135姿勢でのUnity重力計算と解析モデルの最大差は0.000088 Nm以下、
+重力を有効にした静止保持の駆動力との差のRMSEは0.0045 Nm以下です。
+実機CSVの微小な関節上限超過はUnity検証時のみURDF上限へ合わせ、元CSVは保持しています。
+既存12経路・6,607姿勢の結果は `artifacts/gravity-calibration-v1/simulation-routes/` の
+`gravity_arm.csv` と列順を明記した `metadata.json` に出力します。
+この14列の重力成分は、従来の18列 `torque.csv` と区別してください。
+元のShareSet学習データ・画像・トルク記録は保持し、学習対象の自動切り替えは行っていません。
 
 ### 最新版Bの把持軌道探索
 

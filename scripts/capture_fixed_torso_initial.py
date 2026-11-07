@@ -32,8 +32,19 @@ def main():
     ap.add_argument('--state',type=Path,help='Explicit frozen cloth state for an initial-configuration capture')
     ap.add_argument('--collect-episode',type=Path,help='New synchronized RGB/effort episode (controlled closure routes only)')
     ap.add_argument('--head-cameras', action='store_true', help='Use the two physical See3CAM frames for the learning streams')
+    ap.add_argument('--lighting-profile', choices=['baseline','normals_only','head_fill','balanced','balanced_shadow_off','bright_fill'])
+    ap.add_argument('--lighting-probe',action='store_true')
+    ap.add_argument('--render-episode',type=Path)
+    ap.add_argument('--render-output',type=Path)
+    ap.add_argument('--render-frames',nargs='+',type=int)
     # Parse the optional shape before loading the selected configuration.
     a=ap.parse_args();a.output=a.output.resolve()
+    if (a.lighting_profile or a.lighting_probe or a.render_episode) and not a.head_cameras:
+        ap.error('Lighting and recorded-state rendering require --head-cameras')
+    if a.render_episode and (not a.lighting_profile or a.replay or a.collect_episode):
+        ap.error('--render-episode requires --lighting-profile and cannot accompany replay/collection')
+    if (a.render_output or a.render_frames is not None) and not a.render_episode:
+        ap.error('--render-output/--render-frames require --render-episode')
     if a.state and (a.trajectory or not a.initial_configuration):ap.error('--state requires --initial-configuration and cannot accompany --trajectory')
     if a.replay and not a.trajectory:ap.error('--replay requires --trajectory')
     if a.collect_episode and not a.replay:ap.error('--collect-episode requires --replay')
@@ -123,8 +134,18 @@ def main():
         if a.head_cameras:
             from sock_dressing_simulation.head_cameras import create_head_cameras, preview_head_cameras
             create_head_cameras(env)
+            if a.lighting_probe:
+                from sock_dressing_simulation.learning_lighting import probe_lighting
+                result['lighting_probe']=probe_lighting(env,out/'lighting-probe',float(config['camera']['fov']))
+            if a.lighting_profile:
+                from sock_dressing_simulation.learning_lighting import apply_lighting
+                result['learning_lighting']=apply_lighting(env,a.lighting_profile)
             result['head_cameras'] = preview_head_cameras(env, out, float(config['camera']['fov']))
             write(out/'result.json', result)
+            if a.render_episode:
+                if not result['passed'] or not a.lighting_profile:raise ValueError('Validated initial scene and a lighting profile required')
+                from sock_dressing_simulation.lit_recording import render_recorded_episode
+                result['lit_render']=render_recorded_episode(env,mapping,a.render_episode,a.render_output or (a.output/'rendered'),expected_cloth,a.render_frames)
         if a.replay:
             if not result['passed']:raise ValueError('Native initial configuration failed; trajectory will not be replayed')
             if saved.get('close_after_reach'):
