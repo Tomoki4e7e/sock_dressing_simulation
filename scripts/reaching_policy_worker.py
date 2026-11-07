@@ -21,25 +21,31 @@ from sock_dressing_simulation.head_camera_profile import head_references
 from sock_dressing_simulation.lit_perception import initialize_lit
 from process_reaching_shareset import load_sam, load_depth
 from process_head_reaching_shareset import masks_from, inspect_masks
+from sock_dressing_simulation.inference_device import select_inference_device
 
 
 def main():
     ap = argparse.ArgumentParser();ap.add_argument('--model-dir', type=Path, required=True)
     ap.add_argument('--checkpoint', type=Path, required=True);ap.add_argument('--episode', type=Path, required=True)
-    ap.add_argument('--device', default='cpu');a = ap.parse_args()
+    ap.add_argument('--device', choices=['auto', 'cpu', 'cuda'], default='auto');a = ap.parse_args()
     torch.set_num_threads(2);torch.set_grad_enabled(False)
     with contextlib.redirect_stdout(sys.stderr):
+        device, device_report = select_inference_device(a.device)
+        print(json.dumps(dict(inference_device=device_report)), flush=True)
         config = json.loads((a.model_dir / 'configuration.json').read_text())
         stats = json.loads((a.model_dir / 'data.json').read_text());lower = np.array(stats['joint_min']);upper = np.array(stats['joint_max'])
-        model, epoch = load_model(config, a.checkpoint, torch.device(a.device))
+        model, epoch = load_model(config, a.checkpoint, device)
         # Use the same SAM2 and depth model/configuration as the corrected data.
-        sam = load_sam(Path('/home/cm-pc/catkin_ws/src/SegmentAnythingModel2/checkpoints/sam2_hiera_small.pt'), 512)
-        depth = load_depth(Path('/home/cm-pc/catkin_ws/src/DepthAnythingModel-V2/checkpoints/depth_anything_v2_vits.pth'))
+        sam = load_sam(Path('/home/cm-pc/catkin_ws/src/SegmentAnythingModel2/checkpoints/sam2_hiera_small.pt'), 512, device=device)
+        depth = load_depth(Path('/home/cm-pc/catkin_ws/src/DepthAnythingModel-V2/checkpoints/depth_anything_v2_vits.pth'), device=device)
+        model_devices = dict(samdam=str(next(model.parameters()).device), sam2=str(next(sam.parameters()).device),
+                             depth_anything=str(next(depth.parameters()).device))
         calibration = json.loads((Path(config['dataset']['root']) / config['dataset']['name'] / 'train/depth.json').read_text())
         gravity = StaticGravityReference(Path(stats['torque_processing']['gravity_root']).parent / 'gravity-model.json')
         meta = json.loads((a.episode / 'metadata.json').read_text());refs = head_references(meta, ROOT)
     state = None;initialized = False
-    print(json.dumps(dict(ready=True, epoch=epoch)), flush=True)
+    print(json.dumps(dict(ready=True, epoch=epoch, device=str(device), device_selection=device_report,
+                          model_devices=model_devices)), flush=True)
     for line in sys.stdin:
         request = json.loads(line)
         if request.get('quit'):break
@@ -62,7 +68,7 @@ def main():
             for kind in ('sock', 'foot'):
                 image = Image.fromarray(np.where(masks[kind], encoded, 0).astype('uint8'))
                 arrays.append(np.array(image.filter(ImageFilter.GaussianBlur(15)).resize((64, 64)), dtype='float32')[None] / 255.)
-            inputs = [torch.from_numpy(v[None]).to(a.device) for v in arrays]
+            inputs = [torch.from_numpy(v[None]).to(device) for v in arrays]
             image, prediction, _, _, state, _ = model(*inputs, state)
             prediction = prediction[0].cpu().numpy()
             index = request['index'];blend = 0.

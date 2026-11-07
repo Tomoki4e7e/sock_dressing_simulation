@@ -15,16 +15,16 @@ def write(path, value):
     temp = path.with_suffix('.tmp');temp.write_text(json.dumps(value, indent=2) + '\n');temp.replace(path)
 
 
-def generate(run, epoch, live_steps=260):
+def generate(run, epoch, live_steps=260, device='auto', output=None):
     model = run / 'model';checkpoint = model / f'SARNN_{epoch}.pth'
-    out = run / f'inference-epoch-{epoch}';out.mkdir(exist_ok=True)
+    out = Path(output) if output else run / f'inference-epoch-{epoch}';out.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, OPENBLAS_NUM_THREADS='1', OMP_NUM_THREADS='2', MKL_NUM_THREADS='2',
                MPLCONFIGDIR='/tmp/samdam-gravity-mpl', PYTHONUNBUFFERED='1')
     offline = out / 'offline'
     if not (offline / 'report.json').exists():
         with (out / 'offline.log').open('w') as log:
             subprocess.run(['/usr/bin/python3', str(ROOT / 'scripts/video_reaching_inference.py'), '--model-dir', str(model),
-                '--checkpoint', str(checkpoint), '--output', str(offline)], env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
+                '--checkpoint', str(checkpoint), '--output', str(offline), '--device', device], env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
     config = json.loads((model / 'configuration.json').read_text())
     data = config['dataset'];episodes = sorted((Path(data['root']) / data['name'] / 'test').glob('*/metadata.json'))
     records = []
@@ -43,10 +43,13 @@ def generate(run, epoch, live_steps=260):
                 subprocess.run(['/tmp/sock-diversity-venv/bin/python', str(ROOT / 'scripts/capture_fixed_torso_initial.py'),
                     '--trajectory', str(ROOT / meta['trajectory']), '--output', str(destination), '--head-cameras',
                     '--lighting-profile', 'balanced', '--policy-model-dir', str(model), '--policy-checkpoint', str(checkpoint),
-                    '--policy-episode', str(episode), '--policy-steps', str(requested_steps), '--port', str(19300 + i * 10)],
+                    '--policy-episode', str(episode), '--policy-steps', str(requested_steps), '--policy-device', device,
+                    '--port', str(20300 + i * 10)],
                     cwd=ROOT, env=settings, stdout=log, stderr=subprocess.STDOUT, check=True)
         records.append(json.loads(report.read_text()))
-    result = dict(completed=True, epoch=epoch, offline_report=str(offline / 'report.json'), simulator=records,
+    result = dict(completed=True, epoch=epoch, requested_device=device,
+                  offline_device=json.loads((offline / 'report.json').read_text()).get('device'),
+                  offline_report=str(offline / 'report.json'), simulator=records,
                   intermediate=epoch != config['hyperparameters']['num_epochs'])
     videos = []
     offline_rows = json.loads((offline / 'report.json').read_text())['rows']
@@ -67,8 +70,11 @@ def generate(run, epoch, live_steps=260):
 def main():
     ap = argparse.ArgumentParser();ap.add_argument('--run-dir', type=Path, required=True)
     ap.add_argument('--epoch', type=int);ap.add_argument('--live-steps', type=int, default=260)
+    ap.add_argument('--device',choices=['auto','cpu','cuda'],default='auto')
+    ap.add_argument('--output',type=Path,help='Separate video output directory; requires --epoch')
     a = ap.parse_args();run = a.run_dir.resolve()
-    if a.epoch:generate(run, a.epoch, a.live_steps);return
+    if a.output and not a.epoch:ap.error('--output requires --epoch')
+    if a.epoch:generate(run, a.epoch, a.live_steps, a.device, a.output.resolve() if a.output else None);return
     status = run / 'video-pipeline.json';completed = [];started = time.time()
     while True:
         progress_path = run / 'model/progress.json'
@@ -81,7 +87,7 @@ def main():
             if epoch in completed:continue
             write(status, dict(completed=False, active_epoch=epoch, training_epoch=progress.get('epoch'), videos_completed=completed))
             try:
-                generate(run, epoch, a.live_steps);completed.append(epoch)
+                generate(run, epoch, a.live_steps, a.device);completed.append(epoch)
             except Exception as error:
                 write(status, dict(completed=False, failed=True, error=repr(error), active_epoch=epoch, videos_completed=completed))
                 raise

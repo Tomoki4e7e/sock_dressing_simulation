@@ -41,6 +41,7 @@ def main():
     ap.add_argument('--policy-checkpoint',type=Path)
     ap.add_argument('--policy-episode',type=Path)
     ap.add_argument('--policy-steps',type=int,default=260)
+    ap.add_argument('--policy-device',choices=['auto','cpu','cuda'],default='auto')
     # Parse the optional shape before loading the selected configuration.
     a=ap.parse_args();a.output=a.output.resolve()
     if a.policy_model_dir and (not a.policy_checkpoint or not a.policy_episode or not a.head_cameras or not a.lighting_profile or not a.trajectory or a.replay or a.render_episode):
@@ -156,7 +157,7 @@ def main():
                 if not result['passed']:raise ValueError('Validated initial scene required for policy inference')
                 from sock_dressing_simulation.reaching_policy_video import run_policy_video
                 result['policy_video']=run_policy_video(env,mapping,a.policy_episode.resolve(),a.policy_model_dir.resolve(),
-                    a.policy_checkpoint.resolve(),a.output/'policy-video',a.policy_steps)
+                    a.policy_checkpoint.resolve(),a.output/'policy-video',a.policy_steps,a.policy_device)
         if a.replay:
             if not result['passed']:raise ValueError('Native initial configuration failed; trajectory will not be replayed')
             if saved.get('close_after_reach'):

@@ -78,17 +78,17 @@ def prompts(rgb, reference=None):
                                   [int(x), int(y)], [1040, 460], [690, 565]], labels=[1, 1, 1, 1, 0, 0, 0]))
 
 
-def load_depth(checkpoint):
+def load_depth(checkpoint, device='cpu'):
     from depth_anything_v2.dpt import DepthAnythingV2
     model = DepthAnythingV2(encoder='vits', features=64, out_channels=[48, 96, 192, 384])
     model.load_state_dict(torch.load(str(checkpoint), map_location='cpu'))
-    return model.eval()
+    return model.to(device).eval()
 
 
-def load_sam(checkpoint, image_size=512):
+def load_sam(checkpoint, image_size=512, device='cpu'):
     from sam2.build_sam import build_sam2_camera_predictor
     return build_sam2_camera_predictor(str(SHARE / 'sam2_realtime/sam2_configs/sam2_hiera_s.yaml'),
-                                      str(checkpoint), device='cpu', apply_postprocessing=False,
+                                      str(checkpoint), device=str(device), apply_postprocessing=False,
                                       hydra_overrides_extra=[f'++model.image_size={image_size}',
                                                             '++model.non_overlap_masks=true'])
 

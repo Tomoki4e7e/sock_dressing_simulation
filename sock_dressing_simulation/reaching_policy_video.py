@@ -13,25 +13,26 @@ from PIL import Image
 from .head_cameras import capture_head_cameras
 
 
-def run_policy_video(env, mapping, episode, model_dir, checkpoint, output, steps=260):
+def run_policy_video(env, mapping, episode, model_dir, checkpoint, output, steps=260, device='auto'):
     root = Path(__file__).resolve().parents[1];output = Path(output);output.mkdir(parents=True, exist_ok=True)
     episode = Path(episode);model_dir = Path(model_dir);checkpoint = Path(checkpoint)
     worker_log = (output / 'worker.log').open('w')
     worker = subprocess.Popen(['/usr/bin/python3', str(root / 'scripts/reaching_policy_worker.py'),
-        '--model-dir', str(model_dir), '--checkpoint', str(checkpoint), '--episode', str(episode)],
+        '--model-dir', str(model_dir), '--checkpoint', str(checkpoint), '--episode', str(episode), '--device', device],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=worker_log, text=True, bufsize=1)
     video_path = output / 'closed-loop-robot.mp4'
     encoder = subprocess.Popen(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-y', '-f', 'rawvideo',
         '-pix_fmt', 'rgb24', '-s', '1600x900', '-r', '5', '-i', '-', '-an', '-c:v', 'libx264',
         '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', str(video_path)], stdin=subprocess.PIPE)
-    frames = 0;trace = [];started = time.monotonic();failure = None
+    frames = 0;trace = [];started = time.monotonic();failure = None;worker_info = {}
     angular = list(mapping.revolute_action_indices)
     def label(image, text, point, size=.65):
         cv2.putText(image, text, point, cv2.FONT_HERSHEY_SIMPLEX, size, (230, 235, 245), 1, cv2.LINE_AA)
     try:
         ready = worker.stdout.readline()
         if not ready:raise RuntimeError('ML worker failed to initialize; see worker.log')
-        epoch = json.loads(ready)['epoch']
+        worker_info = json.loads(ready);epoch = worker_info['epoch']
+        (output / 'device.json').write_text(json.dumps(worker_info, indent=2) + '\n')
         full = np.array(env.robot.data['joint_positions'], dtype=float)
         fixed = full[mapping.fixed_simulator_indices].copy()
         # This player records drive efforts without gravity, as in the source
@@ -65,7 +66,7 @@ def run_policy_video(env, mapping, episode, model_dir, checkpoint, output, steps
             actual = mapping.from_simulator(env.robot.data['joint_positions'])
             if not np.isfinite(actual).all():raise RuntimeError('Non-finite simulator feedback')
             canvas = np.full((900, 1600, 3), (19, 26, 38), dtype='uint8')
-            label(canvas, f'Closed-loop simulated robot | epoch {epoch} | {episode.name}', (20, 30), .7)
+            label(canvas, f'Closed-loop robot | {worker_info.get("device", "unknown")} | epoch {epoch} | {episode.name}', (20, 30), .7)
             label(canvas, f't={step * .2:.1f}s | live RGB + SAM2/depth + measured joints -> model -> motors', (20, 60), .6)
             canvas[110:710, :800] = cv2.resize(views['right'], (800, 600))
             canvas[110:710, 800:] = cv2.resize(overview, (800, 600))
@@ -82,7 +83,7 @@ def run_policy_video(env, mapping, episode, model_dir, checkpoint, output, steps
                               executed_command=command.tolist(), feedback_angle=actual.tolist(), command_limited_max=limited))
             (output / 'progress.json').write_text(json.dumps(dict(step=step + 1, steps=steps, elapsed_s=time.monotonic() - started)) + '\n')
             print('LIVE POLICY', step + 1, '/', steps, flush=True)
-    except Exception as error:
+    except BaseException as error:
         failure = repr(error)
         raise
     finally:
@@ -94,7 +95,9 @@ def run_policy_video(env, mapping, episode, model_dir, checkpoint, output, steps
             except subprocess.TimeoutExpired:worker.terminate();worker.wait(timeout=10)
         worker_log.close();encoder.stdin.close();returncode = encoder.wait()
         (output / 'motion-trace.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in trace))
-        report = dict(completed=failure is None and returncode == 0, failure=failure, frames=frames, fps=5,
+        report = dict(completed=failure is None and returncode == 0 and frames == steps, failure=failure, frames=frames, fps=5,
+                      device=worker_info.get('device'), model_devices=worker_info.get('model_devices'),
+                      device_selection=worker_info.get('device_selection'),
                       video=str(video_path), checkpoint=str(checkpoint), checkpoint_sha256=hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
                       live_observations=True, teacher_trajectory_used=False, motor_execution=True,
                       scene_scope='Frozen cloth; no cloth retention or pull-up success validation',

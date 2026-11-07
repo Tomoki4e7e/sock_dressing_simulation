@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT.parent / 'ShareSet/share_folder/src'), str(ROOT)]
 from data.reaching import ReachingEpisodes, read_signals
 from models.SAMDAMSARNN import SAMDAMSARNN
+from sock_dressing_simulation.inference_device import select_inference_device
 
 
 def load_model(config, checkpoint, device):
@@ -79,13 +80,15 @@ def main():
     ap.add_argument('--model-dir', type=Path, required=True)
     ap.add_argument('--checkpoint', type=Path)
     ap.add_argument('--output', type=Path, required=True)
-    ap.add_argument('--device', default='cpu')
+    ap.add_argument('--device', choices=['auto', 'cpu', 'cuda'], default='auto')
     a = ap.parse_args();torch.set_num_threads(2);a.output.mkdir(parents=True, exist_ok=True)
     config = json.loads((a.model_dir / 'configuration.json').read_text());h = config['hyperparameters'];ds = config['dataset']
     stats = json.loads((a.model_dir / 'data.json').read_text())
     lower, upper = np.array(stats['joint_min']), np.array(stats['joint_max'])
     checkpoint = a.checkpoint or a.model_dir / 'SARNN_latest.pth'
-    model, epoch = load_model(config, checkpoint, torch.device(a.device))
+    device, device_report = select_inference_device(a.device, minimum_free_mib=512)
+    print(json.dumps(dict(inference_device=device_report)), flush=True)
+    model, epoch = load_model(config, checkpoint, device)
     manifest = yaml.safe_load(Path(ds['manifest']).read_text())[ds['name']]
     settings = dict(img_size=64, smooth_torque=h['smooth_torque'], skip_num=h['skip_num'], vmin=h['vmin'], vmax=h['vmax'],
                     torque=stats['torque_processing'], expected_camera_profile=ds.get('expected_camera_profile'),
@@ -98,7 +101,7 @@ def main():
         length = len(row['joint']);state = None;predictions = [];images = []
         with torch.inference_mode():
             for t in range(length - 1):
-                inputs = [row[k][None, t].to(a.device) for k in ('rgb', 'joint', 'sock', 'foot')]
+                inputs = [row[k][None, t].to(device) for k in ('rgb', 'joint', 'sock', 'foot')]
                 image, pred, _, _, state, _ = model(*inputs, state)
                 predictions.append(pred[0].cpu().numpy())
                 images.append(np.clip(image[0].cpu().numpy().transpose(1, 2, 0) * 255, 0, 255).astype('uint8'))
@@ -110,7 +113,7 @@ def main():
         writer = MP4(destination / 'offline-prediction.mp4', (1600, 900), 10 / h['skip_num'])
         for t, predicted in enumerate(images):
             canvas = np.full((900, 1600, 3), (19, 26, 38), dtype='uint8')
-            text(canvas, f'Observed-input offline inference | epoch {epoch} | {name}', (20, 30), .7)
+            text(canvas, f'Observed-input offline inference | {device} | epoch {epoch} | {name}', (20, 30), .7)
             text(canvas, f'target t={(t + 1) * .1 * h["skip_num"]:.1f}s | inputs observed at every step; no autonomous control', (20, 60), .55)
             frame = window['start'] + t * h['skip_num']
             for x, source, label in ((0, path / 'camera_right' / f'{frame}.png', 'Observed input t'),
@@ -130,7 +133,8 @@ def main():
                        torque_rmse_Nm=float(np.sqrt(np.mean((prediction[:, 18:25] - truth[:, 18:25]) ** 2))))
         summaries.append(metrics);print(json.dumps(metrics), flush=True)
     report = dict(completed=True, checkpoint=str(checkpoint), checkpoint_sha256=hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
-                  epoch=epoch, rows=summaries, scope='Held-out one-step predictions with observed state/images at each step; not closed-loop robot control')
+                  epoch=epoch, device=str(device), device_selection=device_report, rows=summaries,
+                  scope='Held-out one-step predictions with observed state/images at each step; not closed-loop robot control')
     (a.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
 
 
