@@ -1,0 +1,4 @@
+# Static open-hand inspection; these are initial screening parameters.
+half_extent_m: 0.004         # TCP-centered 8 x 8 mm finite pad window
+minimum_area_m2: 0.000004   # at least one full 2 x 2 mm supported grid cell
+edge_clearance_m: 0.0005    # cloth to each facing finger surface along closing axis

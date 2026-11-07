@@ -155,10 +155,10 @@ scenario:
     ik_index: 2
     position: [0.0, 0.49, 0.24]
     rotation: [0.0, 0.0, 0.0]
-  # ShareSet/airec_joy_controller/scripts/change_pose.py command `ka`.
+  # ShareSet/airec_joy_controller/scripts/change_pose.py command `na` (apron).
   # Arms are radians; grippers remain metres under the 18-D action contract.
-  initial_joints_source: shareset-change_pose/ka
-  initial_joints: [0.6108652382, -1.4835298642, -1.0471975512, 2.35619, 2.6179938780, 0.4363323130, 0.4014257280, 0.0, 0.0, 0.6108652382, -1.4835298642, -1.0471975512, 2.35619, 2.6179938780, 0.4363323130, 0.4014257280, 0.0, 0.0]
+  initial_joints_source: shareset-change_pose/na
+  initial_joints: [0.8203047484373349, 0.0, -0.0471238898038469, 2.2863813201125716, 0.017453292519943295, 0.017453292519943295, 0.3490658503988659, 0.0, 0.0, 0.8203047484373349, 0.0, -0.0471238898038469, 2.2863813201125716, 0.017453292519943295, 0.017453292519943295, 0.3490658503988659, 0.0, 0.0]
   randomization:
     enabled: false
     calibration_file: artifacts/phase1/randomization_calibration.json

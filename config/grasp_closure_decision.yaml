@@ -1,0 +1,7 @@
+# Provisional post-processing criteria, not validated physical grasp success.
+bilateral_fraction: 0.8
+target_in_pad_fraction: 0.8
+local_pad_geometry_fraction: 0.8
+target_drift_m: 0.003
+contact_support_tangent_drift_m: 0.003
+end_band_speed_m_s: 0.05

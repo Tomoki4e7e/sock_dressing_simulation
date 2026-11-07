@@ -26,7 +26,7 @@ def main():
     args=parser.parse_args()
     if args.steps<100:parser.error('At least 100 steps required')
     out=args.output.resolve();out.mkdir(parents=True,exist_ok=True)
-    config=load_config(ROOT/'config/pose_patterns.yaml')
+    config=load_config(ROOT/'config/pose_patterns_legacy_drape.yaml')
     config['pose_pattern']['gravity_drape']['enabled']=False
     config['rcareworld'].update(port=args.port,graphics=not args.headless)
     config['assets']['output_dir']=str(out/'assets')

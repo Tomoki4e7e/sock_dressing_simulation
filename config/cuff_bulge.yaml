@@ -1,0 +1,7 @@
+# Frozen initial geometry, using the same material-depth convention as the
+# 30 mm grasp band. Outside the band the original geometry stays unchanged.
+band_width_m: 0.030
+center_m: 0.015
+peak_radius_increment_m: 0.005
+refinement_depths_m: [0.0075, 0.015, 0.0225, 0.030]
+profile: sine_squared

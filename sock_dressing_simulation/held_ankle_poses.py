@@ -121,7 +121,7 @@ def audit_actual_skin(points, skin, edges, triangles):
     return body, surface
 
 
-def initialize_held_ankle_pattern(environment, pattern, held_reference, signs=None, gravity_drape=None):
+def initialize_held_ankle_pattern(environment, pattern, held_reference, signs=None, gravity_drape=None, toe_contact=None):
     from .circumference_fit import current_pose_hull
     from .config import resolve_package_path
     attr = environment.sock_cloth
@@ -129,6 +129,8 @@ def initialize_held_ankle_pattern(environment, pattern, held_reference, signs=No
         raise RuntimeError('Initialize the held reference before a contact rollout')
     reference = load_reference(resolve_package_path(held_reference))
     signs = signs or dict(shift=1, diagonal=1, roll=1)
+    if attr.data.get('sock_toe_contact', {}).get('active'):
+        attr._send_data('EndSockToeContact');environment._env.step(simulate=False)
     attr.set_pattern_held(False)
     attr.set_pattern_foot_pose(pattern.pitch_deg, signs['roll']*pattern.roll_deg)
     environment._env.step(simulate=False)
@@ -194,7 +196,10 @@ def initialize_held_ankle_pattern(environment, pattern, held_reference, signs=No
         clearance_m=0., clearance_mode='preserve_saved_held_shape',
         maximum_readback_error_m=error, native_pose=pose, measured_pitch_deg=measured_pitch,
         native_hold=copy.deepcopy(attr.data['sock_pattern_hold']), physical_settling_validated=False)
-    if gravity_drape and gravity_drape.get('enabled', True):
+    if toe_contact and toe_contact.get('enabled', True):
+        from .toe_contact import apply_toe_contact
+        report = apply_toe_contact(environment, reference, source, report, toe_contact)
+    elif gravity_drape and gravity_drape.get('enabled', True):
         report = apply_gravity_drape(environment, reference, source, report, gravity_drape)
     environment._preinsert_observation_pending = True
     environment._pose_pattern_report = report; environment._pose_pattern_source = source

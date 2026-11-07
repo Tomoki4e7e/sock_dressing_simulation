@@ -18,7 +18,7 @@ def validate_pattern_config(config):
     settings = config.get('pose_pattern')
     if not settings:
         return
-    if not isinstance(settings, dict) or set(settings)-{'workbook', 'number', 'amplitude_m', 'above_heel_m', 'signs', 'seed', 'held_reference', 'gravity_drape'}:
+    if not isinstance(settings, dict) or set(settings)-{'workbook', 'number', 'amplitude_m', 'above_heel_m', 'signs', 'seed', 'held_reference', 'gravity_drape', 'toe_contact'}:
         raise ValueError('Unknown pose_pattern settings')
     if config.get('circumference_fit') or config.get('preinsert'):
         raise ValueError('pose_pattern requires preinsert: null and no circumference_fit')
@@ -29,6 +29,19 @@ def validate_pattern_config(config):
     if 'held_reference' in settings and (not isinstance(settings['held_reference'], str) or not settings['held_reference'].strip()):
         raise ValueError('held_reference must name a saved held-A directory')
     drape = settings.get('gravity_drape')
+    toe = settings.get('toe_contact')
+    if toe:
+        if not isinstance(toe,dict) or set(toe)-{'enabled','band_width_m','support_length_m','support_clearance_m','settle_steps','rigid_skin_contact'} or not settings.get('held_reference'):
+            raise ValueError('toe_contact requires a held reference and known settings')
+        if drape and drape.get('enabled',True) and toe.get('enabled',True):
+            raise ValueError('toe_contact and gravity_drape cannot both be enabled')
+        values=[toe.get('band_width_m',.030),toe.get('support_length_m',.015),toe.get('support_clearance_m',.008)]
+        if not np.isfinite(values).all() or not 0<values[0]<=.05 or not 0<values[1]<=.03 or not 0<values[2]<=.015:
+            raise ValueError('Invalid toe_contact support or band dimensions')
+        if type(toe.get('rigid_skin_contact',True)) is not bool:
+            raise ValueError('rigid_skin_contact must be a boolean')
+        if type(toe.get('settle_steps',300)) is not int or not 100<=toe.get('settle_steps',300)<=2000:
+            raise ValueError('toe_contact requires 100–2000 settling steps')
     if drape:
         if not settings.get('held_reference') or not isinstance(drape, dict) or set(drape)-{'enabled', 'pinned_length_m', 'settle_steps'}:
             raise ValueError('gravity_drape requires a held reference and known settings')
@@ -175,7 +188,7 @@ def local_features(pattern, amplitude_m, length_m, depth_m, heel_path_m, seed=17
     return features
 
 
-def _tight_base(source, pattern, clearance_m, above_heel_m, signs, slab_fraction=.65):
+def _tight_base(source, pattern, clearance_m, above_heel_m, signs, slab_fraction=.65, section_surfaces=None):
     """Fit a polygonal sleeve to each skin section, without a global ellipse."""
     from scipy.spatial import ConvexHull
     from .preinsert import _slab_points
@@ -190,7 +203,7 @@ def _tight_base(source, pattern, clearance_m, above_heel_m, signs, slab_fraction
                                             clearance_m=.003, path_offset_m=offset)
     levels = np.unique(np.round(rest[:, 2], 6))
     spacing = float(np.median(np.diff(levels)))*report['axial_initial_scale']
-    surfaces = [(np.asarray(s['vertices']), np.asarray(s['triangles']).reshape(-1, 3)) for s in source['surfaces']]
+    surfaces = [(np.asarray(s['vertices']), np.asarray(s['triangles']).reshape(-1, 3)) for s in (source['surfaces'] if section_surfaces is None else section_surfaces)]
     frames = []
     for index, z in enumerate(levels):
         ids = np.flatnonzero(np.isclose(rest[:, 2], z, atol=1e-6, rtol=0))
@@ -339,11 +352,11 @@ def generate_pattern(source, pattern, edges, triangles, rest_lengths, *, amplitu
     raise ValueError(f'Pattern {pattern.number}: no nonintersecting tight shape: {attempts}')
 
 
-def initialize_pattern(environment, pattern, *, amplitude_m=.015, above_heel_m=.05, signs=None, seed=1729, held_reference=None, gravity_drape=None):
+def initialize_pattern(environment, pattern, *, amplitude_m=.015, above_heel_m=.05, signs=None, seed=1729, held_reference=None, gravity_drape=None, toe_contact=None):
     """Install an audited shape and hold it explicitly for visual inspection."""
     if held_reference is not None:
         from .held_ankle_poses import initialize_held_ankle_pattern
-        return initialize_held_ankle_pattern(environment, pattern, held_reference, signs, gravity_drape=gravity_drape)
+        return initialize_held_ankle_pattern(environment, pattern, held_reference, signs, gravity_drape=gravity_drape, toe_contact=toe_contact)
     from .circumference_fit import current_pose_hull
     signs = dict(shift=1, diagonal=1, roll=1) if signs is None else signs
     attr = environment.sock_cloth

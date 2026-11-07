@@ -1,0 +1,74 @@
+number: 10
+right_q_rad:
+- 2.6806468666984298
+- -1.1799034721103847
+- -1.9198621771937623
+- 1.8903350322742003
+- 2.792526803190927
+- -0.05033673174720451
+- 0.7886653732464409
+left_q_rad:
+- 2.780306516376282
+- -0.729218637583818
+- -1.8749055460495674
+- 1.4171394772359311
+- 2.792526803190927
+- -1.1208577164662545
+- 1.3962634015954636
+right_q_deg:
+- 153.58975182678822
+- -67.60348918475688
+- -109.99999999999999
+- 108.30821921503794
+- 160.0
+- -2.884082283597001
+- 45.187197335130854
+left_q_deg:
+- 159.29982914108146
+- -41.78115027583272
+- -107.42417477431123
+- 81.19611102699466
+- 160.0
+- -64.22041658818746
+- 80.0
+translation_m:
+- -0.03427486741542815
+- -0.12
+- -0.3
+right_gap_m: 0.04
+left_gap_m: 0.04
+torso_joints_rad:
+  torso/joint_1: -0.7853981633974483
+  torso/joint_2: 1.7453292519943295
+  torso/joint_3: 1.694542409889931e-08
+left_foot_floor_allowance_m: 0.15
+grounded_left_foot_penetration_m: 0.09660183906555175
+minimum_joint_margin_deg: 10.000000000000002
+facing_cuff_required: true
+forearms_down_required: true
+reference_photo: artifacts/sock-pose-pattern/screen_shot 2026-11-05 121319.png
+reference_state: artifacts/bulged-cuff/pose-10/state.json
+initialization: Use scripts/capture_fixed_torso_initial.py --initial-configuration
+  config/photo_reference_initial_pose.yaml. Human, sock, and support move together;
+  torso, head, and base retain the reference posture.
+units:
+  q_rad: radians
+  q_deg: degrees
+  translation_m: Unity world metres (+X is robot left, +Y is up)
+joint_order:
+  right:
+  - right_arm/joint_1
+  - right_arm/joint_2
+  - right_arm/joint_3
+  - right_arm/joint_4
+  - right_arm/joint_5
+  - right_arm/joint_6
+  - right_arm/joint_7
+  left:
+  - left_arm/joint_1
+  - left_arm/joint_2
+  - left_arm/joint_3
+  - left_arm/joint_4
+  - left_arm/joint_5
+  - left_arm/joint_6
+  - left_arm/joint_7

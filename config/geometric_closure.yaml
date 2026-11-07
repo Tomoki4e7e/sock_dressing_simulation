@@ -1,0 +1,16 @@
+# Geometry surrogate only: no friction, force, retention, or cloth response.
+# Reviewed 2026-11-04: freeze 1 mm / 4 mm^2 as the task's geometric
+# inclusion rule. This is not a calibrated physical grasp-success threshold.
+# See config/geometric_closure_review.yaml and the five native photo cases.
+closing_gap_m: 0.001
+body_clearance_m: 0.001
+approach_distance_m: 0.050
+half_extent_m: 0.004
+edge_clearance_m: 0.0001
+material_radius_m: 0.020
+band_width_m: 0.030
+minimum_area_m2: 0.000004
+minimum_area_fraction: 0.05
+minimum_component_area_m2: 0.000004
+minimum_span_m: 0.0005
+topology_tolerance_m: 0.000000001
