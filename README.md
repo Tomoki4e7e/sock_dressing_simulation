@@ -978,3 +978,47 @@ python scripts/report_common_grasp_search.py
 探索入力・判定条件のハッシュ、未採用の初期姿勢候補、合格終点の独立した再検査、
 旧Aの陽性対照、代表姿勢の開き幅診断を記録しています。
 `programs/` は実行コードの控えで、実行には元のプロジェクト構成とモデル資産が必要です。
+
+### 閉鎖しない両グリッパーの布・足接触条件による探索
+
+`scripts/search_contact_pregrasp.py` は、保存済みの全70状態について、左右のグリッパーを
+足の反対側に置く新しい接近課題を探索します。各グリッパーの一方の爪が靴下の
+開口境界から材料座標で15〜30mm内側の表面、もう一方の爪が足の実皮膚に
+表面間距離0〜0.5mmで接し、各グリッパー近傍の開口境界線の長さを持つ区間が
+実際の有限な爪間に入ることを要求します。靴下の全円周を各グリッパーに入れる意味ではありません。
+帯境界を横切る布三角形も切り分けて判定し、開口線には実メッシュの境界辺を使います。
+皮膚の接触対象は足部から下腿までを含む対象脚の実皮膚面全体で、足首で切り分けません。
+
+貫通は許可しません。接触を指定した足側の爪についてのみ、旧課題の皮膚離隔1mmを
+0mmに変更し、他部品の皮膚離隔1mmと登録形状の全身離隔を維持します。
+関節余裕の既定値は5度です。`--joint-margin-deg 0.5` で0.5度にも設定できます。実際のURDF関節範囲は越えません。
+旧課題の閉じ幅1mm・捕捉面積4mm²・閉鎖掃引は、この新課題の合否に使用しません。
+開き幅を合わせる動作は離れた共通初期姿勢で行い、接近中と接近終点では幅を固定します。
+把持確認の閉鎖動作は生成しません。保存布形状・足姿勢・人体配置・ロボット基部と胴体を維持します。
+
+```bash
+PYTHONPATH=/tmp/sock-grasp-deps:$PYTHONPATH python3 scripts/search_contact_pregrasp.py geometry --workers 8 --seconds 35
+PYTHONPATH=/tmp/sock-grasp-deps:$PYTHONPATH python3 scripts/search_contact_pregrasp.py endpoints --workers 8 --seconds 40
+PYTHONPATH=/tmp/sock-grasp-deps:$PYTHONPATH python3 scripts/search_contact_pregrasp.py audit
+PYTHONPATH=/tmp/sock-grasp-deps:$PYTHONPATH python3 scripts/search_contact_pregrasp.py starts --joint-margin-deg 0.5
+PYTHONPATH=/tmp/sock-grasp-deps:$PYTHONPATH python3 scripts/search_contact_pregrasp.py routes --workers 4 --pairs 4 --seconds 60
+PYTHONPATH=/tmp/sock-grasp-deps:$PYTHONPATH python3 scripts/search_contact_pregrasp.py collect --joint-margin-deg 0.5
+```
+
+出力先は `artifacts/contact-pregrasp-start-search/` です。`protocol.json`、状態ごとの接触点・
+距離・境界線区間を含む `geometry/` と `endpoints/`、全70状態を重ねた初期干渉検査、
+初期姿勢候補ごとの両腕同時終点・順次接近経路を保存します。
+左右両方の初期位置候補を検査し、採用候補に対する結果を `routes/` と
+`candidate-initial.yaml` にまとめます。成功経路のCSVには両腕14関節と両爪間隔を共通時刻で記録します。
+`starts` は足の外側・上方の待機姿勢を追加し、全70状態の障害物を重ねて検査します。
+`collect` は保存済みの探索結果を再集計し、到達できる状態数が多い初期姿勢を採用します。
+同数なら初期姿勢の関節限界からの余裕が大きい候補を選びます。
+接触姿勢への接近では初期姿勢側からの逆運動学も試し、保存済み終点と異なる肘の配置に
+到達した場合には、その実際の終点について接触条件と両腕の同時干渉を再検査します。
+`endpoints --right-joint-1-min-deg 111` のように探索範囲を絞ることもできます。
+これは接触の合否条件ではなく、共通初期姿勢と同じ肩関節側で別の終点を探すための指定です。
+`--right-elbow-min-deg 30` では、右腕第4関節を30度以上として、肘が伸び切る付近を避けた終点を探せます。
+既存の別範囲の終点を保持するため、この指定での探索には別の出力ディレクトリを使います。
+全70状態で同一の初期設定から両腕の接近が成立した場合に限り `reachability_verified` が真になります。
+有限探索の未取得を不可能性とはみなしません。軌道の干渉検査はサンプル検査であり、
+連続時間での非干渉、動力学、接触力、摩擦保持、引き上げの成功は未認証です。

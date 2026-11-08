@@ -51,17 +51,19 @@ def changing_orientation_retreat(k,checker,qgoal,gap,delta,p,R,preferred,directi
     return dict(passed=False,stage='changing_orientation_retreat_failed',samples=len(rows),failure=failure,retreat_q=[v.tolist() for v in rows])
 
 
-def rrt(k,checker,start,goal,gap,delta,iterations=3000,timeout_s=None):
+def rrt(k,checker,start,goal,gap,delta,iterations=3000,timeout_s=None,joint_margin_deg=5.,shortcut_iterations=80,adaptive_extension=False):
     began=time.monotonic()
     def timed_out():return timeout_s is not None and time.monotonic()-began>=timeout_s
-    lower=k.lower+np.deg2rad(5);upper=k.upper-np.deg2rad(5);rng=np.random.default_rng(20261111);cache={};calls=0
+    if not np.isfinite(joint_margin_deg) or joint_margin_deg<0:raise ValueError('Nonnegative finite joint margin required')
+    lower=k.lower+np.deg2rad(joint_margin_deg);upper=k.upper-np.deg2rad(joint_margin_deg);rng=np.random.default_rng(20261111);cache={};calls=0
     def valid(q):
         nonlocal calls
         if timed_out():return False
         key=tuple(np.round(q,9))
         if key not in cache:calls+=1;cache[key]=bool(np.all(q>=lower-1e-9) and np.all(q<=upper+1e-9) and checker.is_clear(q,gap,delta))
         return cache[key]
-    def edge(a,b,step=np.deg2rad(1)):
+    def edge(a,b,step=None):
+        if step is None:step=np.deg2rad(.25 if adaptive_extension else 1.)
         n=max(1,int(np.ceil(np.max(abs(b-a))/step)))
         return all(valid(q) for q in np.linspace(a,b,n+1))
     if not valid(start) or not valid(goal):return dict(passed=False,stage='rrt_timeout' if timed_out() else 'rrt_invalid_endpoint')
@@ -73,8 +75,17 @@ def rrt(k,checker,start,goal,gap,delta,iterations=3000,timeout_s=None):
         return path[::-1]
     def extend(tree,target):
         nodes,parents=tree;i=int(np.argmin(np.linalg.norm(np.asarray(nodes)-target,axis=1)));q=nodes[i];dist=np.linalg.norm(target-q);nxt=target if dist<=.22 else q+(target-q)*(.22/dist)
-        if not edge(q,nxt):return None,False
-        nodes.append(nxt.copy());parents.append(i);return len(nodes)-1,dist<=.22
+        reached=dist<=.22
+        if not edge(q,nxt):
+            if not adaptive_extension:return None,False
+            # Near a contact corridor a twelve-degree extension can fail even
+            # when a shorter step along the same ray remains free.
+            for fraction in (.5,.25,.125,.0625,.03125):
+                shorter=q+fraction*(nxt-q)
+                if edge(q,shorter):
+                    nxt=shorter;reached=False;break
+            else:return None,False
+        nodes.append(nxt.copy());parents.append(i);return len(nodes)-1,reached
     for i in range(iterations):
         if timed_out():return dict(passed=False,stage='rrt_timeout',iterations=i,checks=calls,elapsed_s=time.monotonic()-began)
         side=i%2;other=1-side;mode=rng.random()
@@ -95,7 +106,7 @@ def rrt(k,checker,start,goal,gap,delta,iterations=3000,timeout_s=None):
     # The search budget limits tree expansion. A found route still needs its
     # shortcut and dense checks; never accept an unchecked tail at timeout.
     timeout_s=None
-    for _ in range(80):
+    for _ in range(shortcut_iterations):
         if len(found)<3:break
         a,b=sorted(rng.choice(len(found),2,replace=False))
         if b>a+1 and edge(found[a],found[b]):found=found[:a+1]+found[b:]

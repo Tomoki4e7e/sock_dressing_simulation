@@ -92,3 +92,26 @@ def test_fixed_pair_cache_matches_uncached_checks_when_both_arms_and_scene_chang
     finally:
         k.q0.clear(); k.q0.update(original)
         checker.fixed_pair_cache_key = None
+
+
+def test_right_arm_fixed_pair_cache_tracks_held_joints_width_and_translation(native_model):
+    from sock_dressing_simulation.controlled_arm_reaching import ControlledCollisionScene
+    from sock_dressing_simulation.fixed_torso_reaching import LEFT_ARM
+    k,checker=native_model;original=dict(k.q0)
+    view=ControlledCollisionScene(checker,'right',k.start)
+    left=np.array([k.q0[n]for n in LEFT_ARM])
+    try:
+        for left_offset,left_gap,translation in ((0.,.04,0.),(.015,.04,0.),(.015,.03,0.),(.015,.03,.01)):
+            held=left.copy();held[0]+=left_offset;checker.park_left(held,left_gap)
+            delta=np.array([translation,.12,-.3])
+            for offset,gap in ((0.,.04),(.01,.03)):
+                moving=k.start.copy();moving[0]+=offset
+                cached=view.slacks(moving,gap,delta)
+                checker.fixed_pair_cache_key=None
+                direct=checker.slacks(moving,gap,delta)
+                np.testing.assert_allclose(cached,direct,atol=1e-12,rtol=0)
+                valid=view.is_clear(moving,gap,delta)
+                checker.fixed_pair_cache_key=None
+                assert valid==checker.is_clear(moving,gap,delta)
+    finally:
+        k.q0.clear();k.q0.update(original);checker.fixed_pair_cache_key=None

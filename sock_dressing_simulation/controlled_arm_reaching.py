@@ -66,7 +66,10 @@ class ControlledCollisionScene:
             # CompoundScene adds translation and distance cap to each query.
             self.base.fixed_pair_cache_key=('left',tuple(self.fixed_right_q),float(self.fixed_right_gap))
             self.base.park_left(q,gap);return self.fixed_right_q,self.fixed_right_gap
-        self.base.fixed_pair_cache_key=None
+        # With the right arm moving, bind the full held left posture before
+        # reusing pairs that contain no right-arm or right-hand link.
+        self.base.fixed_pair_cache_key=('right',tuple(self.base.k.q0[n]for n in LEFT_ARM),
+                                       float(self.base.k.q0['left_gripper/finger_joint']))
         return q,gap
 
     def is_clear(self,q,gap,delta):

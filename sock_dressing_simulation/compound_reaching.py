@@ -136,24 +136,28 @@ class CompoundScene(CollisionScene):
             cache_key=getattr(self,'fixed_pair_cache_key',None)
             fixed=cache_key is not None and not any(n.startswith((cache_key[0]+'_arm/',cache_key[0]+'_gripper/')) for n in (a,b))
             if not hasattr(self,'fixed_pair_cache'):self.fixed_pair_cache={}
-            query_key=(cache_key,tuple(np.asarray(q)),float(gap),tuple(np.asarray(delta)),a,b,float(margin),float(cap)) if fixed else None
+            # The controlled joints and width cannot move either fixed
+            # object. The controller key already binds the held arm.
+            query_key=(cache_key,tuple(np.asarray(delta)),a,b,float(margin),float(cap)) if fixed else None
             cached=self.fixed_pair_cache.get(query_key) if fixed else None
             best=cap+margin;feature=None
-            rows_b=self.groups[b] if b in self.groups else [dict(obj=self.obstacle_objects[b],bounds=self.obstacle_bounds[b])]
-            rows_a=self.groups[a]
-            lo_a,hi_a=self.group_bounds[a]
-            if b in self.groups:lo_b,hi_b=self.group_bounds[b]
-            else:lo_b,hi_b=(np.asarray(v)[None,:] for v in self.obstacle_bounds[b])
-            lower=np.linalg.norm(np.maximum(np.maximum(lo_a[:,None]-hi_b[None,:],lo_b[None,:]-hi_a[:,None]),0),axis=2)
-            ids=np.flatnonzero(lower.ravel()<=best) if cached is None else np.empty(0,dtype=int)
-            ids=ids[np.argsort(lower.ravel()[ids])]
-            for idx in ids:
-                if lower.ravel()[idx]>max(best,0):break
-                i,j=divmod(int(idx),len(rows_b))
-                f=distance_feature(self.query_object(rows_a[i]),self.query_object(rows_b[j]))
-                if f[0]<best:best=f[0];feature=f
-            if cached is not None:best,feature=cached
-            elif fixed:self.fixed_pair_cache[query_key]=(best,feature)
+            if cached is not None:
+                best,feature=cached
+            else:
+                rows_b=self.groups[b] if b in self.groups else [dict(obj=self.obstacle_objects[b],bounds=self.obstacle_bounds[b])]
+                rows_a=self.groups[a]
+                lo_a,hi_a=self.group_bounds[a]
+                if b in self.groups:lo_b,hi_b=self.group_bounds[b]
+                else:lo_b,hi_b=(np.asarray(v)[None,:] for v in self.obstacle_bounds[b])
+                lower=np.linalg.norm(np.maximum(np.maximum(lo_a[:,None]-hi_b[None,:],lo_b[None,:]-hi_a[:,None]),0),axis=2)
+                ids=np.flatnonzero(lower.ravel()<=best)
+                ids=ids[np.argsort(lower.ravel()[ids])]
+                for idx in ids:
+                    if lower.ravel()[idx]>max(best,0):break
+                    i,j=divmod(int(idx),len(rows_b))
+                    f=distance_feature(self.query_object(rows_a[i]),self.query_object(rows_b[j]))
+                    if f[0]<best:best=f[0];feature=f
+                if fixed:self.fixed_pair_cache[query_key]=(best,feature)
             slack=best-margin;values.append(slack)
             if with_jacobian:
                 jacobian.append(np.zeros(10) if feature is None else feature[3]@(point_jac(a,feature[1])-point_jac(b,feature[2])))
@@ -178,7 +182,7 @@ class CompoundScene(CollisionScene):
         for a,b,margin in self.pairs:
             cache_key=getattr(self,'fixed_pair_cache_key',None)
             fixed=cache_key is not None and not any(n.startswith((cache_key[0]+'_arm/',cache_key[0]+'_gripper/')) for n in (a,b))
-            query_key=(cache_key,tuple(np.asarray(q)),float(gap),tuple(np.asarray(delta)),a,b,float(margin)) if fixed else None
+            query_key=(cache_key,tuple(np.asarray(delta)),a,b,float(margin)) if fixed else None
             if fixed and self.fixed_pair_valid_cache.get(query_key):continue
             rows_a=self.groups[a];rows_b=self.groups[b] if b in self.groups else [dict(obj=self.obstacle_objects[b],bounds=self.obstacle_bounds[b])]
             lo_a,hi_a=self.group_bounds[a]
