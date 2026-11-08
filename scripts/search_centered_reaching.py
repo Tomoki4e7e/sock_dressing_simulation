@@ -45,7 +45,7 @@ def write(path, value):
     temporary.replace(path)
 
 
-def geometric_check(k, state, sample, R, skin, cloth, settings, dist, approach_distance=.05,diagnostics=None):
+def geometric_check(k, state, sample, R, skin, cloth, settings, dist, approach_distance=.05,diagnostics=None,opening_gaps=None):
     """Check capture/skin, plus the requested straight tool-only approach.
 
     A zero distance screens endpoints only; a robot trajectory must still be
@@ -73,7 +73,10 @@ def geometric_check(k, state, sample, R, skin, cloth, settings, dist, approach_d
     c = dict(sample_index=sample['index'], rotation_matrix=R.tolist(), grasp_center_unity_world_m=p.tolist())
     gaps = []
     opening_rejections={}
-    for gap in (.00101,.00105,.0011,.00125,.0015, .002, .003, .004, .005, .0075, .01, .015, .02, .025, .03, .04, .05):
+    tested_gaps=(.00101,.00105,.0011,.00125,.0015,.002,.003,.004,.005,.0075,.01,.015,.02,.025,.03,.04,.05) if opening_gaps is None else tuple(opening_gaps)
+    if not tested_gaps or any(isinstance(g,(bool,str)) or not np.isfinite(g) or g<=.001 or g>h.maximum_gap_m for g in tested_gaps):
+        raise ValueError('Opening gaps must be finite, above the fixed 1 mm closure, and within the physical stroke')
+    for gap in tested_gaps:
         bank = h.bank(gap, 'approach', approach=approach_distance)
         if not skin.inspect(bank, R, p, .001)[0]:
             opening_rejections['skin']=opening_rejections.get('skin',0)+1

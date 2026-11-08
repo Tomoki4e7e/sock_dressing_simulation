@@ -1,0 +1,80 @@
+number: 10
+right_q_rad:
+- 2.5375303203148327
+- -1.0247465454670783
+- -1.7192863383641668
+- 1.7028489348374003
+- -2.511856033034385
+- -0.7348289926867994
+- 0.331470441737495
+left_q_rad:
+- 1.7506252741319375
+- -0.8804885214293735
+- -0.6948708750543398
+- 1.6494858488028663
+- 2.601992009774167
+- -0.8415908403083646
+- 0.9926215686739672
+right_q_deg:
+- 145.3897777405198
+- -58.71365212587451
+- -98.50785096276795
+- 97.56605711453078
+- -143.91874943734373
+- -42.10259994480324
+- 18.991857344895514
+left_q_deg:
+- 100.3034397166928
+- -50.448276187617246
+- -39.813168447176025
+- 94.50857750295847
+- 149.0831604868226
+- -48.219603226537735
+- 56.87302653867353
+translation_m:
+- -0.03427486741542815
+- -0.12
+- -0.3
+right_gap_m: 0.04
+left_gap_m: 0.04
+torso_joints_rad:
+  torso/joint_1: -0.7853981633974483
+  torso/joint_2: 1.7453292519943295
+  torso/joint_3: 1.694542409889931e-08
+left_foot_floor_allowance_m: 0.15
+grounded_left_foot_penetration_m: 0.09660183906555175
+minimum_joint_margin_deg: 20.9168395131774
+reference_photo: artifacts/sock-pose-pattern/screen_shot 2026-11-05 121319.png
+reference_state: artifacts/bulged-cuff/pose-10/state.json
+initialization: Common opening approach starts selected around the A penultimate waypoint
+  and its foot reflection; identical for every sock state
+units:
+  q_rad: radians
+  q_deg: degrees
+  translation_m: Unity world metres (+X is robot left, +Y is up)
+joint_order:
+  right:
+  - right_arm/joint_1
+  - right_arm/joint_2
+  - right_arm/joint_3
+  - right_arm/joint_4
+  - right_arm/joint_5
+  - right_arm/joint_6
+  - right_arm/joint_7
+  left:
+  - left_arm/joint_1
+  - left_arm/joint_2
+  - left_arm/joint_3
+  - left_arm/joint_4
+  - left_arm/joint_5
+  - left_arm/joint_6
+  - left_arm/joint_7
+joint_limit_margin_required_deg: 5.0
+right_start_candidate_index: 16
+source_reference: artifacts/common-opening-approach/negative-wrist-start/reference.json
+reachability_verified: true
+verified_conditions_per_arm: 70
+verified_route_count: 140
+verification_summary: artifacts/common-opening-approach/negative-wrist-start/summary.json
+source_candidate_configuration: artifacts/common-opening-approach/negative-wrist-start/initial.yaml
+source_candidate_sha256: 7419aa6fffcef8f6b9adedbbc268e2d6efcc6ba8a98773758db66f760ac00396

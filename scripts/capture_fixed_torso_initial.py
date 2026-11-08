@@ -29,6 +29,7 @@ from photograph_grasp_candidates import photograph
 
 def main():
     ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--output',type=Path,default=ROOT/'artifacts/fixed-torso-start-search');ap.add_argument('--index',type=int,default=5);ap.add_argument('--port',type=int,default=16680);ap.add_argument('--trajectory',type=Path);ap.add_argument('--initial-configuration',type=Path);ap.add_argument('--replay',action='store_true')
+    ap.add_argument('--common-route',type=Path,help='Replay one immutable common-opening route and evaluate the existing A grasp rule')
     ap.add_argument('--state',type=Path,help='Explicit frozen cloth state for an initial-configuration capture')
     ap.add_argument('--collect-episode',type=Path,help='New synchronized RGB/effort episode (controlled closure routes only)')
     ap.add_argument('--head-cameras', action='store_true', help='Use the two physical See3CAM frames for the learning streams')
@@ -52,6 +53,7 @@ def main():
         ap.error('--render-episode requires --lighting-profile and cannot accompany replay/collection')
     if (a.render_output or a.render_frames is not None) and not a.render_episode:
         ap.error('--render-output/--render-frames require --render-episode')
+    if a.common_route and (not a.state or not a.initial_configuration or a.trajectory or a.replay):ap.error('--common-route requires --state and --initial-configuration only')
     if a.state and (a.trajectory or not a.initial_configuration):ap.error('--state requires --initial-configuration and cannot accompany --trajectory')
     if a.replay and not a.trajectory:ap.error('--replay requires --trajectory')
     if a.collect_episode and not a.replay:ap.error('--collect-episode requires --replay')
@@ -66,7 +68,11 @@ def main():
         import yaml
         selected=yaml.safe_load(a.initial_configuration.read_text())
     else:selected=json.loads((a.output/'initial-configurations.json').read_text())['candidates'][a.index]
-    number=selected['number'];out=a.output/('native-route-initial' if a.trajectory else 'native-initial');out.mkdir(parents=True,exist_ok=True)
+    if a.common_route:
+        from replay_common_opening_motion import verify_source
+        common=verify_source(a.common_route,a.initial_configuration,a.state)
+        selected['number']=common['condition']['number']
+    number=selected['number'];out=a.output/('native-route-initial' if a.trajectory or a.common_route else 'native-initial');out.mkdir(parents=True,exist_ok=True)
     # The dependency hardcodes writable lock files in ~/.rfuniverse. Keep its
     # configuration read-only and redirect only this process's lock files.
     lock_dir=out/'runtime-locks';lock_dir.mkdir(exist_ok=True)
@@ -75,16 +81,20 @@ def main():
     def local_lock_init(self,name):
         self.lck_path=str(lock_dir/(name+'.lck'));Path(self.lck_path).touch(exist_ok=True);self.fp=None
     locker.Locker.__init__=local_lock_init;sys.modules['pyrcareworld.utils.locker']=locker
-    state=state_for(saved['geometry_record']) if a.trajectory else json.loads((a.state if a.state else ROOT/f'artifacts/bulged-cuff/pose-{number:02d}/state.json').read_text());scene_number=state.get('scene_number',number);delta=np.array(selected['translation_m']);k,checker,dl,du,contract,source_scene=context(number,state,REGISTERED_MANIFEST,left_foot_floor_allowance=selected.get('left_foot_floor_allowance_m',0.));checker.park_left(selected['left_q_rad'],selected['left_gap_m'])
+    state=state_for(saved['geometry_record']) if a.trajectory else json.loads((a.state if a.state else ROOT/f'artifacts/bulged-cuff/pose-{number:02d}/state.json').read_text());scene_number=common['condition']['scene_number'] if a.common_route else state.get('scene_number',number);state['scene_number']=scene_number;delta=np.array(selected['translation_m']);k,checker,dl,du,contract,source_scene=context(number,state,REGISTERED_MANIFEST,left_foot_floor_allowance=selected.get('left_foot_floor_allowance_m',0.));checker.park_left(selected['left_q_rad'],selected['left_gap_m'])
     if any(abs(k.q0[n]-v)>1e-8 for n,v in selected.get('torso_joints_rad',{}).items()):raise ValueError('Initial configuration asks to change the fixed torso')
     offline=checker.slacks(np.array(selected['right_q_rad']),selected['right_gap_m'],delta,details=True)
     if not offline['passed']:raise ValueError('Initial configuration failed registered-geometry validation')
     config=load_config(ROOT/'config/arm_reaching_safe_start.yaml');settings=config.pop('pose_pattern');workbook=settings.pop('workbook');settings.pop('number');settings['toe_contact']=None;settings['gravity_drape']=None
     config['rcareworld'].update(executable='scripts/run_registered_reaching_player.sh',graphics=True,port=a.port,log_level=0);config['assets']['output_dir']=str(out/'assets');scenario=scenario_from_config(config,seed=0);prepared=_prepare(config,scenario);mapping=JointMap.from_config(config)
+    rest_path=ROOT/f'artifacts/bulged-cuff/pose-{scene_number:02d}/rest.obj'
+    if a.common_route:
+        from prepare_bulged_cuffs import write_obj
+        rest_path=out/'state-rest.obj';write_obj(rest_path,state['source']['rest_positions'],np.array(state['triangles']).reshape(-1,3),native_import=True)
     pattern=next(p for p in read_patterns(Path(workbook)) if p.number==number)
     result=dict(selected_index=a.index,initial_configuration=selected,offline_registered_check=offline,initial_only=True,motion_replayed=False,passed=False)
     with SockDressingEnv(config) as env:
-        env.load(Path(prepared['runtime_urdf']),ROOT/f'artifacts/bulged-cuff/pose-{scene_number:02d}/rest.obj',initial_joints=scenario.initial_joints);env.apply_scenario(scenario);attr=env.sock_cloth
+        env.load(Path(prepared['runtime_urdf']),rest_path,initial_joints=scenario.initial_joints);env.apply_scenario(scenario);attr=env.sock_cloth
         attr.set_pattern_held(False);attr.set_pattern_foot_pose(pattern.pitch_deg,settings['signs']['roll']*pattern.roll_deg);env._env.step(2,simulate=False);attr.request_preinsert_source();env._env.step(2,simulate=False)
         native_rest=np.array(attr.data['sock_preinsert_source']['rest_positions']);rest=np.array(state['source']['rest_positions']);dist,order=cKDTree(rest).query(native_rest)
         if len(native_rest)!=len(rest) or len(set(order.tolist()))!=len(rest) or dist.max()>5e-6:raise ValueError('Native refined cloth topology differs')
@@ -92,6 +102,7 @@ def main():
         attr._send_data('GetSockArmReachingScene',env.robot.id);env._env.step(2,simulate=False);before=copy.deepcopy(attr.data['sock_arm_reaching_scene']);native_reference=np.array(env.robot.data['joint_positions'],dtype=float)
         camera=env.recording_camera
         def snapshot_camera(name):
+            if a.common_route:return {'image_capture_skipped':True}
             camera.GetRGB(1280,960,float(config['camera']['fov']));env._env.step(2,simulate=False)
             Image.fromarray(env._decode(camera.data['rgb'],'RGB')).save(out/name)
             return {key:copy.deepcopy(camera.data[key]) for key in ('position','rotation','quaternion','rotation_quaternion','local_position','local_rotation') if key in camera.data}
@@ -158,6 +169,14 @@ def main():
                 from sock_dressing_simulation.reaching_policy_video import run_policy_video
                 result['policy_video']=run_policy_video(env,mapping,a.policy_episode.resolve(),a.policy_model_dir.resolve(),
                     a.policy_checkpoint.resolve(),a.output/'policy-video',a.policy_steps,a.policy_device)
+        if a.common_route:
+            if not result['passed']:raise ValueError('Native initial configuration failed; common route not replayed')
+            from replay_common_opening_motion import replay
+            result['motion']=replay(env,mapping,action,native_reference,k,checker,common,a.common_route.resolve(),delta,expected_cloth,out)
+            result['initial_only']=False;result['motion_replayed']=True
+            result['camera_validation_performed']=False
+            write(out/'result.json',result)
+            return
         if a.replay:
             if not result['passed']:raise ValueError('Native initial configuration failed; trajectory will not be replayed')
             if saved.get('close_after_reach'):

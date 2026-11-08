@@ -674,6 +674,40 @@ python scripts/package_corrected_reaching_collection.py
 採用済みの実測CSVは `artifacts/diverse-left-reaching/corrected-collection/demonstrations.zip`、
 対応表は同じフォルダの `manifest.json` と `manifest.csv` です。現在はAの既存12軌道を収録しています。
 
+70初期形状に共通する左右の新しい開始姿勢と接近IKは、
+[全140軌道の検査結果・画像・CSV](artifacts/common-opening-approach/negative-wrist-start/report.html)に保存しました。
+設定は [config/common_opening_initial_pose.yaml](config/common_opening_initial_pose.yaml) です。
+A32・B10・C11・D6・E11の全70条件で、右腕70本・左腕70本が補間後の衝突検査を通過しています。
+片腕ずつ接近し、他方の腕は全条件共通の初期姿勢に保持します。人体・台座・胴体・頭部の配置は維持します。
+左腕は既存A/No.10の開口部直前の通過点（元の3区間経路の0始まり添字278）を中心にし、
+右腕は足の矢状面に対する鏡映位置から約28mmの位置を選びました。右手首の別解を使い、初期の最小関節余裕は20.92°です。
+共通初期姿勢のUnity復元も合格しています。全140軌道の動力学再生と従来Aの把持条件の評価は[追加検証](artifacts/common-opening-dynamics/report.html)に保存しています。接近再生は115本が基準内、把持条件の合格は0本です。自由な布変形・摩擦保持・牽引は未検証です。
+
+目標は開口縁から材料長0〜15mmの帯に対し、物理指先の中央面が表面の2mm手前に来る姿勢です。
+TCPから指先までの10mmを補正し、指を含む実形状と登録済みの全ロボット形状で検査します。
+全軌道の関節余裕5°以上、位置IK誤差0.1mm以下、URDFの速度・加速度上限の10%以下を確認しました。
+CSVには時刻、右腕7関節、左腕7関節、左右開き幅、移動腕のTCP位置を保存します（rad・m・s）。
+開き幅を変更する場合は、初期位置での開閉区間を含みます。従来の実測18列データとは別のIK指令形式です。
+一式は同レポートの `ik-trajectories-70-states.zip`、元形状への対応とハッシュは `states.json` と `summary.json` にあります。
+
+```bash
+# 新規出力先で開始姿勢を探索する場合。候補16は別の右手首配置を使う。
+python scripts/search_common_opening_starts.py starts --right-candidate-index 16 \
+  --output artifacts/common-opening-approach/new-search
+python scripts/search_common_opening_starts.py routes --guided --workers 12 \
+  --output artifacts/common-opening-approach/new-search
+# 接続未達条件では、検証済みの肩境界と同じ側にある別の目標IKを作って再試行する。
+python scripts/seed_same_component_opening_goals.py \
+  --output artifacts/common-opening-approach/new-search
+python scripts/search_common_opening_starts.py routes --guided --workers 12 \
+  --output artifacts/common-opening-approach/new-search
+python scripts/report_common_opening_starts.py \
+  --root artifacts/common-opening-approach/new-search
+```
+
+衝突判定の条件は共通です。新探索でのみ大きな部品群の空間検索を有効にし、従来の総当たりAABB候補を取りこぼさないことを検査しました。
+既存Aの軌道と実測データは変更していません。連続時間の衝突証明ではなく、補間曲線と中間点の離散検査です。
+
 ### 既存12経路のShareSet同期収集（照明補正前の記録）
 
 採用元は `artifacts/diverse-left-reaching/corrected-collection/manifest.json` のAの12経路です。
@@ -885,3 +919,62 @@ python scripts/report_natural_b_grasp_search.py
 探索記録には形状と共通初期設定のハッシュ、補間点、乱数種、位置範囲、段階別の不合格理由を保存しています。
 密な補間点から候補が見つかった場合は、保存した補間点を軌道生成でもそのまま使い、実際のIK姿勢で再評価します。
 数値的に不確定な幾何判定は不合格として記録します。
+
+### 共通初期姿勢からの140軌道の動力学・把持検証
+
+[検証レポート](artifacts/common-opening-dynamics/report.html)と
+[全件の集計](artifacts/common-opening-dynamics/summary.json)に、70状態×左右腕の結果を記録します。
+接近再生の合格は右腕65/70本、左腕50/70本です。元の計画終点は全140本で捕捉面積0mm²となり、従来Aの把持条件は全件不合格でした。
+入力は `artifacts/common-opening-approach/negative-wrist-start/` の保存軌道です。
+保存形状、共通初期姿勢、登録衝突形状のハッシュと、補間・時間配分を照合してから、各軌道を独立したPhysXシーンで再生します。
+実測関節角度・開き幅のCSV、接触と追従の時系列、全身の離隔、固定側の変位、速度・加速度、終端誤差を保存します。
+接近再生の合否と、終点での閉鎖・把持条件の合否は別に集計します。
+
+把持条件は従来Aと同じ `config/geometric_closure.yaml` と判定関数を使用します。
+閉じ幅1mm、皮膚離隔1mm、捕捉面積・最大連結面積4mm²以上、面積比5%以上、両方向の捕捉幅0.5mm以上です。
+計画終点の静的検査は全140本に実施し、動力学再生を途中停止した場合も元の終点を別途評価します。
+閉鎖中に許容する重なりは、動かしているグリッパーと保存布の組み合わせだけです。
+把持の幾何条件を満たさない場合は閉鎖を省略し、理由を記録します。初期の試行には離隔を満たす場合の閉鎖再生も含みます。
+閉鎖途中の離隔検査で不合格なら、危険な閉鎖は実行せずに理由を保存します。
+以前合格したAの実測データで、面積・幅・皮膚離隔と合否の一致も確認します。
+布は保存形状を保持した評価で、摩擦による保持、自由な布変形、引き上げの成功は検証対象に含みません。
+ロボット関節の重力は従来Aと同じ無効で、重力荷重や駆動力上限の評価は含みません。
+
+```bash
+python scripts/validate_common_opening_dynamics.py --workers 8
+python scripts/check_common_opening_grasp_goals.py --workers 3
+python scripts/validate_common_opening_dynamics.py --report-only
+python scripts/package_common_opening_dynamics.py
+```
+
+同じ入力・把持条件の完了済み結果は再利用します。新規の再試行には別の `--output` を指定します。
+検証条件・ハッシュは `artifacts/common-opening-dynamics/protocol.json`、
+Aの陽性対照は `a-criteria-equivalence.json` に保存します。
+
+### 把持終点を条件にした共通初期姿勢の再探索
+
+[再探索の結果](artifacts/common-grasp-start-search/report.html)と
+[70状態の一覧](artifacts/common-grasp-start-search/cases.csv)を保存しています。
+全70状態で把持へ到達する共通初期姿勢は未取得です。
+グリッパー単体の把持終点は29状態（A28、C1）で得ましたが、B10状態を含む41状態では未取得でした。
+候補初期姿勢1組に対する実際のIK・全身閉鎖検査では左腕16状態、右腕0状態が合格しています。
+いずれも接近経路・動力学再生の合格を意味しません。
+
+初期姿勢は各腕48候補を生成し、全70状態の布と32足首姿勢の人体を重ねた検査で24組が合格しました。
+これらは初期干渉の検査のみを通った未採用候補です。公開済みの初期姿勢設定は更新していません。
+把持の判定は従来Aの閉じ幅1mm・皮膚離隔1mm・捕捉面積4mm²等を維持しています。
+開き幅の連続探索、成功姿勢の材料座標による移送、足の反対側への反射、指の入れ替え、接近方向反転、
+B全10状態の連続最適化、腕の実際のFK姿勢を新たな目標とする探索を実施しました。
+提案した位置・向きとの一致を緩めても、合格には実際のFK姿勢で元の把持条件を満たすことを要求します。
+有限範囲・時間内の探索であり、解の非存在を証明する結果ではありません。
+
+```bash
+python scripts/search_common_grasp_geometry.py --workers 8 --output artifacts/new-grasp-search
+python scripts/optimize_common_grasp_geometry.py --id B-19 --seconds 600
+python scripts/check_common_grasp_arm_endpoints.py --guided --loose --pass-name arm-space-search
+python scripts/report_common_grasp_search.py
+```
+
+探索入力・判定条件のハッシュ、未採用の初期姿勢候補、合格終点の独立した再検査、
+旧Aの陽性対照、代表姿勢の開き幅診断を記録しています。
+`programs/` は実行コードの控えで、実行には元のプロジェクト構成とモデル資産が必要です。

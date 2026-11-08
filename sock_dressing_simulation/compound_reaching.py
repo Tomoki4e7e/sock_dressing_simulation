@@ -173,6 +173,7 @@ class CompoundScene(CollisionScene):
         """Early-exit version of the same clearance policy, for motion planning."""
         if any(y+float(delta[1])-self.floor_top < -1e-9 for y in self.floor_minima.values()):return False
         self.update(q,gap,delta)
+        spatial_cache={}
         if not hasattr(self,'fixed_pair_valid_cache'):self.fixed_pair_valid_cache={}
         for a,b,margin in self.pairs:
             cache_key=getattr(self,'fixed_pair_cache_key',None)
@@ -183,8 +184,13 @@ class CompoundScene(CollisionScene):
             lo_a,hi_a=self.group_bounds[a]
             if b in self.groups:lo_b,hi_b=self.group_bounds[b]
             else:lo_b,hi_b=(np.asarray(v)[None,:] for v in self.obstacle_bounds[b])
-            lower=np.linalg.norm(np.maximum(np.maximum(lo_a[:,None]-hi_b[None,:],lo_b[None,:]-hi_a[:,None]),0),axis=2)
-            for flat in np.flatnonzero(lower.ravel()<=margin):
+            if getattr(self,'use_spatial_aabb',False):
+                from .spatial_aabb import candidate_indices
+                candidates=candidate_indices(lo_a,hi_a,lo_b,hi_b,margin,cache=spatial_cache,key=b)
+            else:
+                lower=np.linalg.norm(np.maximum(np.maximum(lo_a[:,None]-hi_b[None,:],lo_b[None,:]-hi_a[:,None]),0),axis=2)
+                candidates=np.flatnonzero(lower.ravel()<=margin)
+            for flat in candidates:
                 i,j=divmod(int(flat),len(rows_b));distance=float(fcl.distance(self.query_object(rows_a[i]),self.query_object(rows_b[j]),fcl.DistanceRequest(),fcl.DistanceResult()))
                 if not np.isfinite(distance):raise ValueError('Nonfinite planning distance')
                 if distance<=0 or distance<margin-1e-9:return False

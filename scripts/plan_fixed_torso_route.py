@@ -51,19 +51,22 @@ def changing_orientation_retreat(k,checker,qgoal,gap,delta,p,R,preferred,directi
     return dict(passed=False,stage='changing_orientation_retreat_failed',samples=len(rows),failure=failure,retreat_q=[v.tolist() for v in rows])
 
 
-def rrt(k,checker,start,goal,gap,delta,iterations=3000):
+def rrt(k,checker,start,goal,gap,delta,iterations=3000,timeout_s=None):
+    began=time.monotonic()
+    def timed_out():return timeout_s is not None and time.monotonic()-began>=timeout_s
     lower=k.lower+np.deg2rad(5);upper=k.upper-np.deg2rad(5);rng=np.random.default_rng(20261111);cache={};calls=0
     def valid(q):
         nonlocal calls
+        if timed_out():return False
         key=tuple(np.round(q,9))
         if key not in cache:calls+=1;cache[key]=bool(np.all(q>=lower-1e-9) and np.all(q<=upper+1e-9) and checker.is_clear(q,gap,delta))
         return cache[key]
     def edge(a,b,step=np.deg2rad(1)):
         n=max(1,int(np.ceil(np.max(abs(b-a))/step)))
         return all(valid(q) for q in np.linspace(a,b,n+1))
-    if not valid(start) or not valid(goal):return dict(passed=False,stage='rrt_invalid_endpoint')
+    if not valid(start) or not valid(goal):return dict(passed=False,stage='rrt_timeout' if timed_out() else 'rrt_invalid_endpoint')
     if edge(start,goal):return dict(passed=True,stage='straight_joint_route',raw_q=np.linspace(start,goal,max(2,int(np.ceil(np.max(abs(start-goal))/np.deg2rad(.25))))+1).tolist(),start_q=start.tolist())
-    trees=[([start.copy()],[-1]),([goal.copy()],[-1])];began=time.monotonic();found=None
+    trees=[([start.copy()],[-1]),([goal.copy()],[-1])];found=None
     def chain(t,i):
         nodes,parents=t;path=[]
         while i>=0:path.append(nodes[i]);i=parents[i]
@@ -73,6 +76,7 @@ def rrt(k,checker,start,goal,gap,delta,iterations=3000):
         if not edge(q,nxt):return None,False
         nodes.append(nxt.copy());parents.append(i);return len(nodes)-1,dist<=.22
     for i in range(iterations):
+        if timed_out():return dict(passed=False,stage='rrt_timeout',iterations=i,checks=calls,elapsed_s=time.monotonic()-began)
         side=i%2;other=1-side;mode=rng.random()
         if mode<.2:sample=trees[other][0][int(rng.integers(len(trees[other][0])))]
         elif mode<.7:
@@ -88,6 +92,9 @@ def rrt(k,checker,start,goal,gap,delta,iterations=3000):
         if found is not None:break
         if i%100==0:print('RRT',i,[len(t[0]) for t in trees],calls,round(time.monotonic()-began,1),flush=True)
     if found is None:return dict(passed=False,stage='rrt_exhausted',iterations=iterations,checks=calls)
+    # The search budget limits tree expansion. A found route still needs its
+    # shortcut and dense checks; never accept an unchecked tail at timeout.
+    timeout_s=None
     for _ in range(80):
         if len(found)<3:break
         a,b=sorted(rng.choice(len(found),2,replace=False))
