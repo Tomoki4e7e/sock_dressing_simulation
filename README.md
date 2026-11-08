@@ -1022,3 +1022,43 @@ PYTHONPATH=/tmp/sock-grasp-deps:$PYTHONPATH python3 scripts/search_contact_pregr
 全70状態で同一の初期設定から両腕の接近が成立した場合に限り `reachability_verified` が真になります。
 有限探索の未取得を不可能性とはみなしません。軌道の干渉検査はサンプル検査であり、
 連続時間での非干渉、動力学、接触力、摩擦保持、引き上げの成功は未認証です。
+
+### 接近軌道の連続時間検査と布を固定した関節駆動検証
+
+保存済みの接近経路を変更せず、`artifacts/contact-pregrasp-verification/` に検証結果を保存します。
+各手先が予定終点から5mm以内にある区間に限り、爪と開口から材料座標30mm以内の布、
+および開口境界から30mm近傍の対象脚皮膚の接触を最大0.5mmの侵入まで許可します。
+掌や腕、遠方の表面には従来の離隔を要求します。皮膚領域は境界辺の半径30mmカプセルに
+三角形全体が入る部分に限定する保守的な判定です。侵入深さは表面が凸爪の内部へ入る深さを
+内側オフセット形状で検査します。
+
+```bash
+PYTHONPATH=/tmp/sock-grasp-deps:$PYTHONPATH python3 scripts/verify_contact_pregrasp_continuous.py --workers 6 --resume
+PYTHONPATH=/tmp/sock-grasp-deps:$PYTHONPATH python3 scripts/verify_pregrasp_shoulder_bound.py
+PYTHONPATH=/tmp/sock-grasp-deps:$PYTHONPATH python3 scripts/verify_contact_pregrasp_drives.py --workers 4 --resume
+PYTHONPATH=/tmp/sock-grasp-deps:$PYTHONPATH python3 scripts/audit_pregrasp_native_contacts.py --workers 4
+PYTHONPATH=/tmp/sock-grasp-deps:$PYTHONPATH python3 scripts/audit_pregrasp_native_contact_events.py --workers 4
+python3 scripts/report_contact_pregrasp_verification.py --package
+```
+
+連続時間検査ではURDFから形状の移動上限を求め、中点の距離と組み合わせて区間全体を
+保証し、必要な区間を再帰的に細分化します。未証明を合格とはしません。補足検査は未証明の
+肩離隔5mmを4.999mmの正の下限で検査し、E-32では他の正の離隔にも最大1µmの差を
+認めます。これは非交差の補足証明であり、元の離隔条件の厳密な合格とは分けて集計します。
+
+駆動検証は動作中に関節ドライブだけを指令し、布の全粒子の逆質量を0にして変形を凍結します。
+PhysXの物理刻みは20ms、接触を毎刻み、実測姿勢の幾何条件を5刻みごとと区間端で検査します。
+違反時はその試行を停止します。完走後は開いたまま1秒保持し、実測個別爪メッシュで接触と
+開口線を再検査します。最後に爪を閉じる動作は行いません。駆動の結果、終点条件、固定部位の
+変位20µm未満という追加基準を個別に記録します。圧縮した初期メッシュ、全時刻の指令・実測値、
+検査プログラムのハッシュを保存し、試行完了ごとに中間ファイルを可逆圧縮します。
+Native接触通知のオンライン停止しきい値は10µmですが、保存した全通知を0.1µmの
+しきい値でも再検査し、許容区間・部品・皮膚領域・侵入深さの違反を最終合否に反映します。
+
+`report.html`、`verification-summary.json`、`verification-summary.csv` が最終集計です。
+`measured-trajectories/` は両腕14関節・両爪間隔・手先位置のCSV、`verification-results.zip` は
+証明・判定記録・CSV・コード控えを含む軽量な配布用成果物です。大きいNativeメッシュと
+全時刻リンク姿勢は元の `drives/` に残します。
+予定経路の連続時間証明は、物理刻みの駆動実軌道を連続時間で証明したことにはなりません。
+旧設定の立脚側左足の床侵入許容量150mmも継承しています。
+布変形、摩擦保持、接触力、閉鎖、引き上げや実機での成立はこの検証の対象外です。

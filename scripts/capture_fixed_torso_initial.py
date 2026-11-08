@@ -27,9 +27,16 @@ from sock_dressing_simulation.arm_reaching import ARM,shape_vertices
 from photograph_grasp_candidates import photograph
 
 
+CONTACT_INITIALIZATION_VERSION="paired-frozen-reference-v1"
+# Only cache locking/audit metadata and lossless snapshot storage changed.
+# Bump this version and clear this compatibility list for physics changes.
+COMPATIBLE_CONTACT_INITIALIZERS={'c5944c27c9111c99d01b9a89946a8a35c136b45946d013974a543bdd65665995'}
+
 def main():
     ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--output',type=Path,default=ROOT/'artifacts/fixed-torso-start-search');ap.add_argument('--index',type=int,default=5);ap.add_argument('--port',type=int,default=16680);ap.add_argument('--trajectory',type=Path);ap.add_argument('--initial-configuration',type=Path);ap.add_argument('--replay',action='store_true')
     ap.add_argument('--common-route',type=Path,help='Replay one immutable common-opening route and evaluate the existing A grasp rule')
+    ap.add_argument('--contact-route',type=Path,help='Replay a paired pregrasp route with frozen cloth and no final closure')
+    ap.add_argument('--fixed-step',type=float,default=.02)
     ap.add_argument('--state',type=Path,help='Explicit frozen cloth state for an initial-configuration capture')
     ap.add_argument('--collect-episode',type=Path,help='New synchronized RGB/effort episode (controlled closure routes only)')
     ap.add_argument('--head-cameras', action='store_true', help='Use the two physical See3CAM frames for the learning streams')
@@ -45,6 +52,9 @@ def main():
     ap.add_argument('--policy-device',choices=['auto','cpu','cuda'],default='auto')
     # Parse the optional shape before loading the selected configuration.
     a=ap.parse_args();a.output=a.output.resolve()
+    if a.contact_route:
+        if a.common_route:ap.error('Choose one route type')
+        a.common_route=a.contact_route
     if a.policy_model_dir and (not a.policy_checkpoint or not a.policy_episode or not a.head_cameras or not a.lighting_profile or not a.trajectory or a.replay or a.render_episode):
         ap.error('Policy video requires checkpoint, episode, head cameras, lighting and trajectory, without replay/render-episode')
     if (a.lighting_profile or a.lighting_probe or a.render_episode) and not a.head_cameras:
@@ -69,10 +79,27 @@ def main():
         selected=yaml.safe_load(a.initial_configuration.read_text())
     else:selected=json.loads((a.output/'initial-configurations.json').read_text())['candidates'][a.index]
     if a.common_route:
-        from replay_common_opening_motion import verify_source
+        if a.contact_route:from replay_contact_pregrasp import verify_source
+        else:from replay_common_opening_motion import verify_source
         common=verify_source(a.common_route,a.initial_configuration,a.state)
         selected['number']=common['condition']['number']
     number=selected['number'];out=a.output/('native-route-initial' if a.trajectory or a.common_route else 'native-initial');out.mkdir(parents=True,exist_ok=True)
+    if a.contact_route:
+        # Concurrent verification workers may meet at the same case. Only one
+        # player may initialize/write it; another worker reuses its bound run.
+        import fcntl,hashlib
+        contact_lock=(out/'drive-replay.lock').open('a');fcntl.flock(contact_lock.fileno(),fcntl.LOCK_EX)
+        cached=out/'replay-result.json'
+        if cached.exists():
+            previous=json.loads(cached.read_text())
+            required={'source_sha256':hashlib.sha256(a.contact_route.read_bytes()).hexdigest(),
+                      'replay_source_sha256':hashlib.sha256((ROOT/'scripts/replay_contact_pregrasp.py').read_bytes()).hexdigest(),
+                      'checker_source_sha256':hashlib.sha256((ROOT/'sock_dressing_simulation/continuous_pregrasp.py').read_bytes()).hexdigest(),
+                      'native_geometry_source_sha256':hashlib.sha256((ROOT/'scripts/native_pregrasp_geometry.py').read_bytes()).hexdigest(),
+                      'initial_configuration_sha256':hashlib.sha256(a.initial_configuration.read_bytes()).hexdigest(),'fixed_step_s':a.fixed_step}
+            initialized=(previous.get('capture_initialization_version')==CONTACT_INITIALIZATION_VERSION or previous.get('capture_source_sha256')in COMPATIBLE_CONTACT_INITIALIZERS)
+            if initialized and all(previous.get(key)==value for key,value in required.items()):
+                print('Reusing completed bound contact-drive run',common['condition']['id'],previous['passed'],flush=True);return
     # The dependency hardcodes writable lock files in ~/.rfuniverse. Keep its
     # configuration read-only and redirect only this process's lock files.
     lock_dir=out/'runtime-locks';lock_dir.mkdir(exist_ok=True)
@@ -128,7 +155,12 @@ def main():
             env.robot.SetJointPosition(command.tolist());attr._send_data('SetSockReplayDriveVelocities',env.robot.id,json.dumps(dict(values=np.zeros(len(command)).tolist())));env._env.Simulate(.02,1);env._env.step(simulate=False)
         result['initialization_physics_steps']=51;result['initialization_duration_s']=1.0001
         attr._send_data('GetSockArmReachingScene',env.robot.id);attr.request_particles();env._env.step(2,simulate=False);after=copy.deepcopy(attr.data['sock_arm_reaching_scene']);after['robot_data']=json.loads(json.dumps(env.robot.data,default=lambda v:v.tolist()))
-        write(out/'native-scene.json',after);write(out/'before-scene.json',before)
+        if a.contact_route:
+            import gzip
+            for filename,value in [('native-scene.json.gz',after),('before-scene.json.gz',before)]:
+                with gzip.open(out/filename,'wt',compresslevel=1)as stream:json.dump(value,stream)
+        else:
+            write(out/'native-scene.json',after);write(out/'before-scene.json',before)
         before_frames={r['name']:r for r in before['links']};fixed=[];moving=[]
         desired_frames=k.fk(np.array(selected['right_q_rad']),selected['right_gap_m'])
         feedback=mapping.from_simulator(env.robot.data['joint_positions']);actual_right=np.array([feedback[indices[n]] for n in ARM]);actual_left=np.array([feedback[indices[n]] for n in LEFT_ARM]);actual_right_gap=float(feedback[indices['right_gripper/finger_joint']]+k.hand.gap_offset_m);actual_left_gap=float(feedback[indices['left_gripper/finger_joint']]+k.hand.gap_offset_m)
@@ -171,8 +203,12 @@ def main():
                     a.policy_checkpoint.resolve(),a.output/'policy-video',a.policy_steps,a.policy_device)
         if a.common_route:
             if not result['passed']:raise ValueError('Native initial configuration failed; common route not replayed')
-            from replay_common_opening_motion import replay
-            result['motion']=replay(env,mapping,action,native_reference,k,checker,common,a.common_route.resolve(),delta,expected_cloth,out)
+            if a.contact_route:from replay_contact_pregrasp import replay
+            else:from replay_common_opening_motion import replay
+            result['motion']=replay(env,mapping,action,native_reference,k,checker,common,a.common_route.resolve(),delta,expected_cloth,out,dt=a.fixed_step)
+            if a.contact_route:
+                result['motion']['capture_initialization_version']=CONTACT_INITIALIZATION_VERSION
+                write(out/'replay-result.json',result['motion'])
             result['initial_only']=False;result['motion_replayed']=True
             result['camera_validation_performed']=False
             write(out/'result.json',result)
