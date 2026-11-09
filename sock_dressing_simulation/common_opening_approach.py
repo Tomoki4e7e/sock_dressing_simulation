@@ -144,7 +144,7 @@ def union_scene(root, rows, initial):
     from search_translated_reaching import load
     state = load_state(root, next(r for r in rows if r['stage'] == 'A' and r['number'] == 10))
     k, scene, *rest = context(10, state, REGISTERED_MANIFEST,
-        left_foot_floor_allowance=initial['left_foot_floor_allowance_m'])
+        left_foot_floor_allowance=initial['left_foot_floor_allowance_m'],human_collider_manifest=initial.get('human_collider_manifest'),human_collider_scene_numbers=[r['scene_number'] for r in rows])
     cloth = [load_state(root, r) for r in rows]
     points, faces = join_meshes((s['particles_world'], s['triangles']) for s in cloth)
     replace_mesh_obstacle(scene, 'frozen_cloth', points, faces)

@@ -29,10 +29,15 @@ def check_raw(episode):
     metadata = json.loads((episode / 'metadata.json').read_text())
     frames = list(csv.DictReader((episode / 'frames.csv').open()))
     count = len(frames)
+    contact_only = metadata.get('endpoint_task') == 'paired_contact_pregrasp'
+    stages = {r['stage'] for r in frames}
+    stage_check = ('open_settle' in stages and not any('closure' in s or 'closed' in s for s in stages)
+                   and metadata.get('final_closure_performed') is False) if contact_only else \
+                  {'reach', 'settle', 'closure', 'closed_settle'} <= stages
     checks = dict(completed=metadata['completed'], replay=metadata.get('replay_passed', False),
                   count=count == metadata['frames'] and count > 29,
                   physics_steps_unchanged=metadata.get('physics_steps_unchanged', False),
-                  stages={'reach', 'settle', 'closure', 'closed_settle'} <= {r['stage'] for r in frames},
+                  stages=stage_check,
                   frame_numbers=[int(r['frame']) for r in frames] == list(range(count)),
                   steps=[int(r['step']) for r in frames] == list(range(5, 5 * count + 1, 5)),
                   image_ids={p.stem for p in (episode / 'camera_right').glob('*.png')} == {str(i) for i in range(count)})

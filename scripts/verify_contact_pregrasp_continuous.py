@@ -20,7 +20,7 @@ def make_scene(row,source,policy):
     if not route['passed']or route['condition']!=row or route['geometry_manifest_sha256']!=sha256(REGISTERED_MANIFEST):raise ValueError('Stale or unqualified route')
     for side in ('left','right'):np.testing.assert_array_equal(route['initial_'+side+'_q_rad'],initial[side+'_q_rad'])
     np.testing.assert_array_equal(route['translation_m'],initial['translation_m'])
-    state=load_state(ROOT,row);k,base,*_,scene=context(row['number'],state,REGISTERED_MANIFEST,left_foot_floor_allowance=initial['left_foot_floor_allowance_m'])
+    state=load_state(ROOT,row);k,base,*_,scene=context(row['number'],state,REGISTERED_MANIFEST,left_foot_floor_allowance=initial['left_foot_floor_allowance_m'],human_collider_manifest=initial.get('human_collider_manifest'))
     contact_scene(base,{s:route['final_contact_checks'][s]['foot_finger']for s in ('left','right')})
     base.swept_skin_sources={'human_full_skin':(np.array(scene['human_skin']['vertices']),np.array(scene['human_skin']['triangles']).reshape(-1,3))}
     for obstacle in scene['obstacles']:

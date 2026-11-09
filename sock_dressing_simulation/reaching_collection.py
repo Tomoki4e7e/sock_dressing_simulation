@@ -16,7 +16,7 @@ def sha256(path):
 
 
 class ReachingCollector:
-    def __init__(self, path, mapping, plan, source, root, config, head_cameras=False):
+    def __init__(self, path, mapping, plan, source, root, config, head_cameras=False, contact_only=False, image_size=(1280,960)):
         self.path = Path(path).resolve()
         self.path.mkdir(parents=True, exist_ok=False)
         (self.path / 'camera_right').mkdir()
@@ -44,11 +44,11 @@ class ReachingCollector:
             schema='shareset-reaching-episode-v1', source_route=source.stem,
             trajectory=str(source.relative_to(root)), trajectory_sha256=sha256(source),
             joint_names=list(mapping.names), fixed_step_s=.02, sample_stride=5,
-            image_rate_hz=10, image_size=[1280, 960], seed=0,
-            shared_initial_configuration=plan['shared_initial_configuration'],
-            shared_initial_sha256=sha256(root / plan['shared_initial_configuration']),
-            dataset_inputs=plan['dataset_inputs'], geometry_record=plan['geometry_record'],
-            workbook_pattern=plan['workbook_pattern'], applied_opening_stage=plan['applied_opening_stage'],
+            image_rate_hz=10, image_size=list(image_size), seed=0,
+            shared_initial_configuration=(str((source.parent.parent / 'candidate-initial.yaml').relative_to(root))
+                                          if contact_only else plan['shared_initial_configuration']),
+            shared_initial_sha256=sha256(source.parent.parent / 'candidate-initial.yaml' if contact_only
+                                        else root / plan['shared_initial_configuration']),
             angle_units=['rad' if i in mapping.revolute_action_indices else 'm' for i in range(18)],
             effort_units=['N*m' if i in mapping.revolute_action_indices else 'N' for i in range(18)],
             mimic_angle='0.5 * measured finger_joint',
@@ -61,12 +61,24 @@ class ReachingCollector:
             reaching_learning_ready=False, completed=False,
             scope='Left-arm reaching and geometric closure with frozen cloth; no retention or pulling validation',
             left_foot_floor_allowance_m=plan.get('left_foot_floor_allowance_m', 0.))
+        if contact_only:
+            import yaml
+            initial = yaml.safe_load((source.parent.parent / 'candidate-initial.yaml').read_text())
+            self.metadata.update(condition=plan['condition'], final_closure_performed=False,
+                scope='Paired-arm contact pregrasp with frozen cloth, without final closure, retention or pulling',
+                endpoint_task='paired_contact_pregrasp', translation_m=plan['translation_m'],
+                left_foot_floor_allowance_m=initial.get('left_foot_floor_allowance_m', 0.))
+        else:
+            self.metadata.update(**{key: plan[key] for key in
+                ('dataset_inputs', 'geometry_record', 'workbook_pattern', 'applied_opening_stage')})
         if self.head_cameras:
             self.metadata.update(schema='shareset-reaching-head-stereo-v2',
                 camera_source='Dry-AIREC physical head See3CAM right',
                 camera_left_source='Dry-AIREC physical head See3CAM left',
                 camera_overview_source='World-fixed confirmation camera; excluded from learning',
                 camera_profile='head-stereo-zero-offset-v2')
+        if contact_only:
+            self.metadata['schema'] = 'paired-contact-pregrasp-episode-v1'
 
     def append(self, env, mapping, record):
         signals = env.robot_signals()
@@ -100,10 +112,11 @@ class ReachingCollector:
         before = int(record['cloth_fixed_steps'])
         telemetry_sample = copy.deepcopy(env.robot.data) if self.frames == 0 else None
         camera = env.recording_camera
-        camera.GetRGB(1280, 960, self.metadata['camera_fov'])
+        width,height=self.metadata['image_size']
+        camera.GetRGB(width, height, self.metadata['camera_fov'])
         if self.head_cameras:
             from .head_cameras import capture_head_cameras
-            head_images, head_report = capture_head_cameras(env, self.metadata['camera_fov'])
+            head_images, head_report = capture_head_cameras(env, self.metadata['camera_fov'],width,height)
             # RGB payloads are one-step responses and disappear on the next
             # exchange. Decode all three views in this same response.
             image = env._decode(camera.data['rgb'], 'RGB')
@@ -113,8 +126,8 @@ class ReachingCollector:
         if int(env.sock_cloth.data['sock_compound_replay']['cloth_fixed_steps']) != before:
             raise RuntimeError('Camera capture advanced physics')
         if not self.head_cameras:image = env._decode(camera.data['rgb'], 'RGB')
-        if image.shape != (960, 1280, 3):
-            raise ValueError('Camera dimensions differ from the ShareSet contract')
+        if image.shape != (height, width, 3):
+            raise ValueError('Camera dimensions differ from episode metadata')
         if self.head_cameras:
             Image.fromarray(image).save(self.path / 'camera_overview' / f'{self.frames}.png')
             for side, value in head_images.items():
@@ -141,6 +154,8 @@ class ReachingCollector:
     def finish(self, result):
         self.metadata.update(completed=bool(result['passed']), replay_passed=bool(result['passed']),
                              physics_steps_unchanged=bool(result['final_steps'] - result['initial_steps'] == self.steps))
+        if self.metadata.get('endpoint_task') == 'paired_contact_pregrasp':
+            self.metadata['contact_policy'] = result.get('policy')
 
     def __enter__(self):
         return self

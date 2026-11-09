@@ -64,6 +64,8 @@ def wide_starts(args,rows):
         representative=[]
         for identifier in ('E-50','E-07','C-10','D-34','A-10','B-08'):
             path=out/'endpoints'/f'{identifier}.json'
+            if not path.exists():
+                path=ROOT/'artifacts/contact-pregrasp-start-search/endpoints'/f'{identifier}.json'
             if not path.exists():continue
             d=json.loads(path.read_text())
             accepted=sorted(d['sides'].get(side,{}).get('accepted',[]),key=endpoint_priority)
@@ -72,10 +74,10 @@ def wide_starts(args,rows):
         rng=np.random.default_rng(20261115+(side=='right'))
         seeds.extend(rng.uniform(comfortable.lower,comfortable.upper,(3,7)))
         base=np.diag([-1.,1.,-1.]) if side=='left' else np.eye(3)
-        rotations=[base,base@Rotation.from_euler('z',-20.,degrees=True).as_matrix()]+representative[:3]
+        rotations=[model.pose(seeds[0])[1]]+representative[:3]+[base,base@Rotation.from_euler('z',-20.,degrees=True).as_matrix()]
         offsets=(.16,.22,.28) if side=='left' else (-.10,-.16,-.22)
         preferred=center+np.array([.22 if side=='left' else -.16,.22,-.05])
-        positions=[center+np.array([x,y,z])for x,y,z in product(offsets,(.12,.22,.32),(-.15,-.05,.05))]
+        positions=[center+np.array([x,y,z])for x,y,z in product(offsets,(.02,.12,.22,.32),(-.25,-.15,-.05,.05,.15))]
         positions.sort(key=lambda p:np.linalg.norm(p-preferred))
         candidates=[];began=time.monotonic()
         for desired in positions:
@@ -161,7 +163,7 @@ def audit_geometry(out, rows, initial_path=None):
                     continue
                 if base is None:
                     k, base, *_ = context(row['number'], load_state(ROOT, row), REGISTERED_MANIFEST,
-                                         left_foot_floor_allowance=initial['left_foot_floor_allowance_m'])
+                                         left_foot_floor_allowance=initial['left_foot_floor_allowance_m'],human_collider_manifest=initial.get('human_collider_manifest'))
                     original_pairs = list(base.pairs)
                 base.pairs = list(original_pairs)
                 contact_scene(base, {side:check['foot_finger']})
@@ -634,7 +636,7 @@ def route_one(payload):
                     return dict(id=row['id'], pair_index=pair['index'], passed=True, initial_transition=True)
     state = load_state(ROOT, row)
     k, base, *_ = context(row['number'], state, REGISTERED_MANIFEST,
-                         left_foot_floor_allowance=initial['left_foot_floor_allowance_m'])
+                         left_foot_floor_allowance=initial['left_foot_floor_allowance_m'],human_collider_manifest=initial.get('human_collider_manifest'))
     base.use_spatial_aabb = True
     delta = np.asarray(initial['translation_m'])
     goal = ContactGoal(state, k.hand)
@@ -1035,7 +1037,7 @@ def endpoint_one(payload):
     right_wrist_max_deg=payload[8]if len(payload)>8 else None
     initial = yaml.safe_load(initial_path.read_text())
     state = load_state(ROOT, row)
-    k, base, *_ = context(row['number'], state, REGISTERED_MANIFEST, left_foot_floor_allowance=initial['left_foot_floor_allowance_m'])
+    k, base, *_ = context(row['number'], state, REGISTERED_MANIFEST, left_foot_floor_allowance=initial['left_foot_floor_allowance_m'],human_collider_manifest=initial.get('human_collider_manifest'))
     base.use_spatial_aabb = True
     delta = np.asarray(initial['translation_m'])
     base.park_left(initial['left_q_rad'], initial['left_gap_m'])
@@ -1078,6 +1080,16 @@ def endpoint_one(payload):
                 seeds.insert(0, np.asarray(old['route']['raw_q_rad'][-1]))
         seeds.extend(rng.uniform(comfortable.lower, comfortable.upper, (10, 7)))
         neighbor_direct=[];neighbor_seeds=[];neighbors=[]
+        # Previous contact endpoints are IK seeds only. Refit their actual FK
+        # against this placement and recheck every current collision constraint.
+        reference_endpoints=ROOT/'artifacts/contact-pregrasp-start-search/endpoints'/f'{row["id"]}.json'
+        if reference_endpoints.exists():
+            old_endpoints=json.loads(reference_endpoints.read_text())
+            for endpoint in old_endpoints['sides'].get(side,{}).get('accepted',[]):
+                seed=np.clip(endpoint['q_rad'],comfortable.lower+1e-9,comfortable.upper-1e-9)
+                neighbor_seeds.append(seed);position,attitude=model.pose(seed)
+                neighbor_direct.append(dict(position_m=(position-delta).tolist(),rotation=attitude.tolist(),
+                    opening_gap_m=endpoint['opening_gap_m'],cloth_finger=endpoint['contact_check']['cloth_finger'],seed_q_rad=seed.tolist()))
         route_neighbors=[]
         for path in (out/'routes').glob('*.json'):
             d=json.loads(path.read_text())

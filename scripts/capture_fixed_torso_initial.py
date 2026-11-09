@@ -37,9 +37,13 @@ def main():
     ap.add_argument('--common-route',type=Path,help='Replay one immutable common-opening route and evaluate the existing A grasp rule')
     ap.add_argument('--contact-route',type=Path,help='Replay a paired pregrasp route with frozen cloth and no final closure')
     ap.add_argument('--fixed-step',type=float,default=.02)
+    ap.add_argument('--human-collision-model',choices=['native','planning_skin'],default=os.environ.get('SOCK_CONTACT_HUMAN_MODEL','native'))
+    ap.add_argument('--duration-scale',type=float,default=float(os.environ.get('SOCK_CONTACT_DURATION_SCALE','1')))
+    ap.add_argument('--drive-profile',choices=['legacy','paired_calibrated'],default=os.environ.get('SOCK_CONTACT_DRIVE_PROFILE','legacy'))
     ap.add_argument('--state',type=Path,help='Explicit frozen cloth state for an initial-configuration capture')
-    ap.add_argument('--collect-episode',type=Path,help='New synchronized RGB/effort episode (controlled closure routes only)')
+    ap.add_argument('--collect-episode',type=Path,help='New synchronized RGB/effort episode for a replay or contact-only route')
     ap.add_argument('--head-cameras', action='store_true', help='Use the two physical See3CAM frames for the learning streams')
+    ap.add_argument('--image-size',nargs=2,type=int,default=[1280,960],metavar=('WIDTH','HEIGHT'))
     ap.add_argument('--lighting-profile', choices=['baseline','normals_only','head_fill','balanced','balanced_shadow_off','bright_fill'])
     ap.add_argument('--lighting-probe',action='store_true')
     ap.add_argument('--render-episode',type=Path)
@@ -52,6 +56,9 @@ def main():
     ap.add_argument('--policy-device',choices=['auto','cpu','cuda'],default='auto')
     # Parse the optional shape before loading the selected configuration.
     a=ap.parse_args();a.output=a.output.resolve()
+    if min(a.image_size)<64 or a.image_size[0]*3!=a.image_size[1]*4:ap.error('Image size must be positive 4:3 with both dimensions >= 64')
+    if not np.isfinite(a.duration_scale) or a.duration_scale<1:ap.error('Duration scale must be finite and >= 1')
+    if a.human_collision_model!='native' and not a.contact_route:ap.error('Planning skin requires a contact route')
     if a.contact_route:
         if a.common_route:ap.error('Choose one route type')
         a.common_route=a.contact_route
@@ -66,7 +73,9 @@ def main():
     if a.common_route and (not a.state or not a.initial_configuration or a.trajectory or a.replay):ap.error('--common-route requires --state and --initial-configuration only')
     if a.state and (a.trajectory or not a.initial_configuration):ap.error('--state requires --initial-configuration and cannot accompany --trajectory')
     if a.replay and not a.trajectory:ap.error('--replay requires --trajectory')
-    if a.collect_episode and not a.replay:ap.error('--collect-episode requires --replay')
+    if a.collect_episode and not(a.replay or a.contact_route):ap.error('--collect-episode requires --replay or --contact-route')
+    if a.collect_episode and a.contact_route and abs(a.fixed_step-.02)>1e-12:ap.error('Contact collection requires --fixed-step .02')
+    if a.collect_episode and a.collect_episode.exists():ap.error('Collection output already exists; choose a new episode path')
     if a.trajectory and a.initial_configuration:ap.error('Choose either --trajectory or --initial-configuration')
     if a.trajectory:
         saved=json.loads(a.trajectory.read_text());selected=dict(number=saved['number'],right_q_rad=saved['start_q_rad'],right_q_deg=np.rad2deg(saved['start_q_rad']).tolist(),left_q_rad=saved['left_q_rad'],left_q_deg=np.rad2deg(saved['left_q_rad']).tolist(),translation_m=saved['translation_m'],right_gap_m=saved['opening_gap_m'],left_gap_m=saved['left_gap_m'],trajectory=str(a.trajectory),left_foot_floor_allowance_m=saved.get('left_foot_floor_allowance_m',0.))
@@ -90,13 +99,16 @@ def main():
         import fcntl,hashlib
         contact_lock=(out/'drive-replay.lock').open('a');fcntl.flock(contact_lock.fileno(),fcntl.LOCK_EX)
         cached=out/'replay-result.json'
-        if cached.exists():
+        if cached.exists() and not a.collect_episode:
             previous=json.loads(cached.read_text())
             required={'source_sha256':hashlib.sha256(a.contact_route.read_bytes()).hexdigest(),
                       'replay_source_sha256':hashlib.sha256((ROOT/'scripts/replay_contact_pregrasp.py').read_bytes()).hexdigest(),
                       'checker_source_sha256':hashlib.sha256((ROOT/'sock_dressing_simulation/continuous_pregrasp.py').read_bytes()).hexdigest(),
                       'native_geometry_source_sha256':hashlib.sha256((ROOT/'scripts/native_pregrasp_geometry.py').read_bytes()).hexdigest(),
-                      'initial_configuration_sha256':hashlib.sha256(a.initial_configuration.read_bytes()).hexdigest(),'fixed_step_s':a.fixed_step}
+                      'initial_configuration_sha256':hashlib.sha256(a.initial_configuration.read_bytes()).hexdigest(),'fixed_step_s':a.fixed_step,
+                      'human_collision_model':a.human_collision_model,'duration_scale':a.duration_scale,'drive_profile':a.drive_profile}
+            player=Path(os.environ.get('SOCK_REGISTERED_PLAYER',ROOT/'Build/SockDressingPlayer/RegisteredReachingV3/Player.x86_64')).resolve()
+            required['player_managed_sha256']=hashlib.sha256((player.parent/'Player_Data/Managed/RCareWorld.dll').read_bytes()).hexdigest()
             initialized=(previous.get('capture_initialization_version')==CONTACT_INITIALIZATION_VERSION or previous.get('capture_source_sha256')in COMPATIBLE_CONTACT_INITIALIZERS)
             if initialized and all(previous.get(key)==value for key,value in required.items()):
                 print('Reusing completed bound contact-drive run',common['condition']['id'],previous['passed'],flush=True);return
@@ -146,7 +158,10 @@ def main():
         env.robot.SetJointPositionDirectly(command.tolist());env._env.step(4,simulate=False)
         attr._send_data('InstallSockRigidSkinContact',env.robot.id,0);env._env.step(2,simulate=False)
         payload=json.loads((REGISTERED_MANIFEST.parent/'payload.json').read_text());attr._send_data('InstallSockCompoundGeometry',env.robot.id,json.dumps(payload));env._env.step(3,simulate=False)
-        attr._send_data('ConfigureSockReplayDrives',env.robot.id,1e7,9e4);env._env.step(simulate=False)
+        if a.human_collision_model=='planning_skin':
+            from sock_dressing_simulation.exact_human_contact import install
+            result['exact_human_contact']=install(env,source_scene,delta,out)
+        attr._send_data('ConfigureSockPairedReplayDrives' if a.drive_profile=='paired_calibrated' else 'ConfigureSockReplayDrives',env.robot.id,1e7,9e4);env._env.step(simulate=False)
         # Unity updates articulation world transforms on a physics step after
         # assigning reduced joint coordinates. This settles the initial state;
         # no reaching trajectory is replayed.
@@ -205,8 +220,19 @@ def main():
             if not result['passed']:raise ValueError('Native initial configuration failed; common route not replayed')
             if a.contact_route:from replay_contact_pregrasp import replay
             else:from replay_common_opening_motion import replay
-            result['motion']=replay(env,mapping,action,native_reference,k,checker,common,a.common_route.resolve(),delta,expected_cloth,out,dt=a.fixed_step)
+            contact_options={'human_collision_model':a.human_collision_model,'duration_scale':a.duration_scale,'drive_profile':a.drive_profile} if a.contact_route else {}
+            if a.collect_episode:
+                from sock_dressing_simulation.reaching_collection import ReachingCollector
+                with ReachingCollector(a.collect_episode,mapping,common,a.common_route.resolve(),ROOT,config,
+                                       head_cameras=a.head_cameras,contact_only=True,image_size=a.image_size) as collector:
+                    result['motion']=replay(env,mapping,action,native_reference,k,checker,common,a.common_route.resolve(),delta,expected_cloth,out,dt=a.fixed_step,collector=collector,**contact_options)
+                    collector.finish(result['motion'])
+            else:
+                result['motion']=replay(env,mapping,action,native_reference,k,checker,common,a.common_route.resolve(),delta,expected_cloth,out,dt=a.fixed_step,**contact_options)
             if a.contact_route:
+                import hashlib
+                player=Path(os.environ.get('SOCK_REGISTERED_PLAYER',ROOT/'Build/SockDressingPlayer/RegisteredReachingV3/Player.x86_64')).resolve()
+                result['motion']['player_managed_sha256']=hashlib.sha256((player.parent/'Player_Data/Managed/RCareWorld.dll').read_bytes()).hexdigest()
                 result['motion']['capture_initialization_version']=CONTACT_INITIALIZATION_VERSION
                 write(out/'replay-result.json',result['motion'])
             result['initial_only']=False;result['motion_replayed']=True

@@ -87,7 +87,7 @@ paths=[root/'RCareUnity/Assets/RCareCommon/Scripts/Main/PlayerMain.cs',
 paths += [root/'RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi'/name for name in
           ['SockClothAttr.cs','SockGraspMotion.cs','SockGraspContacts.cs','SockOpeningRimBending.cs','SockFootCoupledMaterialDirect.cs','SockMaterialLinearFactor.cs','SockPreparedState.cs','SockPreinsert.cs','SockPosePatterns.cs','SockPatternGravity.cs','SockToeContact.cs','SockRigidSkinContact.cs','SockGraspPreview.cs','SockClosureMeasurement.cs','SockCircumferenceFit.cs','FootContactGeometry.cs','FootConvexSolid.cs','FootSurfaceHistory.cs','FootSkinHullCollider.cs','SockFootSkinHull.cs']]
 paths += [root/'RCareUnity/Assets/RCareCommon/Scripts/Attributes/Obi'/name for name in
-          ['SockArmReaching.cs', 'SockCompoundReaching.cs', 'SockCompoundReplay.cs']]
+          ['SockArmReaching.cs', 'SockCompoundReaching.cs', 'SockCompoundReplay.cs', 'SockExactHumanContact.cs']]
 manifest={}
 for source in paths:
     relative=str(source.relative_to(root))

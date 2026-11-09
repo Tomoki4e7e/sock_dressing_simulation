@@ -17,6 +17,11 @@ def run_one(job):
         geometry_manifest_sha256=sha256(REGISTERED_MANIFEST),replay_source_sha256=sha256(ROOT/'scripts/replay_contact_pregrasp.py'),
         capture_source_sha256=sha256(ROOT/'scripts/capture_fixed_torso_initial.py'),checker_source_sha256=sha256(ROOT/'sock_dressing_simulation/continuous_pregrasp.py'))
     binding['native_geometry_source_sha256']=sha256(ROOT/'scripts/native_pregrasp_geometry.py')
+    binding['human_collision_model']=os.environ.get('SOCK_CONTACT_HUMAN_MODEL','native')
+    binding['duration_scale']=float(os.environ.get('SOCK_CONTACT_DURATION_SCALE','1'))
+    binding['drive_profile']=os.environ.get('SOCK_CONTACT_DRIVE_PROFILE','legacy')
+    player=Path(os.environ.get('SOCK_REGISTERED_PLAYER',ROOT/'Build/SockDressingPlayer/RegisteredReachingV3/Player.x86_64')).resolve()
+    binding['player_managed_sha256']=sha256(player.parent/'Player_Data/Managed/RCareWorld.dll')
     status_path=dest/'status.json'
     if resume and status_path.exists():
         previous=json.loads(status_path.read_text())

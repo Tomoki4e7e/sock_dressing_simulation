@@ -20,16 +20,16 @@ def create_head_cameras(env):
     return cameras
 
 
-def capture_head_cameras(env, fov=92.):
+def capture_head_cameras(env, fov=92., width=1280, height=960):
     cameras = getattr(env, 'head_cameras', None) or create_head_cameras(env)
-    for camera in cameras.values():camera.GetRGB(1280, 960, float(fov))
+    for camera in cameras.values():camera.GetRGB(width, height, float(fov))
     env._env.step(simulate=False)
     images = {side: env._decode(camera.data['rgb'], 'RGB') for side, camera in cameras.items()}
     poses = {side: {key: copy.deepcopy(camera.data[key]) for key in
              ('position', 'rotation', 'quaternion', 'local_position', 'local_rotation') if key in camera.data}
              for side, camera in cameras.items()}
     for side, pose in poses.items():
-        if images[side].shape != (960, 1280, 3):raise ValueError('Invalid head-camera image size')
+        if images[side].shape != (height, width, 3):raise ValueError('Invalid head-camera image size')
         if np.linalg.norm(pose.get('local_position', [99., 99., 99.])) > 1e-6:
             raise RuntimeError('Head camera has an artificial translation')
         rotation = np.asarray(pose.get('local_rotation', [99., 99., 99.]))
@@ -38,7 +38,7 @@ def capture_head_cameras(env, fov=92.):
         pose.update(parent_link=f'head/see3cam_{side}/camera_color_frame', mode='robot_link', fov=float(fov))
     baseline = float(np.linalg.norm(np.asarray(poses['left']['position']) - poses['right']['position']))
     if abs(baseline - .084) > 1e-4:raise RuntimeError(f'Incorrect physical head-camera baseline: {baseline}')
-    return images, dict(cameras=poses, baseline_m=baseline, width=1280, height=960)
+    return images, dict(cameras=poses, baseline_m=baseline, width=width, height=height)
 
 
 def preview_head_cameras(env, out, fov=92.):

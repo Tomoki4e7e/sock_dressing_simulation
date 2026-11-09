@@ -12,6 +12,10 @@ from sock_dressing_simulation.continuous_pregrasp import SweptPolicy,trajectory_
 OUT=ROOT/'artifacts/contact-pregrasp-verification';SOURCE=ROOT/'artifacts/contact-pregrasp-start-search'
 def run(row):
  began=time.monotonic();scene,route,initial=make_scene(row,SOURCE,SweptPolicy(condition_timeout_s=600.))
+ existing=OUT/'continuous-shoulder-bound'/f'{row["id"]}.json'
+ if existing.exists():
+  cached=json.loads(existing.read_text())
+  if cached.get('passed') and cached.get('route_sha256')==sha256(SOURCE/'routes'/f'{row["id"]}.json') and cached.get('geometry_digest')==scene.geometry_digest and cached.get('verifier_source_sha256')==sha256(ROOT/'sock_dressing_simulation/continuous_pregrasp.py') and cached.get('supplement_source_sha256')==sha256(Path(__file__)):return cached
  all_margins=row['id']=='E-32'
  padding=scene.base.padding
  scene.pairs=[(a,b,m-1e-6 if all_margins and m-padding.get(a,0.)-padding.get(b,0.)>1e-12 else min(m,.004999)if {a,b}in ({'right_arm/link_2','torso/link_3'},{'left_arm/link_2','torso/link_3'})else m)for a,b,m in scene.pairs]
@@ -26,7 +30,7 @@ def run(row):
  if all_margins:result['scope']='Every positive nominal safety clearance is checked at its original value minus 1 micrometre; shape-coverage padding and localized contact policy are retained. This is a nonintersection lower-bound certificate, not certification of exact original safety margins.'
  write(OUT/'continuous-shoulder-bound'/f'{row["id"]}.json',result);print('SHOULDER BOUND',row['id'],result['status'],round(result['elapsed_s'],1),flush=True);return result
 if __name__=='__main__':
- parser=argparse.ArgumentParser();parser.add_argument('--ids',nargs='*');parser.add_argument('--report-only',action='store_true');args=parser.parse_args()
+ parser=argparse.ArgumentParser();parser.add_argument('--source',type=Path,default=SOURCE);parser.add_argument('--output',type=Path,default=OUT);parser.add_argument('--ids',nargs='*');parser.add_argument('--report-only',action='store_true');args=parser.parse_args();SOURCE=args.source.resolve();OUT=args.output.resolve()
  ids={json.loads(p.read_text())['id']for p in (OUT/'continuous').glob('*.json')if json.loads(p.read_text())['status']=='unresolved'}
  rows=[r for r in inventory(ROOT)if r['id']in ids and(not args.ids or r['id']in args.ids)]
  if not args.report_only:
