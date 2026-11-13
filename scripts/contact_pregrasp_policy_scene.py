@@ -46,14 +46,14 @@ def execute(a,env,mapping,action,reference,k,checker,saved,source_path,delta,exp
     if a.steps is not None:steps=min(steps,a.steps)
     scene,_,_=make_scene(saved['condition'],Path(source_path).parent.parent,SweptPolicy())
     attr=env.sock_cloth;worker_log=(dest/'worker.log').open('w')
-    worker=subprocess.Popen(['/usr/bin/python3','-u',str(ROOT/'scripts/contact_pregrasp_policy_worker.py'),'--run',str(a.run),'--checkpoint',str(a.checkpoint),'--episode',str(a.episode)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=worker_log,text=True,bufsize=1)
+    worker=subprocess.Popen(['/usr/bin/python3','-u',str(ROOT/'scripts/contact_pregrasp_policy_worker.py'),'--run',str(a.run),'--checkpoint',str(a.checkpoint),'--episode',str(a.episode),'--flow-ode-steps',str(a.flow_ode_steps),'--flow-execute-steps',str(a.flow_execute_steps),'--flow-seed',str(a.flow_seed)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=worker_log,text=True,bufsize=1)
     def response():
         if not select.select([worker.stdout],[],[],180)[0]:raise TimeoutError('GPU policy response timeout')
         line=worker.stdout.readline()
         if not line:raise RuntimeError('GPU worker exited; inspect worker.log')
         return json.loads(line)
     overview=Video(dest/'overview.mp4',(1280,960));head=Video(dest/'head-input.mp4',(640,480))
-    trace=[];efforts=[];native=None;info={};failure=None;start=time.time();contacts=[];max_drift=0.;geometry={}
+    trace=[];efforts=[];native=None;info={};failure=None;start=time.time();contacts=[];max_drift=0.;geometry={};dropped_contact_records=0
     fixed=np.array(env.robot.data['joint_positions'])[mapping.fixed_simulator_indices].copy()
     env.robot.SetJointUseGravity(False);attr._send_data('BeginSockCompoundReplay',env.robot.id);env._env.step(simulate=False)
     initial_physics_step=int(attr.data['sock_compound_replay']['cloth_fixed_steps'])
@@ -103,7 +103,10 @@ def execute(a,env,mapping,action,reference,k,checker,saved,source_path,delta,exp
                 if tick in (4,9):env.robot.GetJointInverseDynamicsForce()
                 attr._send_data('GetSockCompoundReplay',env.robot.id);env._env.step(simulate=False)
                 native=json.loads(json.dumps(attr.data['sock_compound_replay'],default=lambda x:x.tolist()))
-                if not native['cloth_held'] or native['dropped']:raise RuntimeError('Frozen-cloth/native-contact record invalid')
+                if not native['cloth_held']:raise RuntimeError('Frozen cloth was released')
+                # Overflow concerns only the optional contact-event recorder,
+                # not the physics state, images or measured terminal cloth.
+                dropped_contact_records+=int(native['dropped'])
                 contacts.extend(dict(step=step,tick=tick,**c) for c in native['contacts'] if c['separation_m'] < -1e-5 and any(c.get(key,'').startswith(('left_arm/','right_arm/','left_gripper/','right_gripper/')) for key in ('a_link','b_link')))
                 if tick in (4,9):
                     signals=env.robot_signals()
@@ -134,12 +137,15 @@ def execute(a,env,mapping,action,reference,k,checker,saved,source_path,delta,exp
             for r in trace:f.write(json.dumps(r)+'\n')
         with gzip.open(dest/'native-penetrating-contacts.json.gz','wt') as f:json.dump(contacts,f)
         report=dict(completed=failure is None and len(trace)==steps,passed=bool(failure is None and len(geometry)==2 and all(g['contact_geometry_checks']['passed'] for g in geometry.values())),failure=failure,id=meta['condition']['id'],steps=len(trace),requested_steps=steps,simulated_duration_s=len(trace)*.2,overview_frames=overview.frames,head_frames=head.frames,overview_video=str(overview.path),head_video=str(head.path),device=info,checkpoint=str(a.checkpoint),checkpoint_sha256=hashlib.sha256(a.checkpoint.read_bytes()).hexdigest(),live_observations=True,teacher_trajectory_used=False,command_blending=False,robot_joint_gravity=False,physics_step_s=.02,actual_physics_steps=None if native is None else int(native['cloth_fixed_steps'])-initial_physics_step,physics_batch_steps=a.physics_batch,contact_collection_interval_s=.02*a.physics_batch,torque_input='Causal endpoint Savitzky-Golay smoothing, up to 29 past measured samples at 10 Hz; warmup shorter odd windows; no synthesized gravity. Training used centered offline smoothing.',cloth_frozen=True,cloth_maximum_drift_m=max_drift,native_penetration_event_count=len(contacts),geometry=geometry,elapsed_s=time.time()-start,scope='Closed-loop GPU policy and native motor execution with frozen cloth/human; geometric jaw occupancy, not closure/retention validation')
+        report['native_contact_records_dropped']=dropped_contact_records
+        report['native_contact_recording_complete']=dropped_contact_records==0
         write(dest/'report.json',report)
     return report
 
 
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--run',type=Path,required=True);ap.add_argument('--checkpoint',type=Path,required=True);ap.add_argument('--episode',type=Path,required=True);ap.add_argument('--output',type=Path,required=True);ap.add_argument('--port',type=int,required=True);ap.add_argument('--steps',type=int);ap.add_argument('--physics-batch',type=int,choices=[1,5],default=1);a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--run',type=Path,required=True);ap.add_argument('--checkpoint',type=Path,required=True);ap.add_argument('--episode',type=Path,required=True);ap.add_argument('--output',type=Path,required=True);ap.add_argument('--port',type=int,required=True);ap.add_argument('--steps',type=int);ap.add_argument('--physics-batch',type=int,choices=[1,5],default=1)
+    ap.add_argument('--flow-ode-steps',type=int,default=8);ap.add_argument('--flow-execute-steps',type=int,choices=[1,2,4],default=1);ap.add_argument('--flow-seed',type=int,default=0);a=ap.parse_args()
     for key in ('run','checkpoint','episode','output'):setattr(a,key,getattr(a,key).resolve())
     meta=json.loads((a.episode/'metadata.json').read_text());source=ROOT/meta['trajectory'];initial=ROOT/meta['shared_initial_configuration'];state=ROOT/meta['condition']['state']
     import capture_fixed_torso_initial as capture

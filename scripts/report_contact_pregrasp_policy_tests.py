@@ -6,7 +6,8 @@ from pathlib import Path
 
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--run',type=Path,required=True);ap.add_argument('--output',type=Path);a=ap.parse_args();run=a.run.resolve();out=a.output.resolve() if a.output else run/'live-test-motion'
-    expected=[r for r in json.loads((run/'manifest.json').read_text())['rows'] if r['split']=='test'];rows=[];cards=[];table=[]
+    suite=json.loads((out/'report.json').read_text());split=suite.get('dataset_split','test');selected=suite.get('selected_case_ids')
+    expected=[r for r in json.loads((run/'manifest.json').read_text())['rows'] if r['split']==split and (selected is None or r['id'] in selected)];rows=[];cards=[];table=[]
     for item in expected:
         path=out/item['id']/'policy/report.json'
         if not path.exists():continue
@@ -34,7 +35,10 @@ def main():
     doc='''<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GPU閉ループ推論・爪間の布検証</title><style>body{font:16px/1.65 system-ui,sans-serif;background:#eef2f6;color:#182537;margin:24px auto;max-width:1400px;padding:0 18px}h1{font-size:28px}h2{margin:0 0 12px}a{color:#12639b}table{border-collapse:collapse;background:white;width:100%;font-variant-numeric:tabular-nums}th,td{padding:8px 12px;border:1px solid #d5dee8;text-align:right}th{font-size:13px}article{background:white;border-radius:12px;padding:20px;margin:24px 0}video{width:100%;max-height:760px;background:#111}.closeups{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.closeups img{width:100%}.note{background:#fff8df;padding:16px;border-radius:8px}.scroll{overflow:auto}</style><h1>GPU閉ループ推論：俯瞰動画と爪間の布検証</h1><p>モデル：SARNN_best.pth、epoch 4780。テスト12状態。Unityの実測RGB・関節角・駆動力から、SAMDAMSARNN・SAM2・Depth AnythingをGPUで実行し、予測関節角をモーターに指令しています。</p><p class="note">人体と布は教示と同じ固定条件です。保存画像を入力した先のオフライン予測評価とは別の実験です。爪間の布表面積と開口縁長は、終端の実測リンク姿勢と左右の爪の有限凸包から測定しています。布が爪間に存在しても、閉鎖・摩擦保持・引き上げの成立は示しません。駆動力の入力は過去29サンプルまでを使う因果的平滑化で、学習時の前後サンプルによる平滑化とは異なります。</p><p><a href="terminal-measurements.csv">測定CSV</a> · <a href="terminal-summary.json">集計JSON</a> · <a href="report.json">実行結果</a></p><div class="scroll"><table><thead><tr><th>状態</th><th>左 布面積 mm²</th><th>右 布面積 mm²</th><th>左 開口縁 mm</th><th>右 開口縁 mm</th><th>左 指定爪と布帯の距離 mm</th><th>右 指定爪と布帯の距離 mm</th></tr></thead><tbody>'''+''.join(table)+'</tbody></table></div>'+''.join(cards)+'</html>'
     suite=json.loads((out/'report.json').read_text())
     epoch=suite['checkpoint_epoch']
-    doc=doc.replace('epoch 4780。テスト12状態。',f'epoch {epoch}。テスト{len(expected)}状態。')
+    label={'train':'教示データ（学習に使用）','validation':'検証データ','test':'テストデータ'}[split]
+    doc=doc.replace('モデル：SARNN_best.pth、epoch 4780。テスト12状態。',f'モデル：{html.escape(Path(suite["checkpoint"]).name)}、epoch {epoch}。{label} {len(expected)}状態。')
+    if json.loads((run/'configuration.json').read_text())['model'].get('name')=='SAMDAMSARNNFlow':
+        doc=doc.replace('SAMDAMSARNN・SAM2', 'SAMDAMSARNNFlow・SAM2')
     doc=doc.replace('保存画像を入力した先のオフライン予測評価とは別の実験です。','各時刻のシミュレータ観測をモデルに入力した閉ループ実行です。')
     (out/'report.html').write_text(doc)
     print(json.dumps({k:v for k,v in aggregate.items() if k!='rows'},indent=2))

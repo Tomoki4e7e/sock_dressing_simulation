@@ -23,7 +23,9 @@ def photograph(env,path,target,direction,up,distance,fov):
  env._env.step(simulate=False)
  for _ in range(2):camera.GetRGB(1400,1100,fov);env._env.step(simulate=False)
  picture=env._decode(camera.data['rgb'],'RGB');Image.fromarray(picture).save(path)
- return dict(path=str(path.relative_to(ROOT)),position=pos.tolist(),target=target.tolist(),fov_deg=fov)
+ try:recorded_path=path.relative_to(ROOT)
+ except ValueError:recorded_path=path.resolve()
+ return dict(path=str(recorded_path),position=pos.tolist(),target=target.tolist(),fov_deg=fov)
 def main():
  parser=argparse.ArgumentParser();parser.add_argument('--refiltered',action='store_true');parser.add_argument('--hold-seconds',type=float,default=0);parser.add_argument('--port',type=int,default=15700);args=parser.parse_args()
  out=ROOT/('artifacts/grasp-refiltered-photos' if args.refiltered else 'artifacts/grasp-candidate-photos');out.mkdir(parents=True,exist_ok=True)

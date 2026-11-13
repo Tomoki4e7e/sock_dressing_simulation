@@ -1,0 +1,38 @@
+{
+  "os": "Linux-5.15.0-139-generic-x86_64-with-glibc2.29",
+  "python": "CPython 3.8.10",
+  "startedAt": "2026-11-12T09:16:00.034540Z",
+  "program": "<stdin>",
+  "git": {
+    "remote": "https://github.com/Tomoki4e7e/sock_dressing_simulation.git",
+    "commit": "7f5151c4f821a64939b4ba292b1be232e29f0421"
+  },
+  "email": "prometheus4e7e0811@icloud.com",
+  "root": "/home/cm-pc/catkin_ws/src/inoue/sock_dressing_simulation",
+  "host": "LEVEL",
+  "executable": "/tmp/wandb-monitor-venv/bin/python",
+  "cpu_count": 16,
+  "cpu_count_logical": 24,
+  "gpu": "NVIDIA GeForce RTX 3060 Ti",
+  "gpu_count": 1,
+  "disk": {
+    "/": {
+      "total": "880485064704",
+      "used": "870675730432"
+    }
+  },
+  "memory": {
+    "total": "67222548480"
+  },
+  "gpu_nvidia": [
+    {
+      "name": "NVIDIA GeForce RTX 3060 Ti",
+      "memoryTotal": "8589934592",
+      "cudaCores": 4864,
+      "architecture": "Ampere",
+      "uuid": "GPU-99268f9f-7618-e995-b084-05a1723138fc"
+    }
+  ],
+  "cudaVersion": "12.5",
+  "writerId": "32r3k1bmc7zbyc8s860gm3c2jvgag4ws"
+}
