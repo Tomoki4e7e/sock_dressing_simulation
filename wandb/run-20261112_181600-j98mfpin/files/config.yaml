@@ -1,0 +1,189 @@
+_wandb:
+    value:
+        cli_version: 0.24.2
+        e:
+            32r3k1bmc7zbyc8s860gm3c2jvgag4ws:
+                cpu_count: 16
+                cpu_count_logical: 24
+                cudaVersion: "12.5"
+                disk:
+                    /:
+                        total: "880485064704"
+                        used: "870675730432"
+                email: prometheus4e7e0811@icloud.com
+                executable: /tmp/wandb-monitor-venv/bin/python
+                git:
+                    commit: 7f5151c4f821a64939b4ba292b1be232e29f0421
+                    remote: https://github.com/Tomoki4e7e/sock_dressing_simulation.git
+                gpu: NVIDIA GeForce RTX 3060 Ti
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ampere
+                      cudaCores: 4864
+                      memoryTotal: "8589934592"
+                      name: NVIDIA GeForce RTX 3060 Ti
+                      uuid: GPU-99268f9f-7618-e995-b084-05a1723138fc
+                host: LEVEL
+                memory:
+                    total: "67222548480"
+                os: Linux-5.15.0-139-generic-x86_64-with-glibc2.29
+                program: <stdin>
+                python: CPython 3.8.10
+                root: /home/cm-pc/catkin_ws/src/inoue/sock_dressing_simulation
+                startedAt: "2026-11-12T09:16:00.034540Z"
+                writerId: 32r3k1bmc7zbyc8s860gm3c2jvgag4ws
+        m:
+            - "1": epoch
+              "6":
+                - 3
+              "7": []
+            - "2": '*'
+              "5": 1
+              "6":
+                - 1
+              "7": []
+        python_version: 3.8.10
+        t:
+            "3":
+                - 2
+                - 7
+                - 13
+                - 16
+            "4": 3.8.10
+            "5": 0.24.2
+            "12": 0.24.2
+            "13": linux-x86_64
+changes_from_previous:
+    value:
+        - num_epochs
+        - 4-LSTM Flow architecture and pretrained residual trunk
+        - angle MSE replaced by masked RF loss, retaining angle_loss weight
+        - 16 independent output DOF, horizon 8, new Flow validation seed
+        - AMP overflow backoff without applying nonfinite gradients
+        - periodic model checkpoints every 2000 epochs
+flow_model:
+    value:
+        condition_dim: 128
+        flow_checkpoint: /home/cm-pc/catkin_ws/src/inoue/sock_dressing_simulation/artifacts/contact-pregrasp-samdam-flow-pretrained-20261112-exclude-failures-10000/pretrained/l1flow_pusht_residuals.pth
+        flow_pretrained: true
+        heatmap_size: 0.1
+        horizon: 8
+        im_size:
+            - 64
+            - 64
+        joint_dim: 36
+        k_dim: 3
+        rec_dim: 50
+        temperature: 0.0001
+        union_dim: 20
+hyperparameters:
+    value:
+        angle_loss: 1.5
+        batch_size: 100
+        flow_loss: 1.5
+        img_loss: 0.1
+        joint_loss: 1
+        learning_rate: 0.0015
+        num_epochs: 10000
+        pt_loss: 0.1
+        skip_num: 2
+        smooth_torque: 29
+        stdev: 0.1
+        torque_loss: 1
+        vmax: 1
+        vmin: 0
+        weight_decay: 0.0001
+model:
+    value:
+        angle:
+            is_use: true
+            joint_list:
+                - left_arm/joint_1
+                - left_arm/joint_2
+                - left_arm/joint_3
+                - left_arm/joint_4
+                - left_arm/joint_5
+                - left_arm/joint_6
+                - left_arm/joint_7
+                - left_gripper/finger_joint
+                - left_gripper/mimic_joint
+                - right_arm/joint_1
+                - right_arm/joint_2
+                - right_arm/joint_3
+                - right_arm/joint_4
+                - right_arm/joint_5
+                - right_arm/joint_6
+                - right_arm/joint_7
+                - right_gripper/finger_joint
+                - right_gripper/mimic_joint
+        heatmap_size: 0.1
+        im_size:
+            - 64
+            - 64
+        img_size: 64
+        joint_dim: 36
+        k_dim: 3
+        name: SAMDAMSARNNFlow
+        rec_dim: 50
+        temperature: 0.0001
+        torque:
+            is_use: true
+            joint_list:
+                - left_arm/joint_1
+                - left_arm/joint_2
+                - left_arm/joint_3
+                - left_arm/joint_4
+                - left_arm/joint_5
+                - left_arm/joint_6
+                - left_arm/joint_7
+                - left_gripper/finger_joint
+                - left_gripper/mimic_joint
+                - right_arm/joint_1
+                - right_arm/joint_2
+                - right_arm/joint_3
+                - right_arm/joint_4
+                - right_arm/joint_5
+                - right_arm/joint_6
+                - right_arm/joint_7
+                - right_gripper/finger_joint
+                - right_gripper/mimic_joint
+preprocessing:
+    value:
+        crop:
+            - 0
+            - 0
+            - 640
+            - 480
+        depth_cache: float32 Gaussian masked depth, no intermediate 8-bit quantization
+        depth_device: cuda
+        depth_range_fit: train only
+        gaussian_radius: 15
+        native_size:
+            - 640
+            - 480
+        resize: 64
+        sam_device: cuda
+        torque: recorded drive forces without gravity addition
+        torque_smoothing: Previous cached centered Savitzky-Golay 29, order 2
+training:
+    value:
+        automatic_mixed_precision: float16
+        checkpoint_interval: 2000
+        device: cuda
+        flow_target: 8-step independent normalized angle offsets from current observed angles
+        full_sequence_bptt: true
+        gradient_accumulation: transition-weighted; optimizer once per logical batch
+        gradient_clipping: null
+        initialization: Fresh CNN/4 LSTM/auxiliary decoders and adapters; pretrained L1Flow residual trunk
+        logical_batch_size: 100
+        optimizer: Adam
+        physical_microbatch_size: 4
+        point_schedule: Original LossScheduler(1000,s); once per logical train/validation batch
+        pretrained_sha256: d0969409fe70c4b599057908b7944b4d6db249df0e117f3bb3f44d0c6cc0f634
+        previous_run: /home/cm-pc/catkin_ws/src/inoue/sock_dressing_simulation/artifacts/contact-pregrasp-samdam-20261111-exclude-failures-5000
+        regular_checkpoints: Model weights every interval; resumable latest every 10 epochs
+        seed: 0
+        source_config: /home/cm-pc/catkin_ws/src/inoue/ShareSet/share_folder/configs/config.yaml
+        source_sha256: fec58708b6a2f28c8354d8d7d2563b32cad44961dd41b81ae8881f82524274b5
+        supervision: Future measured angles, not motor command labels
+        validation_flow_seed: 0

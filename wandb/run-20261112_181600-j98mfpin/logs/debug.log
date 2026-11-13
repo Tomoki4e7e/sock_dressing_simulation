@@ -17,3 +17,8 @@ config: {'model': {'name': 'SAMDAMSARNNFlow', 'rec_dim': 50, 'k_dim': 3, 'joint_
 2026-11-12 18:16:01,095 INFO    MainThread:4097281 [wandb_run.py:_redirect():2446] Wrapping output streams.
 2026-11-12 18:16:01,095 INFO    MainThread:4097281 [wandb_run.py:_redirect():2469] Redirects installed.
 2026-11-12 18:16:01,097 INFO    MainThread:4097281 [wandb_init.py:init():1082] run started, returning control to user process
+2026-11-14 00:13:15,757 INFO    MainThread:4097281 [wandb_run.py:_finish():2295] finishing run prometheus4e7e0811-waseda-university/sock-dressing/j98mfpin
+2026-11-14 00:13:15,758 INFO    MainThread:4097281 [wandb_run.py:_atexit_cleanup():2494] got exitcode: 0
+2026-11-14 00:13:15,758 INFO    MainThread:4097281 [wandb_run.py:_restore():2476] restore
+2026-11-14 00:13:15,759 INFO    MainThread:4097281 [wandb_run.py:_restore():2482] restore done
+2026-11-14 00:13:17,598 INFO    MainThread:4097281 [wandb_run.py:_footer_sync_info():3871] logging synced files
